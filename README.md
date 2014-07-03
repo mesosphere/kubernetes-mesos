@@ -1,4 +1,4 @@
 kubernetes-mesos
 ================
 
-A Kubernetes Framework for Apache Mesos
+A [Kubernetes](https://github.com/GoogleCloudPlatform/kubernetes) Framework for Apache Mesos
