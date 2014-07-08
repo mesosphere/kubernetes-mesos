@@ -1,58 +1,36 @@
-package main
+package scheduler
 
 import (
-	"flag"
-	"fmt"
-
-	"github.com/mesosphere/kubernetes-mesos/3rdparty/code.google.com/p/goprotobuf/proto"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	kubernetes "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/mesosphere/kubernetes-mesos/3rdparty/github.com/mesosphere/mesos-go/mesos"
 )
 
-func main() {
-	exit := make(chan bool)
+// A Kubernete Scheduler that runs on top of Mesos.
+type KubernetesScheduler struct {
+}
 
-	master := flag.String("master", "localhost:5050", "Location of leading Mesos master")
-	executorUri := flag.String("executor-uri", "", "URI of executor executable")
-	flag.Parse()
+// New create a new KubernetesScheduler.
+func New() *KubernetesScheduler {
+	return &KubernetesScheduler{}
+}
 
-	executor := &mesos.ExecutorInfo{
-		ExecutorId: &mesos.ExecutorID{Value: proto.String("default")},
-		Command: &mesos.CommandInfo{
-			Value: proto.String("./example_executor"),
-			Uris: []*mesos.CommandInfo_URI{
-				&mesos.CommandInfo_URI{Value: executorUri},
-			},
-		},
-		Name:   proto.String("Kubernetes Mesos Scheduler"),
-		Source: proto.String("kubernetes-mesos"),
-	}
+// Mesos scheduler interfaces.
+func (k *KubernetesScheduler) Registered(mesos.SchedulerDriver, *mesos.FrameworkID, *mesos.MasterInfo) {
+}
+func (k *KubernetesScheduler) Reregistered(mesos.SchedulerDriver, *mesos.MasterInfo) {}
+func (k *KubernetesScheduler) Disconnected(mesos.SchedulerDriver)                    {}
+func (k *KubernetesScheduler) ResourceOffers(mesos.SchedulerDriver, []*mesos.Offer)  {}
+func (k *KubernetesScheduler) OfferRescinded(mesos.SchedulerDriver, *mesos.OfferID)  {}
+func (k *KubernetesScheduler) StatusUpdate(mesos.SchedulerDriver, *mesos.TaskStatus) {}
+func (k *KubernetesScheduler) FrameworkMessage(mesos.SchedulerDriver, *mesos.ExecutorID, *mesos.SlaveID, string) {
+}
+func (k *KubernetesScheduler) SlaveLost(mesos.SchedulerDriver, *mesos.SlaveID) {}
+func (k *KubernetesScheduler) ExecutorLost(mesos.SchedulerDriver, *mesos.ExecutorID, *mesos.SlaveID, int) {
+}
+func (k *KubernetesScheduler) Error(mesos.SchedulerDriver, string) {}
 
-	driver := mesos.SchedulerDriver{
-		Master: *master,
-		Framework: mesos.FrameworkInfo{
-			Name: proto.String("Kubernetes"),
-			User: proto.String(""),
-		},
-
-		Scheduler: &mesos.Scheduler{
-			ResourceOffers: func(driver *mesos.SchedulerDriver, offers []mesos.Offer) {
-				for _, offer := range offers {
-					fmt.Printf("Received offer: %d\n", offer)
-					tasks := []mesos.TaskInfo{} // TODO: this better!
-					// driver.LaunchTasks(offer.Id, tasks)
-					driver.DeclineOffer(offer.Id)
-				}
-			},
-
-			StatusUpdate: func(driver *mesos.SchedulerDriver, status mesos.TaskStatus) {
-				fmt.Printf("Received status update with state [%s] and [%s]", *status.State, *status.Message)
-			},
-		},
-	}
-
-	driver.Init()
-	defer driver.Destroy()
-	driver.Start()
-	<-exit
-	driver.Stop(false)
+// Schedule implements the Scheduler interface of the Kubernetes.
+func (k *KubernetesScheduler) Schedule(api.Pod, kubernetes.MinionLister) (selectedMaching string, err error) {
+	return "", nil
 }
