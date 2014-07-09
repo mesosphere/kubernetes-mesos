@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	kubernetes "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	log "github.com/mesosphere/kubernetes-mesos/3rdparty/github.com/golang/glog"
 	"github.com/mesosphere/kubernetes-mesos/3rdparty/github.com/mesosphere/mesos-go/mesos"
@@ -39,10 +40,15 @@ type pendingPodQueue struct {
 	list.List
 }
 
-// KubernetesScheduler is a mesos framework that schedules pods for the
-// Kubernete.
+// KubernetesScheduler implements:
+// 1: The interfaces of the mesos scheduler.
+// 2: The interface of a kubernetes scheduler.
+// 3: The interfaces of a kubernetes pod registry.
 type KubernetesScheduler struct {
+	driver          mesos.SchedulerDriver
 	frameworkId     *mesos.FrameworkID
+	masterInfo      *mesos.MasterInfo
+	registered      bool
 	ScheduleTimeout time.Duration
 	pendingPods     *pendingPodQueue
 }
@@ -51,11 +57,12 @@ type KubernetesScheduler struct {
 // the scheduleTimeout specifies the timeout for one Schedule call,
 // if the task cannot be satisfied before the timeout, the Schedule()
 // will return an error. The default timeout is 10 minutes.
-func New(scheduleTimeout time.Duration) *KubernetesScheduler {
+func New(driver mesos.SchedulerDriver, scheduleTimeout time.Duration) *KubernetesScheduler {
 	if scheduleTimeout == 0 {
 		scheduleTimeout = time.Minute * 10
 	}
 	return &KubernetesScheduler{
+		driver:          driver,
 		ScheduleTimeout: scheduleTimeout,
 		pendingPods:     new(pendingPodQueue),
 	}
@@ -72,6 +79,8 @@ func (k *KubernetesScheduler) addTask(task *podTask) {
 func (k *KubernetesScheduler) Registered(driver mesos.SchedulerDriver,
 	frameworkId *mesos.FrameworkID, masterInfo *mesos.MasterInfo) {
 	k.frameworkId = frameworkId
+	k.masterInfo = masterInfo
+	k.registered = true
 	log.Infof("Scheduler registered with the master: %v with frameworkId: %v\n", masterInfo, frameworkId)
 }
 
@@ -140,6 +149,7 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, minionLister kubernetes.Mini
 
 	task := newPodTask(&pod, machineLists)
 	k.addTask(task)
+
 	select {
 	case <-time.After(k.ScheduleTimeout):
 		log.Warningf("Schedule times out")
@@ -147,4 +157,37 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, minionLister kubernetes.Mini
 	case selectedMachine = <-task.selectedMachine:
 		return selectedMachine, nil
 	}
+}
+
+// ListPods obtains a list of pods that match selector.
+func (k *KubernetesScheduler) ListPods(selector labels.Selector) ([]api.Pod, error) {
+	return nil, fmt.Errorf("Not implemented")
+}
+
+// Get a specific pod.
+func (k *KubernetesScheduler) GetPod(podID string) (*api.Pod, error) {
+	// TODO(yifan): Send a message to slave/executor to get the pod status.
+	// Need to implement this to let the PodRegistryStorage know that
+	// the pod is running.
+	//
+	// Consider to read from a channel.
+	return nil, fmt.Errorf("Not implemented")
+}
+
+// Create a pod based on a specification, schedule it onto a specific machine.
+func (k *KubernetesScheduler) CreatePod(machine string, pod api.Pod) error {
+	// TODO(yifan): Call launchTask.
+	return fmt.Errorf("Not implemented")
+}
+
+// Update an existing pod.
+func (k *KubernetesScheduler) UpdatePod(pod api.Pod) error {
+	// TODO(yifan): Need to send a special message to the slave/executor.
+	return fmt.Errorf("Not implemented")
+}
+
+// Delete an existing pod.
+func (k *KubernetesScheduler) DeletePod(podID string) error {
+	// TODO(yifan): killtask
+	return fmt.Errorf("Not implemented")
 }
