@@ -12,7 +12,7 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/3rdparty/github.com/mesosphere/mesos-go/mesos"
 )
 
-var ErrSchedulerTimeout = fmt.Errorf("Schedule time out")
+var errSchedulerTimeout = fmt.Errorf("Schedule time out")
 
 // A task to run the pod.
 type podTask struct {
@@ -39,9 +39,8 @@ type pendingPodQueue struct {
 	list.List
 }
 
-// Create a new pod task.
-
-// A Kubernete Scheduler that runs on top of Mesos.
+// KubernetesScheduler is a mesos framework that schedules pods for the
+// Kubernete.
 type KubernetesScheduler struct {
 	frameworkId     *mesos.FrameworkID
 	ScheduleTimeout time.Duration
@@ -128,7 +127,7 @@ func (k *KubernetesScheduler) ExecutorLost(driver mesos.SchedulerDriver,
 
 // Error is called when there is some error.
 func (k *KubernetesScheduler) Error(driver mesos.SchedulerDriver, message string) {
-	log.Error(message)
+	log.Errorf("Scheduler error: %v\n", message)
 }
 
 // Schedule implements the Scheduler interface of the Kubernetes.
@@ -144,7 +143,7 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, minionLister kubernetes.Mini
 	select {
 	case <-time.After(k.ScheduleTimeout):
 		log.Warningf("Schedule times out")
-		return "", ErrSchedulerTimeout
+		return "", errSchedulerTimeout
 	case selectedMachine = <-task.selectedMachine:
 		return selectedMachine, nil
 	}
