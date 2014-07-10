@@ -8,7 +8,7 @@ When [Google Kubernetes](https://github.com/GoogleCloudPlatform/kubernetes) meet
 
 **Roadmap**:
 
-1. [WIP] Scheduling/launching pods
+1. [ ] Scheduling/launching pods (WIP)
   1. Implement Kube-scheduler API
   1. Pick a Pod (FCFS), match its resources (from PodInfo.Containers) to an offer.
   1. Launch it!
