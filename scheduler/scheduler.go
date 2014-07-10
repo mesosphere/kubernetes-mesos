@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
@@ -15,29 +14,49 @@ import (
 
 var errSchedulerTimeout = fmt.Errorf("Schedule time out")
 
-// A task to run the pod.
-type podTask struct {
-	pod             *api.Pod
-	machines        []string
-	selectedMachine chan string
-	status          *mesos.TaskStatus
+const defaultFinishedTasksSize = 1024
+
+// PodScheduleFunc implements how to schedule
+// pods among slaves. We can have different implementation
+// for different scheduling policy.
+//
+// The Schedule function takes a group of slaves (each contains offers
+// from that slave), and a group of pods.
+// To schedule a pod, just fill the 'SelectedMachine' field of
+// the PodTask. See the FIFOScheduleFunc for example.
+type PodScheduleFunc func(slaves map[string]*Slave, tasks *list.List)
+
+// A struct describes a pod task.
+type PodTask struct {
+	Pod             *api.Pod
+	Machines        []string
+	SelectedMachine chan string
+	TaskInfo        *mesos.TaskInfo
 }
 
-func newPodTask(pod *api.Pod, machines []string) *podTask {
-	task := &podTask{
-		pod:             pod,
-		machines:        make([]string, len(machines)),
-		selectedMachine: make(chan string, 1),
-		status:          new(mesos.TaskStatus),
+func newPodTask(pod *api.Pod, machines []string) *PodTask {
+	task := &PodTask{
+		Pod:             pod,
+		Machines:        make([]string, len(machines)),
+		SelectedMachine: make(chan string, 1),
+		TaskInfo:        new(mesos.TaskInfo),
 	}
-	copy(task.machines, machines)
+	copy(task.Machines, machines)
 	return task
 }
 
-// A queue contains all pending tasks.
-type pendingPodQueue struct {
-	sync.RWMutex
-	list.List
+// A struct that describes the slave.
+type Slave struct {
+	Offers map[string]*mesos.Offer
+	Tasks  map[string]*PodTask
+	State  bool // connected or disconnected.
+}
+
+func newSlave() *Slave {
+	return &Slave{
+		Offers: make(map[string]*mesos.Offer),
+		Tasks:  make(map[string]*PodTask),
+	}
 }
 
 // KubernetesScheduler implements:
@@ -45,34 +64,55 @@ type pendingPodQueue struct {
 // 2: The interface of a kubernetes scheduler.
 // 3: The interfaces of a kubernetes pod registry.
 type KubernetesScheduler struct {
-	driver          mesos.SchedulerDriver
-	frameworkId     *mesos.FrameworkID
-	masterInfo      *mesos.MasterInfo
-	registered      bool
-	ScheduleTimeout time.Duration
-	pendingPods     *pendingPodQueue
+	// We use a lock here to avoid races
+	// between invoking the mesos callback
+	// and the invoking the pob registry interfaces.
+	*sync.RWMutex
+
+	// Mesos context.
+	driver      mesos.SchedulerDriver
+	frameworkId *mesos.FrameworkID
+	masterInfo  *mesos.MasterInfo
+	registered  bool
+
+	// OfferID => offer.
+	offers map[string]*mesos.Offer
+
+	// SlaveID => slave.
+	slaves map[string]*Slave
+
+	// Fields for task information book keeping.
+	pendingTasks  *list.List
+	runningTasks  map[string]*PodTask
+	finishedTasks []*PodTask
+
+	// The function that does scheduling.
+	scheduleFunc PodScheduleFunc
 }
 
 // New create a new KubernetesScheduler.
-// the scheduleTimeout specifies the timeout for one Schedule call,
-// if the task cannot be satisfied before the timeout, the Schedule()
-// will return an error. The default timeout is 10 minutes.
-func New(driver mesos.SchedulerDriver, scheduleTimeout time.Duration) *KubernetesScheduler {
-	if scheduleTimeout == 0 {
-		scheduleTimeout = time.Minute * 10
-	}
+func New(driver mesos.SchedulerDriver, scheduleFunc PodScheduleFunc) *KubernetesScheduler {
 	return &KubernetesScheduler{
-		driver:          driver,
-		ScheduleTimeout: scheduleTimeout,
-		pendingPods:     new(pendingPodQueue),
+		new(sync.RWMutex),
+		driver,
+		nil,
+		nil,
+		false,
+		make(map[string]*mesos.Offer),
+		make(map[string]*Slave),
+		list.New(),
+		make(map[string]*PodTask),
+		make([]*PodTask, defaultFinishedTasksSize),
+		scheduleFunc,
 	}
 }
 
 // Add a new task to the queue.
-func (k *KubernetesScheduler) addTask(task *podTask) {
-	k.pendingPods.Lock()
-	defer k.pendingPods.Unlock()
-	k.pendingPods.PushBack(task)
+func (k *KubernetesScheduler) addTask(task *PodTask) {
+	k.Lock()
+	defer k.Unlock()
+	k.pendingTasks.PushBack(task)
+	k.scheduleFunc(k.slaves, k.pendingTasks)
 }
 
 // Registered is called when the scheduler registered with the master successfully.
@@ -88,11 +128,13 @@ func (k *KubernetesScheduler) Registered(driver mesos.SchedulerDriver,
 // This happends when the master fails over.
 func (k *KubernetesScheduler) Reregistered(driver mesos.SchedulerDriver, masterInfo *mesos.MasterInfo) {
 	log.Infof("Scheduler reregistered with the master: %v with frameworkId: %v\n", masterInfo)
+	k.registered = true
 }
 
 // Disconnected is called when the scheduler loses connection to the master.
 func (k *KubernetesScheduler) Disconnected(driver mesos.SchedulerDriver) {
 	log.Infof("Master disconnected!\n")
+	k.registered = false
 }
 
 // ResourceOffers is called when the scheduler receives some offers from the master.
@@ -100,13 +142,23 @@ func (k *KubernetesScheduler) ResourceOffers(driver mesos.SchedulerDriver, offer
 	log.Infof("Received offers\n")
 	log.V(2).Infof("%v\n", offers)
 
-	// TODO(yifan): Pick up one task and statisfy it.
+	k.Lock()
+	defer k.Unlock()
+
+	// Add offers to the pool.
+	for _, offer := range offers {
+		k.offers[offer.GetId().GetValue()] = offer
+	}
+	k.scheduleFunc(k.slaves, k.pendingTasks)
 }
 
 // OfferRescinded is called when the resources are recinded from the scheduler.
 func (k *KubernetesScheduler) OfferRescinded(driver mesos.SchedulerDriver, offerId *mesos.OfferID) {
 	log.Infof("Offer rescinded %v\n", offerId)
-	// TODO(yifan): Rescinded offers.
+
+	k.Lock()
+	defer k.Unlock()
+	delete(k.offers, offerId.GetValue())
 }
 
 // StatusUpdate is called when a status update message is sent to the scheduler.
@@ -149,14 +201,7 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, minionLister kubernetes.Mini
 
 	task := newPodTask(&pod, machineLists)
 	k.addTask(task)
-
-	select {
-	case <-time.After(k.ScheduleTimeout):
-		log.Warningf("Schedule times out")
-		return "", errSchedulerTimeout
-	case selectedMachine = <-task.selectedMachine:
-		return selectedMachine, nil
-	}
+	return <-task.SelectedMachine, nil
 }
 
 // ListPods obtains a list of pods that match selector.
@@ -190,4 +235,19 @@ func (k *KubernetesScheduler) UpdatePod(pod api.Pod) error {
 func (k *KubernetesScheduler) DeletePod(podID string) error {
 	// TODO(yifan): killtask
 	return fmt.Errorf("Not implemented")
+}
+
+// A FIFO scheduler.
+func FIFOScheduleFunc(slaves map[string]*Slave, tasks *list.List) {
+	for _, slave := range slaves {
+		for task := tasks.Front(); task != nil; task = task.Next() {
+			_ = slave
+			// TODO(yifan):
+			// if resources is ok.
+			// task.SelectedMachine <- slave's hostname
+
+			// Just schedule one pod for now.
+			break
+		}
+	}
 }
