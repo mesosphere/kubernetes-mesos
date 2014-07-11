@@ -3,8 +3,8 @@ package executor
 import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
+	log "github.com/golang/glog"
 	"github.com/mesosphere/kubernetes-mesos/3rdparty/code.google.com/p/goprotobuf/proto"
-	log "github.com/mesosphere/kubernetes-mesos/3rdparty/github.com/golang/glog"
 	"github.com/mesosphere/kubernetes-mesos/3rdparty/github.com/mesosphere/mesos-go/mesos"
 )
 
@@ -45,24 +45,19 @@ func (k *KuberneteExecutor) Registered(driver mesos.ExecutorDriver,
 	executorInfo *mesos.ExecutorInfo, frameworkInfo *mesos.FrameworkInfo, slaveInfo *mesos.SlaveInfo) {
 	log.Infof("Executor %v of framework %v registered with slave %v\n",
 		executorInfo, frameworkInfo, slaveInfo)
-
 	k.registered = true
 }
 
 // Reregistered is called when the executor is successfully re-registered with the slave.
 // This can happen when the slave fails over.
-func (k *KuberneteExecutor) Reregistered(driver mesos.ExecutorDriver,
-	executorInfo *mesos.ExecutorInfo, frameworkInfo *mesos.FrameworkInfo, slaveInfo *mesos.SlaveInfo) {
-	log.Infof("Executor %v of framework %v reregistered with slave %v\n",
-		executorInfo, frameworkInfo, slaveInfo)
-
+func (k *KuberneteExecutor) Reregistered(driver mesos.ExecutorDriver, slaveInfo *mesos.SlaveInfo) {
+	log.Infof("Reregistered with slave %v\n", slaveInfo)
 	k.registered = true
 }
 
 // Disconnected is called when the executor is disconnected with the slave.
 func (k *KuberneteExecutor) Disconnected(driver mesos.ExecutorDriver) {
 	log.Infof("Slave is disconnected\n")
-
 	k.registered = false
 }
 
