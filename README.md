@@ -22,3 +22,98 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
   1. Pluggable to reuse existing Kubernetes schedulers
   1. Implement our own!
 
+
+### Build
+
+```shell
+$ go get github.com/mesosphere/kubernetes-mesos
+$ cd kubernetes-mesos
+$ ./build.sh
+```
+
+### Start the framework
+
+To check what flags are there:
+
+```shell
+$ ./framework_runner/framework_runner -h
+```
+
+Assuming your mesos cluster is started, and the master is running on `127.0.1.1:5050`, then:
+
+```shell
+$ ./framework_runner/framework_runner \
+  -machines=$(hostname) \
+  -mesos_master=127.0.1.1:5050 \
+  -executor_uri=$(pwd)/executor_runner/executor_runner
+```
+
+###Launch a Pod
+
+Assuming your framework is running on `localhost:8080`, then:
+
+```shell
+$ curl -L http://localhost:8080/api/v1beta1/pods -XPOST -d @examples/pod.json
+```
+
+After the pod get launched, you can check it's status via `curl` or your web browser:
+```shell
+$ curl -L http://localhost:8080/api/v1beta1/pods
+```
+
+```json
+{
+	"kind": "PodList",
+	"items": [
+		{
+			"id": "php",
+			"labels": {
+				"name": "foo"
+			},
+			"desiredState": {
+				"manifest": {
+					"version": "v1beta1",
+					"id": "php",
+					"volumes": null,
+					"containers": [
+						{
+							"name": "nginx",
+							"image": "dockerfile/nginx",
+							"ports": [
+								{
+									"hostPort": 8080,
+									"containerPort": 80
+								}
+							],
+							"livenessProbe": {
+								"enabled": true,
+								"type": "http",
+								"httpGet": {
+									"path": "/index.html",
+									"port": "8080"
+								},
+								"initialDelaySeconds": 30
+							}
+						}
+					]
+				}
+			},
+			"currentState": {
+				"manifest": {
+					"version": "",
+					"id": "",
+					"volumes": null,
+					"containers": null
+				}
+			}
+		}
+	]
+}
+```
+
+Or, you can run `docker ps -a` to verify that the example container is running:
+
+```shell
+CONTAINER ID        IMAGE                       COMMAND                CREATED             STATUS              PORTS               NAMES
+3fba73ff274a        busybox:buildroot-2014.02   sh -c 'rm -f nap &&    57 minutes ago                                              k8s--net--php--9acb0442   
+```
