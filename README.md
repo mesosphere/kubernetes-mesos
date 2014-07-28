@@ -22,6 +22,19 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
   1. Pluggable to reuse existing Kubernetes schedulers
   1. Implement our own!
 
+### Get dependencies
+
+- `go get github.com/GoogleCloudPlatform/kubernetes`
+- `go get github.com/golang/glog`
+- `go get gopkg.in/v1/yaml`
+- `go get github.com/coreos/go-etcd/etcd`
+- `go get github.com/fsouza/go-dockerclient`
+- `go get github.com/google/cadvisor/info`
+- `go get code.google.com/p/go.net/html/atom`
+- `go get code.google.com/p/go-uuid/uuid`
+- `go get code.google.com/p/goauth2/compute/serviceaccount`
+- `go get code.google.com/p/google-api-go-client/compute/v1`
+- `go get code.google.com/p/go.net/websocket`
 
 ### Build
 
