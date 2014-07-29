@@ -33,8 +33,8 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
-	"github.com/mesosphere/kubernetes-mesos/3rdparty/code.google.com/p/goprotobuf/proto"
-	"github.com/mesosphere/kubernetes-mesos/3rdparty/github.com/mesosphere/mesos-go/mesos"
+	"code.google.com/p/goprotobuf/proto"
+	"github.com/mesosphere/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/framework"
 )
 

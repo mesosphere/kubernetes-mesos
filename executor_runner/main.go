@@ -8,7 +8,7 @@ import (
 
 	"github.com/fsouza/go-dockerclient"
 	log "github.com/golang/glog"
-	"github.com/mesosphere/kubernetes-mesos/3rdparty/github.com/mesosphere/mesos-go/mesos"
+	"github.com/mesosphere/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/executor"
 )
 
