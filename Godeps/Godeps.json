@@ -130,7 +130,7 @@
 		},
 		{
 			"ImportPath": "github.com/mesosphere/mesos-go/mesos",
-			"Rev": "f550c19e92157f54310de809ca95986a22a41fad"
+			"Rev": "9d1789a17294b88aecd586ae512cd5b2d139ec06"
 		},
 		{
 			"ImportPath": "gopkg.in/v1/yaml",
