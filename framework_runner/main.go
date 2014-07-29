@@ -20,11 +20,13 @@ package main
 
 import (
 	"flag"
+	"math/rand"
 	"net"
 	"net/http"
 	"strconv"
 	"time"
 
+	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/apiserver"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
@@ -33,9 +35,8 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
-	"github.com/mesosphere/kubernetes-mesos/3rdparty/code.google.com/p/goprotobuf/proto"
-	"github.com/mesosphere/kubernetes-mesos/3rdparty/github.com/mesosphere/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/framework"
+	"github.com/mesosphere/mesos-go/mesos"
 )
 
 var (
@@ -60,10 +61,11 @@ type kubernatesMaster struct {
 	controllerRegistry registry.ControllerRegistry
 	serviceRegistry    registry.ServiceRegistry
 	minionRegistry     registry.MinionRegistry
-
-	storage map[string]apiserver.RESTStorage
+	storage            map[string]apiserver.RESTStorage
+	client             *client.Client
 }
 
+// Copied from cmd/apiserver.go
 func main() {
 	flag.Parse()
 	util.InitLogs()
@@ -89,6 +91,15 @@ func main() {
 		}
 	}
 
+	// TODO(yifan): Let mesos handle pod info getter.
+	podInfoGetter := &client.HTTPPodInfoGetter{
+		Client: http.DefaultClient,
+		Port:   *minionPort,
+	}
+
+	client := client.New("http://"+net.JoinHostPort(*address, strconv.Itoa(int(*port))), nil)
+
+	// Create mesos scheduler driver.
 	executor := &mesos.ExecutorInfo{
 		ExecutorId: &mesos.ExecutorID{Value: proto.String("KubeleteExecutorID")},
 		Command: &mesos.CommandInfo{
@@ -116,40 +127,43 @@ func main() {
 	defer driver.Destroy()
 	go driver.Start()
 
-	m := newKubernatesMaster(mesosPodScheduler, machineList, cloud)
+	m := newKubernatesMaster(mesosPodScheduler, &master.Config{
+		Client:        client,
+		Cloud:         cloud,
+		Minions:       machineList,
+		PodInfoGetter: podInfoGetter,
+	})
 	log.Fatal(m.run(net.JoinHostPort(*address, strconv.Itoa(int(*port))), *apiPrefix))
 }
 
-func newKubernatesMaster(mesosPodScheduler *framework.KubernetesFramework, minions []string, cloud cloudprovider.Interface) *kubernatesMaster {
-	// TODO(yifan): Let mesos handle pod info getter.
-	podInfoGetter := &client.HTTPPodInfoGetter{
-		Client: http.DefaultClient,
-		Port:   *minionPort,
-	}
-
+func newKubernatesMaster(mesosPodScheduler *framework.KubernetesFramework, c *master.Config) *kubernatesMaster {
 	m := &kubernatesMaster{
 		podRegistry:        mesosPodScheduler,
 		controllerRegistry: registry.MakeMemoryRegistry(),
 		serviceRegistry:    registry.MakeMemoryRegistry(),
-		minionRegistry:     registry.MakeMinionRegistry(minions),
+		minionRegistry:     registry.MakeMinionRegistry(c.Minions),
+		client:             c.Client,
 	}
-	m.init(cloud, podInfoGetter, mesosPodScheduler)
+	m.init(c.Cloud, c.PodInfoGetter)
 	return m
 }
 
-func (m *kubernatesMaster) init(cloud cloudprovider.Interface, podInfoGetter client.PodInfoGetter, s scheduler.Scheduler) {
+func (m *kubernatesMaster) init(cloud cloudprovider.Interface, podInfoGetter client.PodInfoGetter) {
 	podCache := master.NewPodCache(podInfoGetter, m.podRegistry, time.Second*30)
 	go podCache.Loop()
+	random := rand.New(rand.NewSource(int64(time.Now().Nanosecond())))
+	s := scheduler.NewRandomFitScheduler(m.podRegistry, random)
 	m.storage = map[string]apiserver.RESTStorage{
 		"pods": registry.MakePodRegistryStorage(m.podRegistry, podInfoGetter, s, m.minionRegistry, cloud, podCache),
-		"replicationControllers": registry.MakeControllerRegistryStorage(m.controllerRegistry, m.podRegistry),
+		"replicationControllers": registry.NewControllerRegistryStorage(m.controllerRegistry, m.podRegistry),
 		"services":               registry.MakeServiceRegistryStorage(m.serviceRegistry, cloud, m.minionRegistry),
 		"minions":                registry.MakeMinionRegistryStorage(m.minionRegistry),
 	}
 }
 
+// Run begins serving the Kubernetes API. It never returns.
 func (m *kubernatesMaster) run(myAddress, apiPrefix string) error {
-	endpoints := registry.MakeEndpointController(m.serviceRegistry, m.podRegistry)
+	endpoints := registry.MakeEndpointController(m.serviceRegistry, m.client)
 	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, time.Second*10)
 
 	s := &http.Server{
