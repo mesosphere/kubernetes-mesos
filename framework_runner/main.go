@@ -33,8 +33,8 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
-	"github.com/mesosphere/kubernetes-mesos/3rdparty/code.google.com/p/goprotobuf/proto"
-	"github.com/mesosphere/kubernetes-mesos/3rdparty/github.com/mesosphere/mesos-go/mesos"
+	"code.google.com/p/goprotobuf/proto"
+	"github.com/mesosphere/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/framework"
 )
 
@@ -142,7 +142,7 @@ func (m *kubernatesMaster) init(cloud cloudprovider.Interface, podInfoGetter cli
 	go podCache.Loop()
 	m.storage = map[string]apiserver.RESTStorage{
 		"pods": registry.MakePodRegistryStorage(m.podRegistry, podInfoGetter, s, m.minionRegistry, cloud, podCache),
-		"replicationControllers": registry.MakeControllerRegistryStorage(m.controllerRegistry, m.podRegistry),
+		"replicationControllers": registry.NewControllerRegistryStorage(m.controllerRegistry, m.podRegistry),
 		"services":               registry.MakeServiceRegistryStorage(m.serviceRegistry, cloud, m.minionRegistry),
 		"minions":                registry.MakeMinionRegistryStorage(m.minionRegistry),
 	}
