@@ -6,10 +6,11 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	"github.com/fsouza/go-dockerclient"
 	log "github.com/golang/glog"
-	"github.com/mesosphere/kubernetes-mesos/3rdparty/github.com/mesosphere/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/executor"
+	"github.com/mesosphere/mesos-go/mesos"
 )
 
 var (
@@ -44,17 +45,13 @@ func main() {
 		}
 	}
 
+	kl := kubelet.NewMainKubelet(string(hostname), dockerClient, nil, nil, "/")
+
 	driver := new(mesos.MesosExecutorDriver)
-	kubeletExecutor := executor.New(driver)
+	kubeletExecutor := executor.New(driver, kl)
 	driver.Executor = kubeletExecutor
 
-	// Fill the kuberlet's fields.
-	kubeletExecutor.Hostname = string(hostname)
-	kubeletExecutor.DockerClient = dockerClient
-	kubeletExecutor.SyncFrequency = *syncFrequency
-
-	// TODO(yifan): Cadvisor.
-	go kubeletExecutor.RunKubelet(*dockerEndpoint, "", "", "", "", 0)
+	go kubeletExecutor.RunKubelet()
 
 	log.Info("Init executor driver")
 	driver.Init()

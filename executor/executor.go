@@ -1,12 +1,15 @@
 package executor
 
 import (
+	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	log "github.com/golang/glog"
-	"github.com/mesosphere/kubernetes-mesos/3rdparty/code.google.com/p/goprotobuf/proto"
-	"github.com/mesosphere/kubernetes-mesos/3rdparty/github.com/mesosphere/mesos-go/mesos"
+	"github.com/mesosphere/mesos-go/mesos"
+	"gopkg.in/v1/yaml"
 )
+
+const defaultChanSize = 1024
 
 type kuberTask struct {
 	mesosTaskInfo     *mesos.TaskInfo
@@ -16,20 +19,27 @@ type kuberTask struct {
 // KuberneteExecutor is an mesos executor that runs pods
 // in a minion machine.
 type KuberneteExecutor struct {
-	*kubelet.Kubelet // the kubelet instance.
-	driver           mesos.ExecutorDriver
-	registered       bool
-	tasks            map[string]*kuberTask
+	kl         *kubelet.Kubelet // the kubelet instance.
+	updateChan chan kubelet.PodUpdate
+	driver     mesos.ExecutorDriver
+	registered bool
+	tasks      map[string]*kuberTask
 }
 
 // New creates a new kubernete executor.
-func New(driver mesos.ExecutorDriver) *KuberneteExecutor {
+func New(driver mesos.ExecutorDriver, kl *kubelet.Kubelet) *KuberneteExecutor {
 	return &KuberneteExecutor{
-		kubelet.New(),
-		driver,
-		false,
-		make(map[string]*kuberTask),
+		kl:         kl,
+		updateChan: make(chan kubelet.PodUpdate, defaultChanSize),
+		driver:     driver,
+		registered: false,
+		tasks:      make(map[string]*kuberTask),
 	}
+}
+
+// Runkubelet runs the kubelet.
+func (k *KuberneteExecutor) RunKubelet() {
+	k.kl.Run(k.updateChan)
 }
 
 func (k *KuberneteExecutor) gatherContainerManifests() []api.ContainerManifest {
@@ -82,7 +92,7 @@ func (k *KuberneteExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *me
 
 	// Get the container manifest from the taskInfo.
 	var manifest api.ContainerManifest
-	if err := k.ExtractYAMLData(taskInfo.GetData(), &manifest); err != nil {
+	if err := yaml.Unmarshal(taskInfo.GetData(), &manifest); err != nil {
 		log.Warningf("Failed to extract yaml data from the taskInfo.data %v\n", err)
 		k.sendStatusUpdate(taskInfo.GetTaskId(),
 			mesos.TaskState_TASK_FAILED, "Failed to extract yaml data")
@@ -95,13 +105,20 @@ func (k *KuberneteExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *me
 		containerManifest: &manifest,
 	}
 
-	// Call SyncManifests to force kuberlete to run docker containers.
-	if err := k.SyncManifests(k.gatherContainerManifests()); err != nil {
-		log.Warningf("Failed to SyncManifests\n", err)
-		k.sendStatusUpdate(taskInfo.GetTaskId(),
-			mesos.TaskState_TASK_FAILED, "Failed to SyncManifests")
-		return
+	// Send the pod updates to the channel.
+	// TODO(yifan): Replace SET with REMOVE when it's implemented.
+	update := kubelet.PodUpdate{
+		Pods: []kubelet.Pod{
+			kubelet.Pod{
+				Name:      "foo",
+				Namespace: "bar",
+				Manifest:  manifest,
+			},
+		},
+		Op: kubelet.SET,
 	}
+	k.updateChan <- update
+	// TODO(yifan): Check the result of the launch event.
 
 	k.sendStatusUpdate(taskInfo.GetTaskId(),
 		mesos.TaskState_TASK_RUNNING, "Task running")
@@ -123,12 +140,15 @@ func (k *KuberneteExecutor) KillTask(driver mesos.ExecutorDriver, taskId *mesos.
 	}
 	delete(k.tasks, tid)
 
-	// Call SyncManifests to force kuberlete to kill deleted containers.
-	if err := k.SyncManifests(k.gatherContainerManifests()); err != nil {
-		log.Warningf("Failed to extract yaml data from the taskInfo.data %v\n", err)
-		// TODO(yifan): Check the error type, (if already killed?)
-		return
+	// Send the pod updates to the channel.
+	// TODO(yifan): Replace SET with REMOVE when it's implemented.
+	update := kubelet.PodUpdate{
+		Pods: []kubelet.Pod{},
+		Op:   kubelet.SET,
 	}
+	k.updateChan <- update
+	// TODO(yifan): Check the result of the kill event.
+
 	k.sendStatusUpdate(taskId, mesos.TaskState_TASK_KILLED, "Task killed")
 }
 
@@ -144,11 +164,16 @@ func (k *KuberneteExecutor) Shutdown(driver mesos.ExecutorDriver) {
 
 	for tid, task := range k.tasks {
 		delete(k.tasks, tid)
-		// Call SyncManifests to force kuberlete to kill deleted containers.
-		if err := k.SyncManifests(k.gatherContainerManifests()); err != nil {
-			log.Warningf("Failed to extract yaml data from the taskInfo.data %v\n", err)
-			// TODO(yifan): Check the error type, (if already killed?)
+
+		// Send the pod updates to the channel.
+		// TODO(yifan): Replace SET with REMOVE when it's implemented.
+		update := kubelet.PodUpdate{
+			Pods: []kubelet.Pod{},
+			Op:   kubelet.SET,
 		}
+		k.updateChan <- update
+		// TODO(yifan): Check the result of the kill event.
+
 		k.sendStatusUpdate(task.mesosTaskInfo.GetTaskId(),
 			mesos.TaskState_TASK_KILLED, "Executor shutdown")
 	}

@@ -9,8 +9,8 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	kubernetes "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	log "github.com/golang/glog"
-	"github.com/mesosphere/kubernetes-mesos/3rdparty/code.google.com/p/goprotobuf/proto"
-	"github.com/mesosphere/kubernetes-mesos/3rdparty/github.com/mesosphere/mesos-go/mesos"
+	"code.google.com/p/goprotobuf/proto"
+	"github.com/mesosphere/mesos-go/mesos"
 	"gopkg.in/v1/yaml"
 )
 
