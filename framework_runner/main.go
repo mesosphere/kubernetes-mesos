@@ -20,7 +20,6 @@ package main
 
 import (
 	"flag"
-	"math/rand"
 	"net"
 	"net/http"
 	"strconv"
@@ -136,25 +135,23 @@ func main() {
 	log.Fatal(m.run(net.JoinHostPort(*address, strconv.Itoa(int(*port))), *apiPrefix))
 }
 
-func newKubernatesMaster(mesosPodScheduler *framework.KubernetesFramework, c *master.Config) *kubernatesMaster {
+func newKubernatesMaster(framework *framework.KubernetesFramework, c *master.Config) *kubernatesMaster {
 	m := &kubernatesMaster{
-		podRegistry:        mesosPodScheduler,
+		podRegistry:        framework,
 		controllerRegistry: registry.MakeMemoryRegistry(),
 		serviceRegistry:    registry.MakeMemoryRegistry(),
 		minionRegistry:     registry.MakeMinionRegistry(c.Minions),
 		client:             c.Client,
 	}
-	m.init(c.Cloud, c.PodInfoGetter)
+	m.init(framework, c.Cloud, c.PodInfoGetter)
 	return m
 }
 
-func (m *kubernatesMaster) init(cloud cloudprovider.Interface, podInfoGetter client.PodInfoGetter) {
+func (m *kubernatesMaster) init(scheduler scheduler.Scheduler, cloud cloudprovider.Interface, podInfoGetter client.PodInfoGetter) {
 	podCache := master.NewPodCache(podInfoGetter, m.podRegistry, time.Second*30)
 	go podCache.Loop()
-	random := rand.New(rand.NewSource(int64(time.Now().Nanosecond())))
-	s := scheduler.NewRandomFitScheduler(m.podRegistry, random)
 	m.storage = map[string]apiserver.RESTStorage{
-		"pods": registry.MakePodRegistryStorage(m.podRegistry, podInfoGetter, s, m.minionRegistry, cloud, podCache),
+		"pods": registry.MakePodRegistryStorage(m.podRegistry, podInfoGetter, scheduler, m.minionRegistry, cloud, podCache),
 		"replicationControllers": registry.NewControllerRegistryStorage(m.controllerRegistry, m.podRegistry),
 		"services":               registry.MakeServiceRegistryStorage(m.serviceRegistry, cloud, m.minionRegistry),
 		"minions":                registry.MakeMinionRegistryStorage(m.minionRegistry),
