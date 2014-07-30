@@ -117,3 +117,11 @@ Or, you can run `docker ps -a` to verify that the example container is running:
 CONTAINER ID        IMAGE                       COMMAND                CREATED             STATUS              PORTS               NAMES
 3fba73ff274a        busybox:buildroot-2014.02   sh -c 'rm -f nap &&    57 minutes ago                                              k8s--net--php--9acb0442   
 ```
+
+### Test
+
+Run test suite with:
+
+```shell
+$ go test github.com/mesosphere/kubernetes-mesos/kubernetes-mesos -v
+```
