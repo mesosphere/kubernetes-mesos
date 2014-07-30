@@ -110,8 +110,7 @@ func (k *KuberneteExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *me
 	update := kubelet.PodUpdate{
 		Pods: []kubelet.Pod{
 			kubelet.Pod{
-				Name:      "foo",
-				Namespace: "bar",
+				Name:      manifest.ID,
 				Manifest:  manifest,
 			},
 		},

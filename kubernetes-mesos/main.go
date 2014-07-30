@@ -50,6 +50,8 @@ var (
 	etcdServerList, machineList util.StringList
 )
 
+// TODO(nnielsen): Capture timeout constants here.
+
 func init() {
 	flag.Var(&etcdServerList, "etcd_servers", "Servers for the etcd (http://ip:port), comma separated")
 	flag.Var(&machineList, "machines", "List of machines to schedule onto, comma separated.")
@@ -107,7 +109,7 @@ func main() {
 				&mesos.CommandInfo_URI{Value: executorURI},
 			},
 		},
-		Name:   proto.String("Executor for kubelete"),
+		Name:   proto.String("Executor for kubelet"),
 		Source: proto.String("kubernetes"),
 	}
 
