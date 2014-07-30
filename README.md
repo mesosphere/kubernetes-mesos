@@ -42,7 +42,7 @@ $ ./bin/kubernetes-mesos -h
 Assuming your mesos cluster is started, and the master is running on `127.0.1.1:5050`, then:
 
 ```shell
-$ kubernetes-mesos \
+$ ./bin/kubernetes-mesos \
   -machines=$(hostname) \
   -mesos_master=127.0.1.1:5050 \
   -executor_uri=$(pwd)/bin/kubernetes-executor
