@@ -25,27 +25,27 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
 
 ### Build
 
+NOTE: kubernetes-mesos requires [godep](https://github.com/tools/godep).
+
 ```shell
 $ go get github.com/mesosphere/kubernetes-mesos
-$ cd kubernetes-mesos
-$ ./build.sh
+$ pushd src/github.com/mesosphere/kubernetes-mesos
+$ godep restore
+$ popd
+$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-mesos
+$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-executor
+$ ./bin/kubernetes-mesos -h
 ```
 
 ### Start the framework
 
-To check what flags are there:
-
-```shell
-$ ./framework_runner/framework_runner -h
-```
-
 Assuming your mesos cluster is started, and the master is running on `127.0.1.1:5050`, then:
 
 ```shell
-$ ./framework_runner/framework_runner \
+$ kubernetes-mesos \
   -machines=$(hostname) \
   -mesos_master=127.0.1.1:5050 \
-  -executor_uri=$(pwd)/executor_runner/executor_runner
+  -executor_uri=$(pwd)/bin/kubernetes-executor
 ```
 
 ###Launch a Pod
