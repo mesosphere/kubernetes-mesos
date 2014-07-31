@@ -12,26 +12,32 @@ import (
 	"gopkg.in/v1/yaml"
 )
 
-const defaultChanSize = 1024
+const (
+	defaultChanSize = 1024
+	containerPollTime = 500 * time.Millisecond
+	launchGracePeriod = 5 * time.Minute
+	maxPods = 256
+)
 
 type kuberTask struct {
 	mesosTaskInfo     *mesos.TaskInfo
 	containerManifest *api.ContainerManifest
 }
 
-// KuberneteExecutor is an mesos executor that runs pods
+// KubernetesExecutor is an mesos executor that runs pods
 // in a minion machine.
-type KuberneteExecutor struct {
+type KubernetesExecutor struct {
 	kl         *kubelet.Kubelet // the kubelet instance.
 	updateChan chan kubelet.PodUpdate
 	driver     mesos.ExecutorDriver
 	registered bool
 	tasks      map[string]*kuberTask
+	pods       []kubelet.Pod
 }
 
 // New creates a new kubernete executor.
-func New(driver mesos.ExecutorDriver, kl *kubelet.Kubelet) *KuberneteExecutor {
-	return &KuberneteExecutor{
+func New(driver mesos.ExecutorDriver, kl *kubelet.Kubelet) *KubernetesExecutor {
+	return &KubernetesExecutor{
 		kl:         kl,
 		updateChan: make(chan kubelet.PodUpdate, defaultChanSize),
 		driver:     driver,
@@ -41,11 +47,11 @@ func New(driver mesos.ExecutorDriver, kl *kubelet.Kubelet) *KuberneteExecutor {
 }
 
 // Runkubelet runs the kubelet.
-func (k *KuberneteExecutor) RunKubelet() {
+func (k *KubernetesExecutor) RunKubelet() {
 	k.kl.Run(k.updateChan)
 }
 
-func (k *KuberneteExecutor) gatherContainerManifests() []api.ContainerManifest {
+func (k *KubernetesExecutor) gatherContainerManifests() []api.ContainerManifest {
 	var manifests []api.ContainerManifest
 	for _, task := range k.tasks {
 		manifests = append(manifests, *task.containerManifest)
@@ -54,7 +60,7 @@ func (k *KuberneteExecutor) gatherContainerManifests() []api.ContainerManifest {
 }
 
 // Registered is called when the executor is successfully registered with the slave.
-func (k *KuberneteExecutor) Registered(driver mesos.ExecutorDriver,
+func (k *KubernetesExecutor) Registered(driver mesos.ExecutorDriver,
 	executorInfo *mesos.ExecutorInfo, frameworkInfo *mesos.FrameworkInfo, slaveInfo *mesos.SlaveInfo) {
 	log.Infof("Executor %v of framework %v registered with slave %v\n",
 		executorInfo, frameworkInfo, slaveInfo)
@@ -63,19 +69,19 @@ func (k *KuberneteExecutor) Registered(driver mesos.ExecutorDriver,
 
 // Reregistered is called when the executor is successfully re-registered with the slave.
 // This can happen when the slave fails over.
-func (k *KuberneteExecutor) Reregistered(driver mesos.ExecutorDriver, slaveInfo *mesos.SlaveInfo) {
+func (k *KubernetesExecutor) Reregistered(driver mesos.ExecutorDriver, slaveInfo *mesos.SlaveInfo) {
 	log.Infof("Reregistered with slave %v\n", slaveInfo)
 	k.registered = true
 }
 
 // Disconnected is called when the executor is disconnected with the slave.
-func (k *KuberneteExecutor) Disconnected(driver mesos.ExecutorDriver) {
+func (k *KubernetesExecutor) Disconnected(driver mesos.ExecutorDriver) {
 	log.Infof("Slave is disconnected\n")
 	k.registered = false
 }
 
 // LaunchTask is called when the executor receives a request to launch a task.
-func (k *KuberneteExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *mesos.TaskInfo) {
+func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *mesos.TaskInfo) {
 	log.Infof("Launch task %v\n", taskInfo)
 
 	if !k.registered {
@@ -112,33 +118,49 @@ func (k *KuberneteExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *me
 		containerManifest: &manifest,
 	}
 
+	k.pods = append(k.pods, kubelet.Pod{
+		Name:      podID,
+		Namespace: "etcd",
+		Manifest:  manifest,
+	})
+
 	// Send the pod updates to the channel.
-	// TODO(yifan): Replace SET with REMOVE when it's implemented.
+	// TODO(yifan): Replace SET with ADD when it's implemented.
 	// TODO(nnielsen): Incoming launch requests end up destroying already
-	// running pods. Use ADD instead.
+	// running pods.
 	update := kubelet.PodUpdate{
-		Pods: []kubelet.Pod{
-			kubelet.Pod{
-				Name:      podID,
-				Namespace: "etcd",
-				Manifest:  manifest,
-			},
-		},
+		Pods: k.pods,
 		Op: kubelet.SET,
 	}
 	k.updateChan <- update
 
+	getPidInfo := func(name string) (api.PodInfo, error) {
+
+		podFullName := kubelet.GetPodFullName(&kubelet.Pod{Name: name, Namespace: "etcd"})
+		info, err := k.kl.GetPodInfo(podFullName)
+		if err == kubelet.ErrNoContainersInPod {
+			return nil, err
+		}
+
+		return info, nil
+	}
+
+	// Delay reporting 'task running' until container is up.
 	go func() {
-		// TODO(nnielsen): Bound retries and report TASK_LOST if
-		// exceeded.
+		expires := time.Now().Add(launchGracePeriod)
 		for {
+			now := time.Now()
+			if now.After(expires) {
+				log.Warningf("%v > %v", now, expires)
+				log.Warningf("Launch expired grace period of '%v'", launchGracePeriod)
+				break
+			}
+
 			// We need to poll the kublet for the pod state, as
 			// there is no existing event / push model for this.
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(containerPollTime)
 
-			podFullName := kubelet.GetPodFullName(&kubelet.Pod{Name: podID, Namespace: "etcd"})
-			info, err := k.kl.GetPodInfo(podFullName)
-			if err == kubelet.ErrNoContainersInPod {
+			info, err := getPidInfo(podID) ; if err != nil {
 				continue
 			}
 
@@ -156,13 +178,25 @@ func (k *KuberneteExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *me
 				log.Warningf("Failed to send status update%v, %v", err)
 			}
 
+			// TODO(nnielsen): Monitor health of container and report if lost.
+			go func() {
+				for {
+					time.Sleep(containerPollTime)
+					_, err := getPidInfo(podID) ; if err != nil {
+						k.sendStatusUpdate(taskInfo.GetTaskId(), mesos.TaskState_TASK_LOST, "Task lost: container disappeared")
+						return
+					}
+				}
+			}()
+
 			return
 		}
+		k.sendStatusUpdate(taskInfo.GetTaskId(), mesos.TaskState_TASK_LOST, "Task lost: launch failed")
 	}()
 }
 
 // KillTask is called when the executor receives a request to kill a task.
-func (k *KuberneteExecutor) KillTask(driver mesos.ExecutorDriver, taskId *mesos.TaskID) {
+func (k *KubernetesExecutor) KillTask(driver mesos.ExecutorDriver, taskId *mesos.TaskID) {
 	log.Infof("Kill task %v\n", taskId)
 
 	if !k.registered {
@@ -190,13 +224,13 @@ func (k *KuberneteExecutor) KillTask(driver mesos.ExecutorDriver, taskId *mesos.
 }
 
 // FrameworkMessage is called when the framework sends some message to the executor
-func (k *KuberneteExecutor) FrameworkMessage(driver mesos.ExecutorDriver, message string) {
+func (k *KubernetesExecutor) FrameworkMessage(driver mesos.ExecutorDriver, message string) {
 	log.Infof("Receives message from framework %v\n", message)
 	// TODO(yifan): Check for update message.
 }
 
 // Shutdown is called when the executor receives a shutdown request.
-func (k *KuberneteExecutor) Shutdown(driver mesos.ExecutorDriver) {
+func (k *KubernetesExecutor) Shutdown(driver mesos.ExecutorDriver) {
 	log.Infof("Shutdown the executor\n")
 
 	for tid, task := range k.tasks {
@@ -217,11 +251,11 @@ func (k *KuberneteExecutor) Shutdown(driver mesos.ExecutorDriver) {
 }
 
 // Error is called when some error happens.
-func (k *KuberneteExecutor) Error(driver mesos.ExecutorDriver, message string) {
+func (k *KubernetesExecutor) Error(driver mesos.ExecutorDriver, message string) {
 	log.Errorf("Executor error: %v\n", message)
 }
 
-func (k *KuberneteExecutor) sendStatusUpdate(taskId *mesos.TaskID, state mesos.TaskState, message string) {
+func (k *KubernetesExecutor) sendStatusUpdate(taskId *mesos.TaskID, state mesos.TaskState, message string) {
 	statusUpdate := &mesos.TaskStatus{
 		TaskId:  taskId,
 		State:   &state,

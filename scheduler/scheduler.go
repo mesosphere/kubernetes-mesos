@@ -17,7 +17,11 @@ import (
 
 var errSchedulerTimeout = fmt.Errorf("Schedule time out")
 
-const defaultFinishedTasksSize = 1024
+const (
+	containerCpus = 1
+	containerMem = 512
+	defaultFinishedTasksSize = 1024
+)
 
 // PodScheduleFunc implements how to schedule
 // pods among slaves. We can have different implementation
@@ -50,7 +54,10 @@ func (t *PodTask) FillTaskInfo(slaveId string, offers ...*mesos.Offer) {
 	var err error
 	t.TaskInfo.TaskId = &mesos.TaskID{Value: proto.String(t.ID)}
 	t.TaskInfo.SlaveId = &mesos.SlaveID{Value: proto.String(slaveId)}
-	t.TaskInfo.Resources = offers[0].GetResources()
+	t.TaskInfo.Resources = []*mesos.Resource{
+		mesos.ScalarResource("cpus", containerCpus),
+		mesos.ScalarResource("mem", containerMem),
+	}
 	t.TaskInfo.Data, err = yaml.Marshal(&t.Pod.DesiredState.Manifest)
 	if err != nil {
 		log.Warningf("Failed to marshal the manifest")
@@ -257,14 +264,15 @@ func (k *KubernetesFramework) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 	log.Infof("Received running status: '%v'", taskStatus)
 
 
+	task.Pod.CurrentState.Status = api.PodRunning
+	task.Pod.CurrentState.Manifest = task.Pod.DesiredState.Manifest
+
 	if taskStatus.Data != nil {
 		var target api.PodInfo
 		err := json.Unmarshal(taskStatus.Data, &target)
 		if err == nil {
 			task.Pod.CurrentState.Info = target
 		}
-
-		task.Pod.CurrentState.Status = api.PodRunning
 	}
 
 
@@ -299,7 +307,16 @@ func (k *KubernetesFramework) handleTaskFinished(taskStatus *mesos.TaskStatus) {
 }
 
 func (k *KubernetesFramework) handleTaskFailed(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Not implemented: Task failed")
+	log.Errorf("Task failed: '%v'", taskStatus)
+
+	taskId := taskStatus.GetTaskId().GetValue()
+
+	if _, exists := k.pendingTasks[taskId]; exists {
+		delete(k.pendingTasks, taskId)
+	}
+	if _, exists := k.runningTasks[taskId]; exists {
+		delete(k.runningTasks, taskId)
+	}
 }
 
 func (k *KubernetesFramework) handleTaskKilled(taskStatus *mesos.TaskStatus) {
@@ -382,6 +399,8 @@ func (k *KubernetesFramework) ListPods(selector labels.Selector) ([]api.Pod, err
 	// TODO(nnielsen): We need to get informed when the current state
 	// changes.
 
+	log.V(2).Infof("Returning pods: '%v'\n", result)
+
 	return result, nil
 }
 
@@ -392,13 +411,16 @@ func (k *KubernetesFramework) GetPod(podID string) (*api.Pod, error) {
 	defer k.RUnlock()
 
 	// Note that podID is also the taskId.
-	if _, exists := k.pendingTasks[podID]; exists {
-		return nil, fmt.Errorf("Pod '%s' is still pending", podID)
+	if task, exists := k.pendingTasks[podID]; exists {
+		// return nil, fmt.Errorf("Pod '%s' is still pending", podID)
+		log.V(2).Infof("Pending Pod '%s': %v", podID, task.Pod)
+		return task.Pod, nil
 	}
 	if containsTask(k.finishedTasks, podID) {
 		return nil, fmt.Errorf("Pod '%s' is finished", podID)
 	}
 	if task, exists := k.runningTasks[podID]; exists {
+		log.V(2).Infof("Running Pod '%s': %v", podID, task.Pod)
 		return task.Pod, nil
 	}
 	return nil, fmt.Errorf("Unknown Pod %v", podID)
@@ -415,7 +437,8 @@ func (k *KubernetesFramework) CreatePod(machine string, pod api.Pod) error {
 
 	// TODO(yifan): By this time, there is a chance that the slave is disconnected.
 	offerId := &mesos.OfferID{Value: proto.String(task.OfferIds[0])}
-	return k.Driver.LaunchTasks(offerId, []*mesos.TaskInfo{task.TaskInfo}, nil)
+	k.Driver.LaunchTasks(offerId, []*mesos.TaskInfo{task.TaskInfo}, nil)
+	return nil
 }
 
 // Update an existing pod.
