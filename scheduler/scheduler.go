@@ -407,7 +407,14 @@ func (k *KubernetesFramework) UpdatePod(pod api.Pod) error {
 // Delete an existing pod.
 func (k *KubernetesFramework) DeletePod(podID string) error {
 	// TODO(yifan): killtask
-	return fmt.Errorf("Not implemented: DeletePod")
+	log.V(2).Infof("Delete pod '%s'\n", podID)
+
+	if task, exists := k.runningTasks[podID]; exists {
+		taskId := &mesos.TaskID{Value: proto.String(task.ID)}
+		return k.Driver.KillTask(taskId)
+	}
+
+	return fmt.Errorf("Cannot kill pod '%s': pod not found", podID)
 }
 
 // A FCFS scheduler.

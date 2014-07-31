@@ -73,6 +73,8 @@ func main() {
 	driver.Start()
 
 	go util.Forever(func() {
+		// TODO(nnielsen): Don't hardwire port, but use port from
+		// resource offer.
 		kubelet.ListenAndServeKubeletServer(kl, cfg.Channel("http"), http.DefaultServeMux, hostname, 10250)
 	}, 0)
 

@@ -57,7 +57,7 @@ func init() {
 	flag.Var(&machineList, "machines", "List of machines to schedule onto, comma separated.")
 }
 
-type kubernatesMaster struct {
+type kubernetesMaster struct {
 	podRegistry        registry.PodRegistry
 	controllerRegistry registry.ControllerRegistry
 	serviceRegistry    registry.ServiceRegistry
@@ -137,8 +137,8 @@ func main() {
 	log.Fatal(m.run(net.JoinHostPort(*address, strconv.Itoa(int(*port))), *apiPrefix))
 }
 
-func newKubernatesMaster(framework *framework.KubernetesFramework, c *master.Config) *kubernatesMaster {
-	m := &kubernatesMaster{
+func newKubernatesMaster(framework *framework.KubernetesFramework, c *master.Config) *kubernetesMaster {
+	m := &kubernetesMaster{
 		podRegistry:        framework,
 		controllerRegistry: registry.MakeMemoryRegistry(),
 		serviceRegistry:    registry.MakeMemoryRegistry(),
@@ -149,7 +149,7 @@ func newKubernatesMaster(framework *framework.KubernetesFramework, c *master.Con
 	return m
 }
 
-func (m *kubernatesMaster) init(scheduler scheduler.Scheduler, cloud cloudprovider.Interface, podInfoGetter client.PodInfoGetter) {
+func (m *kubernetesMaster) init(scheduler scheduler.Scheduler, cloud cloudprovider.Interface, podInfoGetter client.PodInfoGetter) {
 	podCache := master.NewPodCache(podInfoGetter, m.podRegistry, time.Second*30)
 	go podCache.Loop()
 	m.storage = map[string]apiserver.RESTStorage{
@@ -161,7 +161,7 @@ func (m *kubernatesMaster) init(scheduler scheduler.Scheduler, cloud cloudprovid
 }
 
 // Run begins serving the Kubernetes API. It never returns.
-func (m *kubernatesMaster) run(myAddress, apiPrefix string) error {
+func (m *kubernetesMaster) run(myAddress, apiPrefix string) error {
 	endpoints := registry.MakeEndpointController(m.serviceRegistry, m.client)
 	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, time.Second*10)
 
