@@ -65,11 +65,11 @@ func main() {
 
 	go kubeletExecutor.RunKubelet()
 
-	log.Info("Init executor driver")
+	log.V(2).Infof("Init executor driver")
 	driver.Init()
 	defer driver.Destroy()
 
-	log.Info("Executor driver is running")
+	log.V(2).Infof("Executor driver is running")
 	driver.Start()
 
 	go util.Forever(func() {

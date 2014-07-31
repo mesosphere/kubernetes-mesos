@@ -111,6 +111,7 @@ func (k *KuberneteExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *me
 		Pods: []kubelet.Pod{
 			kubelet.Pod{
 				Name:      manifest.ID,
+				Namespace: "etcd",
 				Manifest:  manifest,
 			},
 		},
