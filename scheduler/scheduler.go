@@ -4,6 +4,7 @@ import (
 	"container/ring"
 	"fmt"
 	"sync"
+	"encoding/json"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
@@ -254,6 +255,19 @@ func (k *KubernetesFramework) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 	}
 
 	log.Infof("Received running status: '%v'", taskStatus)
+
+
+	if taskStatus.Data != nil {
+		var target api.PodInfo
+		err := json.Unmarshal(taskStatus.Data, &target)
+		if err == nil {
+			task.Pod.CurrentState.Info = target
+		}
+
+		task.Pod.CurrentState.Status = api.PodRunning
+	}
+
+
 
 	k.runningTasks[taskId] = task
 	slave.tasks[taskId] = task
