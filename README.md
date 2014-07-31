@@ -38,27 +38,27 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
 
 ### Build
 
+NOTE: kubernetes-mesos requires [godep](https://github.com/tools/godep).
+
 ```shell
 $ go get github.com/mesosphere/kubernetes-mesos
-$ cd kubernetes-mesos
-$ ./build.sh
+$ pushd src/github.com/mesosphere/kubernetes-mesos
+$ godep restore
+$ popd
+$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-mesos
+$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-executor
+$ ./bin/kubernetes-mesos -h
 ```
 
 ### Start the framework
 
-To check what flags are there:
-
-```shell
-$ ./framework_runner/framework_runner -h
-```
-
 Assuming your mesos cluster is started, and the master is running on `127.0.1.1:5050`, then:
 
 ```shell
-$ ./framework_runner/framework_runner \
+$ ./bin/kubernetes-mesos \
   -machines=$(hostname) \
   -mesos_master=127.0.1.1:5050 \
-  -executor_uri=$(pwd)/executor_runner/executor_runner
+  -executor_uri=$(pwd)/bin/kubernetes-executor
 ```
 
 ###Launch a Pod
@@ -129,4 +129,12 @@ Or, you can run `docker ps -a` to verify that the example container is running:
 ```shell
 CONTAINER ID        IMAGE                       COMMAND                CREATED             STATUS              PORTS               NAMES
 3fba73ff274a        busybox:buildroot-2014.02   sh -c 'rm -f nap &&    57 minutes ago                                              k8s--net--php--9acb0442   
+```
+
+### Test
+
+Run test suite with:
+
+```shell
+$ go test github.com/mesosphere/kubernetes-mesos/kubernetes-mesos -v
 ```

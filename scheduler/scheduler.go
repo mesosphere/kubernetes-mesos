@@ -225,11 +225,11 @@ func (k *KubernetesFramework) StatusUpdate(driver mesos.SchedulerDriver, taskSta
 }
 
 func (k *KubernetesFramework) handleTaskStaging(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Not implemented")
+	log.Errorf("Not implemented: task staging")
 }
 
 func (k *KubernetesFramework) handleTaskStarting(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Not implemented")
+	log.Errorf("Not implemented: task starting")
 }
 
 func (k *KubernetesFramework) handleTaskRunning(taskStatus *mesos.TaskStatus) {
@@ -283,15 +283,15 @@ func (k *KubernetesFramework) handleTaskFinished(taskStatus *mesos.TaskStatus) {
 }
 
 func (k *KubernetesFramework) handleTaskFailed(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Not implemented")
+	log.Errorf("Not implemented: Task failed")
 }
 
 func (k *KubernetesFramework) handleTaskKilled(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Not implemented")
+	log.Errorf("Not implemented: Task killed")
 }
 
 func (k *KubernetesFramework) handleTaskLost(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Not implemented")
+	log.Errorf("Not implemented: Task Lost")
 }
 
 // FrameworkMessage is called when the scheduler receives a message from the executor.
@@ -353,7 +353,7 @@ func (k *KubernetesFramework) doSchedule() {
 
 // ListPods obtains a list of pods that match selector.
 func (k *KubernetesFramework) ListPods(selector labels.Selector) ([]api.Pod, error) {
-	log.V(2).Infof("List pods\n")
+	log.V(2).Infof("List pods for '%v'\n", selector)
 	k.RLock()
 	defer k.RUnlock()
 
@@ -367,16 +367,16 @@ func (k *KubernetesFramework) ListPods(selector labels.Selector) ([]api.Pod, err
 
 // Get a specific pod.
 func (k *KubernetesFramework) GetPod(podID string) (*api.Pod, error) {
-	log.V(2).Infof("Get pod\n")
+	log.V(2).Infof("Get pod '%s'\n", podID)
 	k.RLock()
 	defer k.RUnlock()
 
 	// Note that podID is also the taskId.
 	if _, exists := k.pendingTasks[podID]; exists {
-		return nil, fmt.Errorf("Pod is still pending")
+		return nil, fmt.Errorf("Pod '%s' is still pending", podID)
 	}
 	if containsTask(k.finishedTasks, podID) {
-		return nil, fmt.Errorf("Pod is finished")
+		return nil, fmt.Errorf("Pod '%s' is finished", podID)
 	}
 	if task, exists := k.runningTasks[podID]; exists {
 		return task.Pod, nil
@@ -401,13 +401,13 @@ func (k *KubernetesFramework) CreatePod(machine string, pod api.Pod) error {
 // Update an existing pod.
 func (k *KubernetesFramework) UpdatePod(pod api.Pod) error {
 	// TODO(yifan): Need to send a special message to the slave/executor.
-	return fmt.Errorf("Not implemented")
+	return fmt.Errorf("Not implemented: UpdatePod")
 }
 
 // Delete an existing pod.
 func (k *KubernetesFramework) DeletePod(podID string) error {
 	// TODO(yifan): killtask
-	return fmt.Errorf("Not implemented")
+	return fmt.Errorf("Not implemented: DeletePod")
 }
 
 // A FCFS scheduler.

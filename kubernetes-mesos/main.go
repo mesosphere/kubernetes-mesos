@@ -34,7 +34,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
-	"github.com/mesosphere/kubernetes-mesos/framework"
+	"github.com/mesosphere/kubernetes-mesos/scheduler"
 	"github.com/mesosphere/mesos-go/mesos"
 )
 
@@ -49,6 +49,8 @@ var (
 	executorURI                 = flag.String("executor_uri", "", "URI of dir that contains the executor executable")
 	etcdServerList, machineList util.StringList
 )
+
+// TODO(nnielsen): Capture timeout constants here.
 
 func init() {
 	flag.Var(&etcdServerList, "etcd_servers", "Servers for the etcd (http://ip:port), comma separated")
@@ -102,13 +104,13 @@ func main() {
 	executor := &mesos.ExecutorInfo{
 		ExecutorId: &mesos.ExecutorID{Value: proto.String("KubeleteExecutorID")},
 		Command: &mesos.CommandInfo{
-			Value: proto.String("./executor_runner"),
+			Value: proto.String("./kubernetes-executor"),
 			Uris: []*mesos.CommandInfo_URI{
 				&mesos.CommandInfo_URI{Value: executorURI},
 			},
 		},
-		Name:   proto.String("Executor for kubelete"),
-		Source: proto.String("for test"),
+		Name:   proto.String("Executor for kubelet"),
+		Source: proto.String("kubernetes"),
 	}
 
 	mesosPodScheduler := framework.New(executor, framework.FCFSScheduleFunc)
@@ -116,7 +118,7 @@ func main() {
 		Master: *mesosMaster,
 		Framework: mesos.FrameworkInfo{
 			Name: proto.String("KubernetesFramework"),
-			User: proto.String(""),
+			User: proto.String("root"),
 		},
 		Scheduler: mesosPodScheduler,
 	}

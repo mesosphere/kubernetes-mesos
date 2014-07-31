@@ -5,10 +5,13 @@ import (
 	"os"
 	"os/exec"
 	"time"
+	"net/http"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/fsouza/go-dockerclient"
 	log "github.com/golang/glog"
+	kconfig "github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/config"
 	"github.com/mesosphere/kubernetes-mesos/executor"
 	"github.com/mesosphere/mesos-go/mesos"
 )
@@ -35,17 +38,26 @@ func main() {
 		log.Fatal("Couldn't connnect to docker.")
 	}
 
-	hostname := []byte(*hostnameOverride)
-	if string(hostname) == "" {
+	hostname := *hostnameOverride
+	if hostname == "" {
 		// Note: We use exec here instead of os.Hostname() because we
 		// want the FQDN, and this is the easiest way to get it.
-		hostname, err = exec.Command("hostname", "-f").Output()
+		fqdnHostname, hostnameErr := exec.Command("hostname", "-f").Output()
 		if err != nil {
-			log.Fatalf("Couldn't determine hostname: %v", err)
+			log.Fatalf("Couldn't determine hostname: %v", hostnameErr)
+		}
+
+		// hostname(1) returns a terminating newline we need to strip.
+		hostname = string(fqdnHostname)
+		if len(hostname) > 0 {
+			hostname = hostname[0:len(hostname) - 1]
 		}
 	}
 
-	kl := kubelet.NewMainKubelet(string(hostname), dockerClient, nil, nil, "/")
+	cfg := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
+
+	// TODO(nnielsen): Wire up etcd client.
+	kl := kubelet.NewMainKubelet(hostname, dockerClient, nil, nil, "/")
 
 	driver := new(mesos.MesosExecutorDriver)
 	kubeletExecutor := executor.New(driver, kl)
@@ -58,5 +70,11 @@ func main() {
 	defer driver.Destroy()
 
 	log.Info("Executor driver is running")
-	driver.Run()
+	driver.Start()
+
+	go util.Forever(func() {
+		kubelet.ListenAndServeKubeletServer(kl, cfg.Channel("http"), http.DefaultServeMux, hostname, 10250)
+	}, 0)
+
+	driver.Join()
 }
