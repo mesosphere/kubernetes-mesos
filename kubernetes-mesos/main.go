@@ -37,6 +37,7 @@ import (
 	log "github.com/golang/glog"
 	"github.com/mesosphere/kubernetes-mesos/scheduler"
 	"github.com/mesosphere/mesos-go/mesos"
+	"github.com/coreos/go-etcd/etcd"
 )
 
 var (
@@ -136,24 +137,40 @@ func main() {
 	defer driver.Destroy()
 	go driver.Start()
 
-	m := newKubernatesMaster(mesosPodScheduler, &master.Config{
+	m := newKubernetesMaster(mesosPodScheduler, &master.Config{
 		Client:        client,
 		Cloud:         cloud,
 		Minions:       machineList,
 		PodInfoGetter: podInfoGetter,
+		EtcdServers:   etcdServerList,
 	})
 	log.Fatal(m.run(net.JoinHostPort(*address, strconv.Itoa(int(*port))), *apiPrefix))
 }
 
-func newKubernatesMaster(framework *framework.KubernetesFramework, c *master.Config) *kubernetesMaster {
-	m := &kubernetesMaster{
-		podRegistry:        framework,
-		controllerRegistry: registry.MakeMemoryRegistry(),
-		serviceRegistry:    registry.MakeMemoryRegistry(),
-		minionRegistry:     registry.MakeMinionRegistry(c.Minions),
-		client:             c.Client,
+func newKubernetesMaster(framework *framework.KubernetesFramework, c *master.Config) *kubernetesMaster {
+	var m *kubernetesMaster
+
+	if len(c.EtcdServers) > 0 {
+		etcdClient := etcd.NewClient(c.EtcdServers)
+		minionRegistry := registry.MakeMinionRegistry(c.Minions)
+		m = &kubernetesMaster{
+			podRegistry:        framework,
+			controllerRegistry: registry.MakeEtcdRegistry(etcdClient, minionRegistry),
+			serviceRegistry:    registry.MakeEtcdRegistry(etcdClient, minionRegistry),
+			minionRegistry:     minionRegistry,
+			client:             c.Client,
+		}
+		m.init(framework, c.Cloud, c.PodInfoGetter)
+	} else {
+		m = &kubernetesMaster{
+			podRegistry:        framework,
+			controllerRegistry: registry.MakeMemoryRegistry(),
+			serviceRegistry:    registry.MakeMemoryRegistry(),
+			minionRegistry:     registry.MakeMinionRegistry(c.Minions),
+			client:             c.Client,
+		}
+		m.init(framework, c.Cloud, c.PodInfoGetter)
 	}
-	m.init(framework, c.Cloud, c.PodInfoGetter)
 	return m
 }
 
