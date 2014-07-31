@@ -3,9 +3,10 @@ package main
 import (
 	"flag"
 	"os"
-	"os/exec"
 	"time"
 	"net/http"
+	"os/exec"
+	"strings"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
@@ -75,14 +76,16 @@ func main() {
 
 	go kubeletExecutor.RunKubelet()
 
-	log.V(2).Infof("Init executor driver")
+	log.V(2).Infof("Initialize executor driver...")
 	driver.Init()
 	defer driver.Destroy()
 
-	log.V(2).Infof("Executor driver is running")
+	log.V(2).Infof("Executor driver is running!")
 	driver.Start()
 
 	go util.Forever(cfg.Sync, *syncFrequency)
+
+	log.V(2).Infof("Starting kubelet server...")
 
 	go util.Forever(func() {
 		// TODO(nnielsen): Don't hardwire port, but use port from
@@ -90,5 +93,27 @@ func main() {
 		kubelet.ListenAndServeKubeletServer(kl, cfg.Channel("http"), http.DefaultServeMux, hostname, 10250)
 	}, 0)
 
+
+	log.V(2).Infof("Starting proxy process...")
+	var cmd *exec.Cmd
+	if len(etcdServerList) > 0 {
+		etcdServerArguments := strings.Join(etcdServerList, ",")
+		cmd = exec.Command("./proxy", "-etcd_servers=" + etcdServerArguments)
+	} else {
+		cmd = exec.Command("./proxy")
+	}
+	_, err = cmd.StdoutPipe()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		log.Fatal(err)
+	}
+
 	driver.Join()
+
+	log.V(2).Infof("Cleaning up proxy process...")
+
+	// Clean up proxy process
+	cmd.Process.Kill()
 }

@@ -49,6 +49,7 @@ var (
 	minionPort                  = flag.Uint("minion_port", 10250, "The port at which kubelet will be listening on the minions.")
 	mesosMaster                 = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master")
 	executorURI                 = flag.String("executor_uri", "", "URI of dir that contains the executor executable")
+	proxyURI                    = flag.String("proxy_uri", "", "URI of dir that contains the kubernetes proxy executable")
 	etcdServerList, machineList util.StringList
 )
 
@@ -105,7 +106,7 @@ func main() {
 	executorCommand := "./kubernetes-executor"
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
-		executorCommand = "./kubernetes-executor -etcd_servers=" + etcdServerArguments
+		executorCommand = "./kubernetes-executor -v=2 -etcd_servers=" + etcdServerArguments
 	}
 
 	// Create mesos scheduler driver.
@@ -115,6 +116,7 @@ func main() {
 			Value: proto.String(executorCommand),
 			Uris: []*mesos.CommandInfo_URI{
 				&mesos.CommandInfo_URI{Value: executorURI},
+				&mesos.CommandInfo_URI{Value: proxyURI},
 			},
 		},
 		Name:   proto.String("Executor for kubelet"),
@@ -131,7 +133,6 @@ func main() {
 		Scheduler: mesosPodScheduler,
 	}
 	mesosPodScheduler.Driver = driver
-	// TODO(nnielsen): Wire up etcd client.
 
 	driver.Init()
 	defer driver.Destroy()
