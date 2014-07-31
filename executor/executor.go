@@ -1,6 +1,9 @@
 package executor
 
 import (
+	"time"
+	"encoding/json"
+
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
@@ -99,6 +102,10 @@ func (k *KuberneteExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *me
 		return
 	}
 
+	// TODO(nnielsen): Verify this assumption. Manifest ID's has been marked
+	// to be deprecated.
+	podID := manifest.ID
+
 	// Add the task.
 	k.tasks[taskId] = &kuberTask{
 		mesosTaskInfo:     taskInfo,
@@ -107,10 +114,12 @@ func (k *KuberneteExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *me
 
 	// Send the pod updates to the channel.
 	// TODO(yifan): Replace SET with REMOVE when it's implemented.
+	// TODO(nnielsen): Incoming launch requests end up destroying already
+	// running pods. Use ADD instead.
 	update := kubelet.PodUpdate{
 		Pods: []kubelet.Pod{
 			kubelet.Pod{
-				Name:      manifest.ID,
+				Name:      podID,
 				Namespace: "etcd",
 				Manifest:  manifest,
 			},
@@ -118,10 +127,38 @@ func (k *KuberneteExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *me
 		Op: kubelet.SET,
 	}
 	k.updateChan <- update
-	// TODO(yifan): Check the result of the launch event.
 
-	k.sendStatusUpdate(taskInfo.GetTaskId(),
-		mesos.TaskState_TASK_RUNNING, "Task running")
+	go func() {
+		// TODO(nnielsen): Bound retries and report TASK_LOST if
+		// exceeded.
+		for {
+			// We need to poll the kublet for the pod state, as
+			// there is no existing event / push model for this.
+			time.Sleep(200 * time.Millisecond)
+
+			podFullName := kubelet.GetPodFullName(&kubelet.Pod{Name: podID, Namespace: "etcd"})
+			info, err := k.kl.GetPodInfo(podFullName)
+			if err == kubelet.ErrNoContainersInPod {
+				continue
+			}
+
+			log.V(2).Infof("Found pod info: '%v'", info)
+			data, err := json.Marshal(info)
+
+			statusUpdate := &mesos.TaskStatus{
+				TaskId:  taskInfo.GetTaskId(),
+				State:   mesos.NewTaskState(mesos.TaskState_TASK_RUNNING),
+				Message: proto.String("Pod '" + podID + "' is running"),
+				Data:    data,
+			}
+
+			if err := k.driver.SendStatusUpdate(statusUpdate); err != nil {
+				log.Warningf("Failed to send status update%v, %v", err)
+			}
+
+			return
+		}
+	}()
 }
 
 // KillTask is called when the executor receives a request to kill a task.

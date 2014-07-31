@@ -253,6 +253,8 @@ func (k *KubernetesFramework) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 		return
 	}
 
+	log.Infof("Received running status: '%v'", taskStatus)
+
 	k.runningTasks[taskId] = task
 	slave.tasks[taskId] = task
 	delete(k.pendingTasks, taskId)
@@ -362,6 +364,10 @@ func (k *KubernetesFramework) ListPods(selector labels.Selector) ([]api.Pod, err
 	for _, task := range k.runningTasks {
 		result = append(result, *(task.Pod))
 	}
+
+	// TODO(nnielsen): We need to get informed when the current state
+	// changes.
+
 	return result, nil
 }
 
@@ -386,7 +392,7 @@ func (k *KubernetesFramework) GetPod(podID string) (*api.Pod, error) {
 
 // Create a pod based on a specification, schedule it onto a specific machine.
 func (k *KubernetesFramework) CreatePod(machine string, pod api.Pod) error {
-	log.V(2).Infof("Create pod\n")
+	log.V(2).Infof("Create pod: '%v'\n", pod)
 	taskId := pod.JSONBase.ID
 	task, exists := k.pendingTasks[taskId]
 	if !exists {
