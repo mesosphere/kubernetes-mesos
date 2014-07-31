@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"strings"
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/apiserver"
@@ -100,11 +101,17 @@ func main() {
 
 	client := client.New("http://"+net.JoinHostPort(*address, strconv.Itoa(int(*port))), nil)
 
+	executorCommand := "./kubernetes-executor"
+	if len(etcdServerList) > 0 {
+		etcdServerArguments := strings.Join(etcdServerList, ",")
+		executorCommand = "./kubernetes-executor -etcd_servers=" + etcdServerArguments
+	}
+
 	// Create mesos scheduler driver.
 	executor := &mesos.ExecutorInfo{
 		ExecutorId: &mesos.ExecutorID{Value: proto.String("KubeleteExecutorID")},
 		Command: &mesos.CommandInfo{
-			Value: proto.String("./kubernetes-executor"),
+			Value: proto.String(executorCommand),
 			Uris: []*mesos.CommandInfo_URI{
 				&mesos.CommandInfo_URI{Value: executorURI},
 			},
@@ -123,6 +130,7 @@ func main() {
 		Scheduler: mesosPodScheduler,
 	}
 	mesosPodScheduler.Driver = driver
+	// TODO(nnielsen): Wire up etcd client.
 
 	driver.Init()
 	defer driver.Destroy()

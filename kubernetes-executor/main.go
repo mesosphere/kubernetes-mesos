@@ -14,15 +14,20 @@ import (
 	kconfig "github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/config"
 	"github.com/mesosphere/kubernetes-mesos/executor"
 	"github.com/mesosphere/mesos-go/mesos"
+	"github.com/coreos/go-etcd/etcd"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 )
 
 var (
 	syncFrequency    = flag.Duration("sync_frequency", 10*time.Second, "Max period between synchronizing running containers and config")
 	hostnameOverride = flag.String("hostname_override", "", "If non-empty, will use this string as identification instead of the actual hostname.")
 	dockerEndpoint   = flag.String("docker_endpoint", "", "If non-empty, use this for the docker endpoint to communicate with")
+	etcdServerList   util.StringList
 )
 
 func main() {
+	flag.Var(&etcdServerList, "etcd_servers", "List of etcd servers to watch (http://ip:port), comma separated")
+
 	flag.Parse()
 	var endpoint string
 	if len(*dockerEndpoint) > 0 {
@@ -55,9 +60,14 @@ func main() {
 	}
 
 	cfg := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
+	var etcdClient tools.EtcdClient
+	if len(etcdServerList) > 0 {
+		log.Infof("Watching for etcd configs at %v", etcdServerList)
+		etcdClient = etcd.NewClient(etcdServerList)
+		kconfig.NewSourceEtcd(kconfig.EtcdKeyForHost(hostname), etcdClient, 30*time.Second, cfg.Channel("etcd"))
+	}
 
-	// TODO(nnielsen): Wire up etcd client.
-	kl := kubelet.NewMainKubelet(hostname, dockerClient, nil, nil, "/")
+	kl := kubelet.NewMainKubelet(hostname, dockerClient, nil, etcdClient, "/")
 
 	driver := new(mesos.MesosExecutorDriver)
 	kubeletExecutor := executor.New(driver, kl)
@@ -71,6 +81,8 @@ func main() {
 
 	log.V(2).Infof("Executor driver is running")
 	driver.Start()
+
+	go util.Forever(cfg.Sync, *syncFrequency)
 
 	go util.Forever(func() {
 		// TODO(nnielsen): Don't hardwire port, but use port from
