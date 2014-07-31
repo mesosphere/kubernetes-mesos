@@ -2,21 +2,21 @@ package main
 
 import (
 	"flag"
-	"os"
-	"time"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
+	kconfig "github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/config"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	"github.com/coreos/go-etcd/etcd"
 	"github.com/fsouza/go-dockerclient"
 	log "github.com/golang/glog"
-	kconfig "github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/config"
 	"github.com/mesosphere/kubernetes-mesos/executor"
 	"github.com/mesosphere/mesos-go/mesos"
-	"github.com/coreos/go-etcd/etcd"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 )
 
 var (
@@ -56,7 +56,7 @@ func main() {
 		// hostname(1) returns a terminating newline we need to strip.
 		hostname = string(fqdnHostname)
 		if len(hostname) > 0 {
-			hostname = hostname[0:len(hostname) - 1]
+			hostname = hostname[0 : len(hostname)-1]
 		}
 	}
 
@@ -93,12 +93,11 @@ func main() {
 		kubelet.ListenAndServeKubeletServer(kl, cfg.Channel("http"), http.DefaultServeMux, hostname, 10250)
 	}, 1*time.Second)
 
-
 	log.V(2).Infof("Starting proxy process...")
 	var cmd *exec.Cmd
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
-		cmd = exec.Command("./proxy", "-etcd_servers=" + etcdServerArguments)
+		cmd = exec.Command("./proxy", "-etcd_servers="+etcdServerArguments)
 	} else {
 		cmd = exec.Command("./proxy")
 	}

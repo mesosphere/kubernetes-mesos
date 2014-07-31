@@ -2,15 +2,15 @@ package framework
 
 import (
 	"container/ring"
+	"encoding/json"
 	"fmt"
 	"sync"
-	"encoding/json"
 
+	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	kubernetes "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	log "github.com/golang/glog"
-	"code.google.com/p/goprotobuf/proto"
 	"github.com/mesosphere/mesos-go/mesos"
 	"gopkg.in/v1/yaml"
 )
@@ -18,8 +18,8 @@ import (
 var errSchedulerTimeout = fmt.Errorf("Schedule time out")
 
 const (
-	containerCpus = 1
-	containerMem = 512
+	containerCpus            = 1
+	containerMem             = 512
 	defaultFinishedTasksSize = 1024
 )
 
@@ -263,7 +263,6 @@ func (k *KubernetesFramework) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 
 	log.Infof("Received running status: '%v'", taskStatus)
 
-
 	task.Pod.CurrentState.Status = api.PodRunning
 	task.Pod.CurrentState.Manifest = task.Pod.DesiredState.Manifest
 
@@ -274,8 +273,6 @@ func (k *KubernetesFramework) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 			task.Pod.CurrentState.Info = target
 		}
 	}
-
-
 
 	k.runningTasks[taskId] = task
 	slave.tasks[taskId] = task

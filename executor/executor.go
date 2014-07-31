@@ -1,8 +1,8 @@
 package executor
 
 import (
-	"time"
 	"encoding/json"
+	"time"
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	defaultChanSize = 1024
+	defaultChanSize   = 1024
 	containerPollTime = 500 * time.Millisecond
 	launchGracePeriod = 5 * time.Minute
-	maxPods = 256
+	maxPods           = 256
 )
 
 type kuberTask struct {
@@ -130,7 +130,7 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 	// running pods.
 	update := kubelet.PodUpdate{
 		Pods: k.pods,
-		Op: kubelet.SET,
+		Op:   kubelet.SET,
 	}
 	k.updateChan <- update
 
@@ -160,7 +160,8 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 			// there is no existing event / push model for this.
 			time.Sleep(containerPollTime)
 
-			info, err := getPidInfo(podID) ; if err != nil {
+			info, err := getPidInfo(podID)
+			if err != nil {
 				continue
 			}
 
@@ -182,7 +183,8 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 			go func() {
 				for {
 					time.Sleep(containerPollTime)
-					_, err := getPidInfo(podID) ; if err != nil {
+					_, err := getPidInfo(podID)
+					if err != nil {
 						k.sendStatusUpdate(taskInfo.GetTaskId(), mesos.TaskState_TASK_LOST, "Task lost: container disappeared")
 						return
 					}

@@ -23,8 +23,8 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"time"
 	"strings"
+	"time"
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/apiserver"
@@ -34,10 +34,10 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	"github.com/coreos/go-etcd/etcd"
 	log "github.com/golang/glog"
 	"github.com/mesosphere/kubernetes-mesos/scheduler"
 	"github.com/mesosphere/mesos-go/mesos"
-	"github.com/coreos/go-etcd/etcd"
 )
 
 var (
