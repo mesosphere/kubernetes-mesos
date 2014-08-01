@@ -16,7 +16,7 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
   1. Pick a Pod (FCFS), match it to an offer.
   1. Launch it!
   1. Kubelet as Executor+Containerizer
-- [ ] Pod Labels: for Service Discovery + Load Balancing
+- [x] Pod Labels: for Service Discovery + Load Balancing
 - [ ] Replication Control
 - [ ] Smarter scheduling
   1. Pluggable to reuse existing Kubernetes schedulers
