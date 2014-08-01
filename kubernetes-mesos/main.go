@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"fmt"
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/apiserver"
@@ -48,12 +49,15 @@ var (
 	minionRegexp                = flag.String("minion_regexp", "", "If non empty, and -cloud_provider is specified, a regular expression for matching minion VMs")
 	minionPort                  = flag.Uint("minion_port", 10250, "The port at which kubelet will be listening on the minions.")
 	mesosMaster                 = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master")
-	executorURI                 = flag.String("executor_uri", "", "URI of dir that contains the executor executable")
-	proxyURI                    = flag.String("proxy_uri", "", "URI of dir that contains the kubernetes proxy executable")
+	executorPath                = flag.String("executor_path", "", "Location of the kubernetes executor executable")
+	proxyPath                   = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
 	etcdServerList, machineList util.StringList
 )
 
 // TODO(nnielsen): Capture timeout constants here.
+const (
+	artifactPort =    9000
+)
 
 func init() {
 	flag.Var(&etcdServerList, "etcd_servers", "Servers for the etcd (http://ip:port), comma separated")
@@ -95,6 +99,34 @@ func main() {
 		}
 	}
 
+	serveExecutorArtifact := func(path string) string {
+		serveFile := func(pattern string, filename string){
+			http.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+				http.ServeFile(w, r, filename)
+			})
+		}
+
+		// Create base path (http://foobar:5000/<base>)
+		pathSplit := strings.Split(path, "/")
+		var base string
+		if len(pathSplit) > 0 {
+			base = pathSplit[len(pathSplit) - 1]
+		} else {
+			base = path
+		}
+		serveFile("/" + base, path)
+
+		hostURI := fmt.Sprintf("http://%s:%d/%s", *address, artifactPort, base)
+		log.V(2).Infof("Hosting artifact '%s' at '%s'", path, hostURI)
+
+		return hostURI
+	}
+
+	executorURI := serveExecutorArtifact(*executorPath)
+	proxyURI := serveExecutorArtifact(*proxyPath)
+
+	go http.ListenAndServe(":9000", nil)
+
 	// TODO(yifan): Let mesos handle pod info getter.
 	podInfoGetter := &client.HTTPPodInfoGetter{
 		Client: http.DefaultClient,
@@ -115,8 +147,8 @@ func main() {
 		Command: &mesos.CommandInfo{
 			Value: proto.String(executorCommand),
 			Uris: []*mesos.CommandInfo_URI{
-				&mesos.CommandInfo_URI{Value: executorURI},
-				&mesos.CommandInfo_URI{Value: proxyURI},
+				&mesos.CommandInfo_URI{Value: &executorURI},
+				&mesos.CommandInfo_URI{Value: &proxyURI},
 			},
 		},
 		Name:   proto.String("Executor for kubelet"),
@@ -137,6 +169,10 @@ func main() {
 	driver.Init()
 	defer driver.Destroy()
 	go driver.Start()
+
+	log.V(2).Info("Serving executor artifacts...")
+
+
 
 	m := newKubernetesMaster(mesosPodScheduler, &master.Config{
 		Client:        client,
