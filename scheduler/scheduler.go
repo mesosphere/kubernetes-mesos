@@ -317,11 +317,27 @@ func (k *KubernetesFramework) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 }
 
 func (k *KubernetesFramework) handleTaskKilled(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Not implemented: Task killed")
+	log.Errorf("Task killed: '%v'", taskStatus)
+	taskId := taskStatus.GetTaskId().GetValue()
+
+	if _, exists := k.pendingTasks[taskId]; exists {
+		delete(k.pendingTasks, taskId)
+	}
+	if _, exists := k.runningTasks[taskId]; exists {
+		delete(k.runningTasks, taskId)
+	}
 }
 
 func (k *KubernetesFramework) handleTaskLost(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Not implemented: Task Lost")
+	log.Errorf("Task lost: '%v'", taskStatus)
+	taskId := taskStatus.GetTaskId().GetValue()
+
+	if _, exists := k.pendingTasks[taskId]; exists {
+		delete(k.pendingTasks, taskId)
+	}
+	if _, exists := k.runningTasks[taskId]; exists {
+		delete(k.runningTasks, taskId)
+	}
 }
 
 // FrameworkMessage is called when the scheduler receives a message from the executor.
