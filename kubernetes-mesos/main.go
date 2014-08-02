@@ -33,11 +33,12 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
+	kscheduler "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/coreos/go-etcd/etcd"
 	log "github.com/golang/glog"
 	"github.com/mesosphere/kubernetes-mesos/scheduler"
+	"github.com/mesosphere/kubernetes-mesos/mesospodinfogetter"
 	"github.com/mesosphere/mesos-go/mesos"
 )
 
@@ -45,18 +46,18 @@ var (
 	port                        = flag.Uint("port", 8080, "The port to listen on.  Default 8080.")
 	address                     = flag.String("address", "127.0.0.1", "The address on the local server to listen to. Default 127.0.0.1")
 	apiPrefix                   = flag.String("api_prefix", "/api/v1beta1", "The prefix for API requests on the server. Default '/api/v1beta1'")
-	cloudProvider               = flag.String("cloud_provider", "", "The provider for cloud services.  Empty string for no provider.")
-	minionRegexp                = flag.String("minion_regexp", "", "If non empty, and -cloud_provider is specified, a regular expression for matching minion VMs")
-	minionPort                  = flag.Uint("minion_port", 10250, "The port at which kubelet will be listening on the minions.")
 	mesosMaster                 = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master")
 	executorPath                = flag.String("executor_path", "", "Location of the kubernetes executor executable")
 	proxyPath                   = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
 	etcdServerList, machineList util.StringList
 )
 
-// TODO(nnielsen): Capture timeout constants here.
 const (
-	artifactPort =    9000
+	artifactPort =     9000
+	cachePeriod =      10 * time.Second
+	syncPeriod =       30 * time.Second
+	httpReadTimeout =  10 * time.Second
+	httpWriteTimeout = 10 * time.Second
 )
 
 func init() {
@@ -81,22 +82,6 @@ func main() {
 
 	if len(machineList) == 0 {
 		log.Fatal("No machines specified!")
-	}
-
-	var cloud cloudprovider.Interface
-	switch *cloudProvider {
-	case "gce":
-		var err error
-		cloud, err = cloudprovider.NewGCECloud()
-		if err != nil {
-			log.Fatal("Couldn't connect to GCE cloud: %#v", err)
-		}
-	default:
-		if len(*cloudProvider) > 0 {
-			log.Infof("Unknown cloud provider: %s", *cloudProvider)
-		} else {
-			log.Info("No cloud provider specified.")
-		}
 	}
 
 	serveExecutorArtifact := func(path string) string {
@@ -127,12 +112,6 @@ func main() {
 
 	go http.ListenAndServe(":9000", nil)
 
-	// TODO(yifan): Let mesos handle pod info getter.
-	podInfoGetter := &client.HTTPPodInfoGetter{
-		Client: http.DefaultClient,
-		Port:   *minionPort,
-	}
-
 	client := client.New("http://"+net.JoinHostPort(*address, strconv.Itoa(int(*port))), nil)
 
 	executorCommand := "./kubernetes-executor"
@@ -151,15 +130,15 @@ func main() {
 				&mesos.CommandInfo_URI{Value: &proxyURI},
 			},
 		},
-		Name:   proto.String("Executor for kubelet"),
+		Name:   proto.String("Kubelet Executor"),
 		Source: proto.String("kubernetes"),
 	}
 
-	mesosPodScheduler := framework.New(executor, framework.FCFSScheduleFunc)
+	mesosPodScheduler := scheduler.New(executor, scheduler.FCFSScheduleFunc)
 	driver := &mesos.MesosSchedulerDriver{
 		Master: *mesosMaster,
 		Framework: mesos.FrameworkInfo{
-			Name: proto.String("KubernetesFramework"),
+			Name: proto.String("KubernetesScheduler"),
 			User: proto.String("root"),
 		},
 		Scheduler: mesosPodScheduler,
@@ -172,7 +151,9 @@ func main() {
 
 	log.V(2).Info("Serving executor artifacts...")
 
+	podInfoGetter := MesosPodInfoGetter.New(mesosPodScheduler)
 
+	var cloud cloudprovider.Interface
 	m := newKubernetesMaster(mesosPodScheduler, &master.Config{
 		Client:        client,
 		Cloud:         cloud,
@@ -183,35 +164,35 @@ func main() {
 	log.Fatal(m.run(net.JoinHostPort(*address, strconv.Itoa(int(*port))), *apiPrefix))
 }
 
-func newKubernetesMaster(framework *framework.KubernetesFramework, c *master.Config) *kubernetesMaster {
+func newKubernetesMaster(scheduler *scheduler.KubernetesScheduler, c *master.Config) *kubernetesMaster {
 	var m *kubernetesMaster
 
 	if len(c.EtcdServers) > 0 {
 		etcdClient := etcd.NewClient(c.EtcdServers)
 		minionRegistry := registry.MakeMinionRegistry(c.Minions)
 		m = &kubernetesMaster{
-			podRegistry:        framework,
+			podRegistry:        scheduler,
 			controllerRegistry: registry.MakeEtcdRegistry(etcdClient, minionRegistry),
 			serviceRegistry:    registry.MakeEtcdRegistry(etcdClient, minionRegistry),
 			minionRegistry:     minionRegistry,
 			client:             c.Client,
 		}
-		m.init(framework, c.Cloud, c.PodInfoGetter)
+		m.init(scheduler, c.Cloud, c.PodInfoGetter)
 	} else {
 		m = &kubernetesMaster{
-			podRegistry:        framework,
+			podRegistry:        scheduler,
 			controllerRegistry: registry.MakeMemoryRegistry(),
 			serviceRegistry:    registry.MakeMemoryRegistry(),
 			minionRegistry:     registry.MakeMinionRegistry(c.Minions),
 			client:             c.Client,
 		}
-		m.init(framework, c.Cloud, c.PodInfoGetter)
+		m.init(scheduler, c.Cloud, c.PodInfoGetter)
 	}
 	return m
 }
 
-func (m *kubernetesMaster) init(scheduler scheduler.Scheduler, cloud cloudprovider.Interface, podInfoGetter client.PodInfoGetter) {
-	podCache := master.NewPodCache(podInfoGetter, m.podRegistry, time.Second*30)
+func (m *kubernetesMaster) init(scheduler kscheduler.Scheduler, cloud cloudprovider.Interface, podInfoGetter client.PodInfoGetter) {
+	podCache := master.NewPodCache(podInfoGetter, m.podRegistry, cachePeriod)
 	go podCache.Loop()
 	m.storage = map[string]apiserver.RESTStorage{
 		"pods": registry.MakePodRegistryStorage(m.podRegistry, podInfoGetter, scheduler, m.minionRegistry, cloud, podCache),
@@ -224,13 +205,13 @@ func (m *kubernetesMaster) init(scheduler scheduler.Scheduler, cloud cloudprovid
 // Run begins serving the Kubernetes API. It never returns.
 func (m *kubernetesMaster) run(myAddress, apiPrefix string) error {
 	endpoints := registry.MakeEndpointController(m.serviceRegistry, m.client)
-	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, time.Second*10)
+	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, syncPeriod)
 
 	s := &http.Server{
 		Addr:           myAddress,
 		Handler:        apiserver.New(m.storage, apiPrefix),
-		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
+		ReadTimeout:    httpReadTimeout,
+		WriteTimeout:   httpWriteTimeout,
 		MaxHeaderBytes: 1 << 20,
 	}
 	return s.ListenAndServe()

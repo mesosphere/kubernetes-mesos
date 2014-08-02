@@ -11,4 +11,4 @@ that implements the interfaces of:
 It acts as the 'scheduler' and the 'registry' of the PodRegistryStorage
 to provide scheduling and Pod management on top of mesos.
 */
-package framework
+package scheduler

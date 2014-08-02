@@ -1,12 +1,12 @@
 {
   "kind": "Pod",
   "apiVersion": "v1beta1",
-  "id": "php",
+  "id": "nginx-id-01",
   "desiredState": {
     "manifest": {
       "version": "v1beta1",
       "containers": [{
-        "name": "nginx",
+        "name": "nginx-01",
         "image": "dockerfile/nginx",
         "ports": [{
           "containerPort": 80,

@@ -1,4 +1,4 @@
-package framework
+package scheduler
 
 import (
 	"container/ring"
@@ -24,6 +24,8 @@ const (
 	containerMem             = 512
 	defaultFinishedTasksSize = 1024
 )
+
+// TODO(nnielsen): Rename KubernetesScheduler -> KubernetesScheduler.
 
 // PodScheduleFunc implements how to schedule
 // pods among slaves. We can have different implementation
@@ -101,11 +103,11 @@ func newSlave(hostName string) *Slave {
 	}
 }
 
-// KubernetesFramework implements:
+// KubernetesScheduler implements:
 // 1: The interfaces of the mesos scheduler.
 // 2: The interface of a kubernetes scheduler.
 // 3: The interfaces of a kubernetes pod registry.
-type KubernetesFramework struct {
+type KubernetesScheduler struct {
 	// We use a lock here to avoid races
 	// between invoking the mesos callback
 	// and the invoking the pob registry interfaces.
@@ -138,9 +140,9 @@ type KubernetesFramework struct {
 	scheduleFunc PodScheduleFunc
 }
 
-// New create a new KubernetesFramework
-func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc) *KubernetesFramework {
-	return &KubernetesFramework{
+// New create a new KubernetesScheduler
+func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc) *KubernetesScheduler {
+	return &KubernetesScheduler{
 		new(sync.RWMutex),
 		executor,
 		nil,
@@ -159,7 +161,7 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc) *Kubernetes
 }
 
 // Registered is called when the scheduler registered with the master successfully.
-func (k *KubernetesFramework) Registered(driver mesos.SchedulerDriver,
+func (k *KubernetesScheduler) Registered(driver mesos.SchedulerDriver,
 	frameworkId *mesos.FrameworkID, masterInfo *mesos.MasterInfo) {
 	k.frameworkId = frameworkId
 	k.masterInfo = masterInfo
@@ -169,19 +171,19 @@ func (k *KubernetesFramework) Registered(driver mesos.SchedulerDriver,
 
 // Reregistered is called when the scheduler re-registered with the master successfully.
 // This happends when the master fails over.
-func (k *KubernetesFramework) Reregistered(driver mesos.SchedulerDriver, masterInfo *mesos.MasterInfo) {
+func (k *KubernetesScheduler) Reregistered(driver mesos.SchedulerDriver, masterInfo *mesos.MasterInfo) {
 	log.Infof("Scheduler reregistered with the master: %v with frameworkId: %v\n", masterInfo)
 	k.registered = true
 }
 
 // Disconnected is called when the scheduler loses connection to the master.
-func (k *KubernetesFramework) Disconnected(driver mesos.SchedulerDriver) {
+func (k *KubernetesScheduler) Disconnected(driver mesos.SchedulerDriver) {
 	log.Infof("Master disconnected!\n")
 	k.registered = false
 }
 
 // ResourceOffers is called when the scheduler receives some offers from the master.
-func (k *KubernetesFramework) ResourceOffers(driver mesos.SchedulerDriver, offers []*mesos.Offer) {
+func (k *KubernetesScheduler) ResourceOffers(driver mesos.SchedulerDriver, offers []*mesos.Offer) {
 	log.Infof("Received offers\n")
 	log.V(2).Infof("%v\n", offers)
 
@@ -201,13 +203,12 @@ func (k *KubernetesFramework) ResourceOffers(driver mesos.SchedulerDriver, offer
 		slave.Offers[offerId] = offer
 		k.offers[offerId] = offer
 		k.slaveIDs[slave.HostName] = slaveId
-		// TODO(yifan): Aggregate resources.
 	}
 	k.doSchedule()
 }
 
 // OfferRescinded is called when the resources are recinded from the scheduler.
-func (k *KubernetesFramework) OfferRescinded(driver mesos.SchedulerDriver, offerId *mesos.OfferID) {
+func (k *KubernetesScheduler) OfferRescinded(driver mesos.SchedulerDriver, offerId *mesos.OfferID) {
 	log.Infof("Offer rescinded %v\n", offerId)
 
 	k.Lock()
@@ -219,9 +220,9 @@ func (k *KubernetesFramework) OfferRescinded(driver mesos.SchedulerDriver, offer
 }
 
 // StatusUpdate is called when a status update message is sent to the scheduler.
-func (k *KubernetesFramework) StatusUpdate(driver mesos.SchedulerDriver, taskStatus *mesos.TaskStatus) {
+func (k *KubernetesScheduler) StatusUpdate(driver mesos.SchedulerDriver, taskStatus *mesos.TaskStatus) {
 	log.Infof("Received status update %v\n", taskStatus)
-	// TODO(yifan): Check status.
+
 	k.Lock()
 	defer k.Unlock()
 
@@ -243,15 +244,15 @@ func (k *KubernetesFramework) StatusUpdate(driver mesos.SchedulerDriver, taskSta
 	}
 }
 
-func (k *KubernetesFramework) handleTaskStaging(taskStatus *mesos.TaskStatus) {
+func (k *KubernetesScheduler) handleTaskStaging(taskStatus *mesos.TaskStatus) {
 	log.Errorf("Not implemented: task staging")
 }
 
-func (k *KubernetesFramework) handleTaskStarting(taskStatus *mesos.TaskStatus) {
+func (k *KubernetesScheduler) handleTaskStarting(taskStatus *mesos.TaskStatus) {
 	log.Errorf("Not implemented: task starting")
 }
 
-func (k *KubernetesFramework) handleTaskRunning(taskStatus *mesos.TaskStatus) {
+func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 	taskId, slaveId := taskStatus.GetTaskId().GetValue(), taskStatus.GetSlaveId().GetValue()
 	slave, exists := k.slaves[slaveId]
 	if !exists {
@@ -290,7 +291,7 @@ func (k *KubernetesFramework) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 	delete(k.pendingTasks, taskId)
 }
 
-func (k *KubernetesFramework) handleTaskFinished(taskStatus *mesos.TaskStatus) {
+func (k *KubernetesScheduler) handleTaskFinished(taskStatus *mesos.TaskStatus) {
 	taskId, slaveId := taskStatus.GetTaskId().GetValue(), taskStatus.GetSlaveId().GetValue()
 	slave, exists := k.slaves[slaveId]
 	if !exists {
@@ -314,7 +315,7 @@ func (k *KubernetesFramework) handleTaskFinished(taskStatus *mesos.TaskStatus) {
 	delete(slave.tasks, taskId)
 }
 
-func (k *KubernetesFramework) handleTaskFailed(taskStatus *mesos.TaskStatus) {
+func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 	log.Errorf("Task failed: '%v'", taskStatus)
 
 	taskId := taskStatus.GetTaskId().GetValue()
@@ -327,7 +328,7 @@ func (k *KubernetesFramework) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 	}
 }
 
-func (k *KubernetesFramework) handleTaskKilled(taskStatus *mesos.TaskStatus) {
+func (k *KubernetesScheduler) handleTaskKilled(taskStatus *mesos.TaskStatus) {
 	log.Errorf("Task killed: '%v'", taskStatus)
 	taskId := taskStatus.GetTaskId().GetValue()
 
@@ -339,7 +340,7 @@ func (k *KubernetesFramework) handleTaskKilled(taskStatus *mesos.TaskStatus) {
 	}
 }
 
-func (k *KubernetesFramework) handleTaskLost(taskStatus *mesos.TaskStatus) {
+func (k *KubernetesScheduler) handleTaskLost(taskStatus *mesos.TaskStatus) {
 	log.Errorf("Task lost: '%v'", taskStatus)
 	taskId := taskStatus.GetTaskId().GetValue()
 
@@ -352,32 +353,32 @@ func (k *KubernetesFramework) handleTaskLost(taskStatus *mesos.TaskStatus) {
 }
 
 // FrameworkMessage is called when the scheduler receives a message from the executor.
-func (k *KubernetesFramework) FrameworkMessage(driver mesos.SchedulerDriver,
+func (k *KubernetesScheduler) FrameworkMessage(driver mesos.SchedulerDriver,
 	executorId *mesos.ExecutorID, slaveId *mesos.SlaveID, message string) {
 	log.Infof("Received messages from executor %v of slave %v, %v\n", executorId, slaveId, message)
 }
 
 // SlaveLost is called when some slave is lost.
-func (k *KubernetesFramework) SlaveLost(driver mesos.SchedulerDriver, slaveId *mesos.SlaveID) {
+func (k *KubernetesScheduler) SlaveLost(driver mesos.SchedulerDriver, slaveId *mesos.SlaveID) {
 	log.Infof("Slave %v is lost\n", slaveId)
 	// TODO(yifan): Restart any unfinished tasks on that slave.
 }
 
 // ExecutorLost is called when some executor is lost.
-func (k *KubernetesFramework) ExecutorLost(driver mesos.SchedulerDriver,
+func (k *KubernetesScheduler) ExecutorLost(driver mesos.SchedulerDriver,
 	executorId *mesos.ExecutorID, slaveId *mesos.SlaveID, status int) {
 	log.Infof("Executor %v of slave %v is lost, status: %v\n", executorId, slaveId, status)
 	// TODO(yifan): Restart any unfinished tasks of the executor.
 }
 
 // Error is called when there is some error.
-func (k *KubernetesFramework) Error(driver mesos.SchedulerDriver, message string) {
+func (k *KubernetesScheduler) Error(driver mesos.SchedulerDriver, message string) {
 	log.Errorf("Scheduler error: %v\n", message)
 }
 
 // Schedule implements the Scheduler interface of the Kubernetes.
 // It returns the selectedMachine's name and error (if there's any).
-func (k *KubernetesFramework) Schedule(pod api.Pod, minionLister kubernetes.MinionLister) (string, error) {
+func (k *KubernetesScheduler) Schedule(pod api.Pod, minionLister kubernetes.MinionLister) (string, error) {
 	log.Infof("Try to schedule pod\n")
 	machineLists, err := minionLister.List()
 	if err != nil {
@@ -400,7 +401,7 @@ func (k *KubernetesFramework) Schedule(pod api.Pod, minionLister kubernetes.Mini
 }
 
 // Call ScheduleFunc and substract some resources.
-func (k *KubernetesFramework) doSchedule() {
+func (k *KubernetesScheduler) doSchedule() {
 	if tasks := k.scheduleFunc(k.slaves, k.pendingTasks); tasks != nil {
 		// Substract offers.
 		for _, task := range tasks {
@@ -414,7 +415,7 @@ func (k *KubernetesFramework) doSchedule() {
 }
 
 // ListPods obtains a list of pods that match selector.
-func (k *KubernetesFramework) ListPods(selector labels.Selector) ([]api.Pod, error) {
+func (k *KubernetesScheduler) ListPods(selector labels.Selector) ([]api.Pod, error) {
 	log.V(2).Infof("List pods for '%v'\n", selector)
 
 	k.RLock()
@@ -425,7 +426,7 @@ func (k *KubernetesFramework) ListPods(selector labels.Selector) ([]api.Pod, err
 		pod := *(task.Pod)
 
 		var l labels.Set = pod.Labels
-		if selector.Matches(l) {
+		if selector.Matches(l) || selector.Empty() {
 			result = append(result, *(task.Pod))
 		}
 	}
@@ -435,7 +436,7 @@ func (k *KubernetesFramework) ListPods(selector labels.Selector) ([]api.Pod, err
 		pod := *(task.Pod)
 
 		var l labels.Set = pod.Labels
-		if selector.Matches(l) {
+		if selector.Matches(l) || selector.Empty() {
 			result = append(result, *(task.Pod))
 		}
 	}
@@ -448,7 +449,7 @@ func (k *KubernetesFramework) ListPods(selector labels.Selector) ([]api.Pod, err
 }
 
 // Get a specific pod.
-func (k *KubernetesFramework) GetPod(podID string) (*api.Pod, error) {
+func (k *KubernetesScheduler) GetPod(podID string) (*api.Pod, error) {
 	log.V(2).Infof("Get pod '%s'\n", podID)
 	k.RLock()
 	defer k.RUnlock()
@@ -463,10 +464,10 @@ func (k *KubernetesFramework) GetPod(podID string) (*api.Pod, error) {
 		log.V(2).Infof("Pending Pod '%s': %v", podID, task.Pod)
 		return task.Pod, nil
 	}
-	if containsTask(k.finishedTasks, podID) {
+	if containsTask(k.finishedTasks, taskId) {
 		return nil, fmt.Errorf("Pod '%s' is finished", podID)
 	}
-	if task, exists := k.runningTasks[podID]; exists {
+	if task, exists := k.runningTasks[taskId]; exists {
 		log.V(2).Infof("Running Pod '%s': %v", podID, task.Pod)
 		return task.Pod, nil
 	}
@@ -474,7 +475,7 @@ func (k *KubernetesFramework) GetPod(podID string) (*api.Pod, error) {
 }
 
 // Create a pod based on a specification, schedule it onto a specific machine.
-func (k *KubernetesFramework) CreatePod(machine string, pod api.Pod) error {
+func (k *KubernetesScheduler) CreatePod(machine string, pod api.Pod) error {
 	log.V(2).Infof("Create pod: '%v'\n", pod)
 	podID := pod.JSONBase.ID
 	taskId, exists := k.podToTask[podID]
@@ -494,17 +495,20 @@ func (k *KubernetesFramework) CreatePod(machine string, pod api.Pod) error {
 }
 
 // Update an existing pod.
-func (k *KubernetesFramework) UpdatePod(pod api.Pod) error {
+func (k *KubernetesScheduler) UpdatePod(pod api.Pod) error {
 	// TODO(yifan): Need to send a special message to the slave/executor.
 	return fmt.Errorf("Not implemented: UpdatePod")
 }
 
 // Delete an existing pod.
-func (k *KubernetesFramework) DeletePod(podID string) error {
-	// TODO(yifan): killtask
+func (k *KubernetesScheduler) DeletePod(podID string) error {
 	log.V(2).Infof("Delete pod '%s'\n", podID)
+	taskId, exists := k.podToTask[podID]
+	if !exists {
+		return fmt.Errorf("Could not resolve pod '%s' to task id", podID)
+	}
 
-	if task, exists := k.runningTasks[podID]; exists {
+	if task, exists := k.runningTasks[taskId]; exists {
 		taskId := &mesos.TaskID{Value: proto.String(task.ID)}
 		return k.Driver.KillTask(taskId)
 	}
