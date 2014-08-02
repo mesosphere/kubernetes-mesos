@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"errors"
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
@@ -13,6 +14,7 @@ import (
 	log "github.com/golang/glog"
 	"github.com/mesosphere/mesos-go/mesos"
 	"gopkg.in/v1/yaml"
+	"github.com/mesosphere/kubernetes-mesos/uuid"
 )
 
 var errSchedulerTimeout = fmt.Errorf("Schedule time out")
@@ -52,6 +54,7 @@ func (t *PodTask) FillTaskInfo(slaveId string, offers ...*mesos.Offer) {
 	}
 
 	var err error
+
 	t.TaskInfo.TaskId = &mesos.TaskID{Value: proto.String(t.ID)}
 	t.TaskInfo.SlaveId = &mesos.SlaveID{Value: proto.String(slaveId)}
 	t.TaskInfo.Resources = []*mesos.Resource{
@@ -64,9 +67,14 @@ func (t *PodTask) FillTaskInfo(slaveId string, offers ...*mesos.Offer) {
 	}
 }
 
-func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo, machines []string) *PodTask {
+func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo, machines []string) (*PodTask, error) {
+	taskId, err := uuid.Gen()
+	if err != nil {
+		return nil, errors.New("Failed to generate task id: " + err.Error())
+	}
+
 	task := &PodTask{
-		ID:              pod.JSONBase.ID,
+		ID:              taskId, // pod.JSONBase.ID,
 		Pod:             pod,
 		Machines:        make([]string, len(machines)),
 		SelectedMachine: make(chan string, 1),
@@ -75,7 +83,7 @@ func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo, machines []string) *
 	copy(task.Machines, machines)
 	task.TaskInfo.Name = proto.String("PodTask")
 	task.TaskInfo.Executor = executor
-	return task
+	return task, nil
 }
 
 // A struct that describes the slave.
@@ -124,6 +132,8 @@ type KubernetesFramework struct {
 	runningTasks  map[string]*PodTask
 	finishedTasks *ring.Ring
 
+	podToTask map[string]string
+
 	// The function that does scheduling.
 	scheduleFunc PodScheduleFunc
 }
@@ -143,6 +153,7 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc) *Kubernetes
 		make(map[string]*PodTask),
 		make(map[string]*PodTask),
 		ring.New(defaultFinishedTasksSize),
+		make(map[string]string),
 		scheduleFunc,
 	}
 }
@@ -249,7 +260,7 @@ func (k *KubernetesFramework) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 	}
 	task, exists := k.pendingTasks[taskId]
 	if !exists {
-		log.Warningf("Ignore status TASK_RUNNING because the the task is discarded")
+		log.Warningf("Ignore status TASK_RUNNING (%s) because the the task is discarded: '%v'", taskId, k.pendingTasks)
 		return
 	}
 	if _, exists = k.runningTasks[taskId]; exists {
@@ -373,9 +384,14 @@ func (k *KubernetesFramework) Schedule(pod api.Pod, minionLister kubernetes.Mini
 		log.Warningf("minionLister.List() error %v\n", err)
 		return "", err
 	}
-	task := newPodTask(&pod, k.executor, machineLists)
+
+	task, err := newPodTask(&pod, k.executor, machineLists)
+	if err != nil {
+		return "", err
+	}
 
 	k.Lock()
+	k.podToTask[pod.JSONBase.ID] = task.ID
 	k.pendingTasks[task.ID] = task
 	k.doSchedule()
 	k.Unlock()
@@ -400,17 +416,31 @@ func (k *KubernetesFramework) doSchedule() {
 // ListPods obtains a list of pods that match selector.
 func (k *KubernetesFramework) ListPods(selector labels.Selector) ([]api.Pod, error) {
 	log.V(2).Infof("List pods for '%v'\n", selector)
+
 	k.RLock()
 	defer k.RUnlock()
 
-	// TODO(yifan): Only returns the running pod for testing now.
 	var result []api.Pod
 	for _, task := range k.runningTasks {
-		result = append(result, *(task.Pod))
+		pod := *(task.Pod)
+
+		var l labels.Set = pod.Labels
+		if selector.Matches(l) {
+			result = append(result, *(task.Pod))
+		}
 	}
 
-	// TODO(nnielsen): We need to get informed when the current state
-	// changes.
+	// TODO(nnielsen): Refactor tasks append for the three lists.
+	for _, task := range k.pendingTasks {
+		pod := *(task.Pod)
+
+		var l labels.Set = pod.Labels
+		if selector.Matches(l) {
+			result = append(result, *(task.Pod))
+		}
+	}
+
+	// TODO(nnielsen): Wire up check in finished tasks
 
 	log.V(2).Infof("Returning pods: '%v'\n", result)
 
@@ -423,8 +453,12 @@ func (k *KubernetesFramework) GetPod(podID string) (*api.Pod, error) {
 	k.RLock()
 	defer k.RUnlock()
 
-	// Note that podID is also the taskId.
-	if task, exists := k.pendingTasks[podID]; exists {
+	taskId, exists := k.podToTask[podID]
+	if !exists {
+		return nil, fmt.Errorf("Could not resolve pod '%s' to task id", podID)
+	}
+
+	if task, exists := k.pendingTasks[taskId]; exists {
 		// return nil, fmt.Errorf("Pod '%s' is still pending", podID)
 		log.V(2).Infof("Pending Pod '%s': %v", podID, task.Pod)
 		return task.Pod, nil
@@ -442,7 +476,12 @@ func (k *KubernetesFramework) GetPod(podID string) (*api.Pod, error) {
 // Create a pod based on a specification, schedule it onto a specific machine.
 func (k *KubernetesFramework) CreatePod(machine string, pod api.Pod) error {
 	log.V(2).Infof("Create pod: '%v'\n", pod)
-	taskId := pod.JSONBase.ID
+	podID := pod.JSONBase.ID
+	taskId, exists := k.podToTask[podID]
+	if !exists {
+		return fmt.Errorf("Could not resolve pod '%s' to task id", podID)
+	}
+
 	task, exists := k.pendingTasks[taskId]
 	if !exists {
 		return fmt.Errorf("Pod Task does not exist %v\n", taskId)

@@ -59,6 +59,9 @@ func (k *KubernetesExecutor) gatherContainerManifests() []api.ContainerManifest 
 	return manifests
 }
 
+func (k *KubernetesExecutor) checkpoint() {
+}
+
 // Registered is called when the executor is successfully registered with the slave.
 func (k *KubernetesExecutor) Registered(driver mesos.ExecutorDriver,
 	executorInfo *mesos.ExecutorInfo, frameworkInfo *mesos.FrameworkInfo, slaveInfo *mesos.SlaveInfo) {
@@ -124,6 +127,22 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 		Manifest:  manifest,
 	})
 
+	getPidInfo := func(name string) (api.PodInfo, error) {
+		podFullName := kubelet.GetPodFullName(&kubelet.Pod{Name: name, Namespace: "etcd"})
+
+		info, err := k.kl.GetPodInfo(podFullName)
+		if err == kubelet.ErrNoContainersInPod {
+			return nil, err
+		}
+
+		return info, nil
+	}
+
+	// TODO(nnielsen): Fail if container is already running.
+
+        // Checkpoint pods.
+
+
 	// Send the pod updates to the channel.
 	// TODO(yifan): Replace SET with ADD when it's implemented.
 	// TODO(nnielsen): Incoming launch requests end up destroying already
@@ -134,24 +153,12 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 	}
 	k.updateChan <- update
 
-	getPidInfo := func(name string) (api.PodInfo, error) {
-
-		podFullName := kubelet.GetPodFullName(&kubelet.Pod{Name: name, Namespace: "etcd"})
-		info, err := k.kl.GetPodInfo(podFullName)
-		if err == kubelet.ErrNoContainersInPod {
-			return nil, err
-		}
-
-		return info, nil
-	}
-
 	// Delay reporting 'task running' until container is up.
 	go func() {
 		expires := time.Now().Add(launchGracePeriod)
 		for {
 			now := time.Now()
 			if now.After(expires) {
-				log.Warningf("%v > %v", now, expires)
 				log.Warningf("Launch expired grace period of '%v'", launchGracePeriod)
 				break
 			}

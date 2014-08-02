@@ -173,7 +173,6 @@ func main() {
 	log.V(2).Info("Serving executor artifacts...")
 
 
-
 	m := newKubernetesMaster(mesosPodScheduler, &master.Config{
 		Client:        client,
 		Cloud:         cloud,
