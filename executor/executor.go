@@ -14,7 +14,7 @@ import (
 
 const (
 	defaultChanSize   = 1024
-	containerPollTime = 500 * time.Millisecond
+	containerPollTime = 1 * time.Second
 	launchGracePeriod = 5 * time.Minute
 	maxPods           = 256
 )

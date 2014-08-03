@@ -38,7 +38,7 @@ import (
 	"github.com/coreos/go-etcd/etcd"
 	log "github.com/golang/glog"
 	"github.com/mesosphere/kubernetes-mesos/scheduler"
-	"github.com/mesosphere/kubernetes-mesos/mesospodinfogetter"
+//	"github.com/mesosphere/kubernetes-mesos/mesospodinfogetter"
 	"github.com/mesosphere/mesos-go/mesos"
 )
 
@@ -49,6 +49,7 @@ var (
 	mesosMaster                 = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master")
 	executorPath                = flag.String("executor_path", "", "Location of the kubernetes executor executable")
 	proxyPath                   = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
+	minionPort                  = flag.Uint("minion_port", 10250, "The port at which kubelet will be listening on the minions.")
 	etcdServerList, machineList util.StringList
 )
 
@@ -112,6 +113,11 @@ func main() {
 
 	go http.ListenAndServe(":9000", nil)
 
+	podInfoGetter := &client.HTTPPodInfoGetter{
+		Client: http.DefaultClient,
+		Port:   *minionPort,
+	}
+
 	client := client.New("http://"+net.JoinHostPort(*address, strconv.Itoa(int(*port))), nil)
 
 	executorCommand := "./kubernetes-executor"
@@ -151,7 +157,10 @@ func main() {
 
 	log.V(2).Info("Serving executor artifacts...")
 
-	podInfoGetter := MesosPodInfoGetter.New(mesosPodScheduler)
+	// TODO(nnielsen): Using default pod info getter until
+	// MesosPodInfoGetter supports network containers.
+
+	// podInfoGetter := MesosPodInfoGetter.New(mesosPodScheduler)
 
 	var cloud cloudprovider.Interface
 	m := newKubernetesMaster(mesosPodScheduler, &master.Config{
