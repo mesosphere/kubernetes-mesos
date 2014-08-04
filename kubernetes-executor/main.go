@@ -71,7 +71,7 @@ func main() {
 		kconfig.NewSourceEtcd(kconfig.EtcdKeyForHost(hostname), etcdClient, 30*time.Second, cfg.Channel("etcd"))
 	}
 
-	kl := kubelet.NewMainKubelet(hostname, dockerClient, nil, etcdClient, "/")
+	kl := kubelet.NewMainKubelet(hostname, dockerClient, nil, etcdClient, "/", *syncFrequency)
 
 	driver := new(mesos.MesosExecutorDriver)
 	kubeletExecutor := executor.New(driver, kl)
@@ -85,8 +85,6 @@ func main() {
 
 	log.V(2).Infof("Executor driver is running!")
 	driver.Start()
-
-	go util.Forever(cfg.Sync, *syncFrequency)
 
 	log.V(2).Infof("Starting kubelet server...")
 

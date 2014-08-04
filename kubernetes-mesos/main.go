@@ -28,6 +28,7 @@ import (
 	"fmt"
 
 	"code.google.com/p/goprotobuf/proto"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/apiserver"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
@@ -218,7 +219,7 @@ func (m *kubernetesMaster) run(myAddress, apiPrefix string) error {
 
 	s := &http.Server{
 		Addr:           myAddress,
-		Handler:        apiserver.New(m.storage, apiPrefix),
+		Handler:        apiserver.New(m.storage, api.Codec, apiPrefix),
 		ReadTimeout:    httpReadTimeout,
 		WriteTimeout:   httpWriteTimeout,
 		MaxHeaderBytes: 1 << 20,
