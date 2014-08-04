@@ -8,7 +8,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	log "github.com/golang/glog"
-	"github.com/mesosphere/mesos-go/mesos"
+	"github.com/mesos/mesos-go/mesos"
 	"gopkg.in/v1/yaml"
 )
 

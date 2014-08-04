@@ -19,7 +19,7 @@ import (
 	"github.com/fsouza/go-dockerclient"
 	log "github.com/golang/glog"
 	"github.com/mesosphere/kubernetes-mesos/executor"
-	"github.com/mesosphere/mesos-go/mesos"
+	"github.com/mesos/mesos-go/mesos"
 )
 
 var (

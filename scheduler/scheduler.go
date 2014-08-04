@@ -12,7 +12,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	kubernetes "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	log "github.com/golang/glog"
-	"github.com/mesosphere/mesos-go/mesos"
+	"github.com/mesos/mesos-go/mesos"
 	"gopkg.in/v1/yaml"
 	"github.com/mesosphere/kubernetes-mesos/uuid"
 )
