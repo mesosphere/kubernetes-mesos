@@ -27,9 +27,10 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
 NOTE: kubernetes-mesos requires [godep](https://github.com/tools/godep).
 
 ```shell
+$ go get github.com/GoogleCloudPlatform/kubernetes
 $ go get github.com/mesosphere/kubernetes-mesos
 $ pushd $GOPATH/src/github.com/mesosphere/kubernetes-mesos
-$ godep restore
+$ GOPATH=$GOPATH:$GOPATH/src/github.com/GoogleCloudPlatform/kubernetes/third_party godep restore
 $ popd
 $ go install github.com/mesosphere/kubernetes-mesos/kubernetes-mesos
 $ go install github.com/mesosphere/kubernetes-mesos/kubernetes-executor
