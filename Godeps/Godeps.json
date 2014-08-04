@@ -6,46 +6,6 @@
 	],
 	"Deps": [
 		{
-			"ImportPath": "code.google.com/p/go-uuid/uuid",
-			"Comment": "null-12",
-			"Rev": "7dda39b2e7d5e265014674c5af696ba4186679e9"
-		},
-		{
-			"ImportPath": "code.google.com/p/go.net/html",
-			"Comment": "null-139",
-			"Rev": "98fd1f5506373df1033b67a1881078705456e2ee"
-		},
-		{
-			"ImportPath": "code.google.com/p/go.net/websocket",
-			"Comment": "null-139",
-			"Rev": "98fd1f5506373df1033b67a1881078705456e2ee"
-		},
-		{
-			"ImportPath": "code.google.com/p/goauth2/compute/serviceaccount",
-			"Comment": "weekly-48",
-			"Rev": "6a3615e294b534a1c24cb5d3d7570fa8bbc30c99"
-		},
-		{
-			"ImportPath": "code.google.com/p/goauth2/oauth",
-			"Comment": "weekly-48",
-			"Rev": "6a3615e294b534a1c24cb5d3d7570fa8bbc30c99"
-		},
-		{
-			"ImportPath": "code.google.com/p/google-api-go-client/compute/v1",
-			"Comment": "release-96",
-			"Rev": "0923cdda5b82a7dd0dd5c689f824ca5e7d9b60de"
-		},
-		{
-			"ImportPath": "code.google.com/p/google-api-go-client/googleapi",
-			"Comment": "release-96",
-			"Rev": "0923cdda5b82a7dd0dd5c689f824ca5e7d9b60de"
-		},
-		{
-			"ImportPath": "code.google.com/p/goprotobuf/proto",
-			"Comment": "go.r60-146",
-			"Rev": "f5ac12b15e49095c60ae0acc6da0e28d47e2a29f"
-		},
-		{
 			"ImportPath": "github.com/GoogleCloudPlatform/kubernetes/pkg/api",
 			"Rev": "46bb48cf13945f28f4af63ef55f7aac66d059127"
 		},
@@ -110,31 +70,8 @@
 			"Rev": "46bb48cf13945f28f4af63ef55f7aac66d059127"
 		},
 		{
-			"ImportPath": "github.com/coreos/go-etcd/etcd",
-			"Comment": "v0.2.0-rc1-114-g7745cfd",
-			"Rev": "7745cfd7f8e619cc9e6be450238e6253a57a227f"
-		},
-		{
-			"ImportPath": "github.com/fsouza/go-dockerclient",
-			"Comment": "0.2.1-194-gbf29df5",
-			"Rev": "bf29df5345836466866c9ad9fd3c7094f93655fa"
-		},
-		{
-			"ImportPath": "github.com/golang/glog",
-			"Rev": "d1c4472bf2efd3826f2b5bdcc02d8416798d678c"
-		},
-		{
-			"ImportPath": "github.com/google/cadvisor/info",
-			"Comment": "0.2.0-21-g6e3df74",
-			"Rev": "2ac720aa3f051e73ea23ec6ea65634044eb14539"
-		},
-		{
 			"ImportPath": "github.com/mesosphere/mesos-go/mesos",
 			"Rev": "9d1789a17294b88aecd586ae512cd5b2d139ec06"
-		},
-		{
-			"ImportPath": "gopkg.in/v1/yaml",
-			"Rev": "1b9791953ba4027efaeb728c7355e542a203be5e"
 		}
 	]
 }
