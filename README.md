@@ -24,18 +24,20 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
 
 ### Build
 
-NOTE: kubernetes-mesos requires [godep](https://github.com/tools/godep).
+**NOTE** Kubernetes for Mesos requires Go 1.2+ and protobuf 2.5.0.
 
 ```shell
-$ go get github.com/GoogleCloudPlatform/kubernetes
-$ go get github.com/mesosphere/kubernetes-mesos
-$ pushd $GOPATH/src/github.com/mesosphere/kubernetes-mesos
-$ GOPATH=$GOPATH:$GOPATH/src/github.com/GoogleCloudPlatform/kubernetes/third_party godep restore
-$ popd
-$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-mesos
-$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-executor
+$ sudo aptitude install golang libprotobuf-dev mercurial
+
+$ cd $GOPATH # If you don't have one, create directory and set GOPATH accordingly.
+
+$ go get github.com/mesos/mesos-go/mesos
+$ export GOPATH=$GOPATH:$GOPATH/src/github.com/GoogleCloudPlatform/kubernetes/third_party
+$ go get github.com/mesosphere/kubernetes-mesos/kubernetes-mesos # If version.go fails to build, rerun after:
+$ ./src/github.com/GoogleCloudPlatform/kubernetes/hack/version-gen.sh
+$ go get github.com/mesosphere/kubernetes-mesos/kubernetes-mesos
+$ go get github.com/mesosphere/kubernetes-mesos/kubernetes-executor
 $ go install github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
-$ $GOPATH/bin/kubernetes-mesos -h
 ```
 
 ### Start the framework
