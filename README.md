@@ -28,13 +28,13 @@ NOTE: kubernetes-mesos requires [godep](https://github.com/tools/godep).
 
 ```shell
 $ go get github.com/mesosphere/kubernetes-mesos
-$ pushd src/github.com/mesosphere/kubernetes-mesos
+$ pushd $GOPATH/src/github.com/mesosphere/kubernetes-mesos
 $ godep restore
 $ popd
 $ go install github.com/mesosphere/kubernetes-mesos/kubernetes-mesos
 $ go install github.com/mesosphere/kubernetes-mesos/kubernetes-executor
 $ go install github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
-$ ./bin/kubernetes-mesos -h
+$ $GOPATH/bin/kubernetes-mesos -h
 ```
 
 ### Start the framework
