@@ -13,8 +13,8 @@ import (
 	kubernetes "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
-	"github.com/mesosphere/kubernetes-mesos/uuid"
 	"gopkg.in/v1/yaml"
+	"code.google.com/p/go-uuid/uuid"
 )
 
 var errSchedulerTimeout = fmt.Errorf("Schedule time out")
@@ -147,10 +147,7 @@ func (t *PodTask) AcceptOffer(slaveId string, offer* mesos.Offer) bool {
 }
 
 func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo, machines []string) (*PodTask, error) {
-	taskId, err := uuid.Gen()
-	if err != nil {
-		return nil, errors.New("Failed to generate task id: " + err.Error())
-	}
+	taskId := uuid.NewUUID().String()
 
 	task := &PodTask{
 		ID:              taskId, // pod.JSONBase.ID,
