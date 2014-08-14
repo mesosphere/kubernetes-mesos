@@ -33,13 +33,19 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/controller"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/endpoint"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/etcd"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/memory"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/minion"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/pod"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/service"
+
 	kscheduler "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
-	"github.com/coreos/go-etcd/etcd"
+	goetcd "github.com/coreos/go-etcd/etcd"
 	log "github.com/golang/glog"
-	"github.com/mesosphere/kubernetes-mesos/scheduler"
-//	"github.com/mesosphere/kubernetes-mesos/mesospodinfogetter"
+	kmscheduler "github.com/mesosphere/kubernetes-mesos/scheduler"
 	"github.com/mesos/mesos-go/mesos"
 )
 
@@ -68,12 +74,12 @@ func init() {
 }
 
 type kubernetesMaster struct {
-	podRegistry        registry.PodRegistry
-	controllerRegistry registry.ControllerRegistry
-	serviceRegistry    registry.ServiceRegistry
-	minionRegistry     registry.MinionRegistry
-	storage            map[string]apiserver.RESTStorage
-	client             *client.Client
+  podRegistry        pod.Registry
+  controllerRegistry controller.Registry
+  serviceRegistry    service.Registry
+  minionRegistry     minion.Registry
+  storage            map[string]apiserver.RESTStorage
+  client             *client.Client
 }
 
 // Copied from cmd/apiserver.go
@@ -121,7 +127,7 @@ func main() {
 
 	client := client.New("http://"+net.JoinHostPort(*address, strconv.Itoa(int(*port))), nil)
 
-	executorCommand := "./kubernetes-executor"
+	executorCommand := "./kubernetes-executor -v=2"
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
 		executorCommand = "./kubernetes-executor -v=2 -etcd_servers=" + etcdServerArguments
@@ -141,7 +147,7 @@ func main() {
 		Source: proto.String("kubernetes"),
 	}
 
-	mesosPodScheduler := scheduler.New(executor, scheduler.FCFSScheduleFunc)
+	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc)
 	driver := &mesos.MesosSchedulerDriver{
 		Master: *mesosMaster,
 		Framework: mesos.FrameworkInfo{
@@ -174,16 +180,16 @@ func main() {
 	log.Fatal(m.run(net.JoinHostPort(*address, strconv.Itoa(int(*port))), *apiPrefix))
 }
 
-func newKubernetesMaster(scheduler *scheduler.KubernetesScheduler, c *master.Config) *kubernetesMaster {
+func newKubernetesMaster(scheduler *kmscheduler.KubernetesScheduler, c *master.Config) *kubernetesMaster {
 	var m *kubernetesMaster
 
 	if len(c.EtcdServers) > 0 {
-		etcdClient := etcd.NewClient(c.EtcdServers)
-		minionRegistry := registry.MakeMinionRegistry(c.Minions)
+		etcdClient := goetcd.NewClient(c.EtcdServers)
+		minionRegistry := minion.NewRegistry(c.Minions) // TODO(adam): Mimic minionRegistryMaker(c)?
 		m = &kubernetesMaster{
 			podRegistry:        scheduler,
-			controllerRegistry: registry.MakeEtcdRegistry(etcdClient, minionRegistry),
-			serviceRegistry:    registry.MakeEtcdRegistry(etcdClient, minionRegistry),
+			controllerRegistry: etcd.NewRegistry(etcdClient, minionRegistry),
+			serviceRegistry:    etcd.NewRegistry(etcdClient, minionRegistry),
 			minionRegistry:     minionRegistry,
 			client:             c.Client,
 		}
@@ -191,9 +197,9 @@ func newKubernetesMaster(scheduler *scheduler.KubernetesScheduler, c *master.Con
 	} else {
 		m = &kubernetesMaster{
 			podRegistry:        scheduler,
-			controllerRegistry: registry.MakeMemoryRegistry(),
-			serviceRegistry:    registry.MakeMemoryRegistry(),
-			minionRegistry:     registry.MakeMinionRegistry(c.Minions),
+			controllerRegistry: memory.NewRegistry(),
+			serviceRegistry:    memory.NewRegistry(),
+			minionRegistry:     minion.NewRegistry(c.Minions),
 			client:             c.Client,
 		}
 		m.init(scheduler, c.Cloud, c.PodInfoGetter)
@@ -205,21 +211,28 @@ func (m *kubernetesMaster) init(scheduler kscheduler.Scheduler, cloud cloudprovi
 	podCache := master.NewPodCache(podInfoGetter, m.podRegistry, cachePeriod)
 	go podCache.Loop()
 	m.storage = map[string]apiserver.RESTStorage{
-		"pods": registry.MakePodRegistryStorage(m.podRegistry, podInfoGetter, scheduler, m.minionRegistry, cloud, podCache),
-		"replicationControllers": registry.NewControllerRegistryStorage(m.controllerRegistry, m.podRegistry),
-		"services":               registry.MakeServiceRegistryStorage(m.serviceRegistry, cloud, m.minionRegistry),
-		"minions":                registry.MakeMinionRegistryStorage(m.minionRegistry),
+		"pods": pod.NewRegistryStorage(&pod.RegistryStorageConfig{
+			CloudProvider: cloud,
+			MinionLister:  m.minionRegistry,
+			PodCache:      podCache,
+			PodInfoGetter: podInfoGetter,
+			Registry:      m.podRegistry,
+			Scheduler:     scheduler,
+		}),
+		"replicationControllers": controller.NewRegistryStorage(m.controllerRegistry, m.podRegistry),
+		"services":               service.NewRegistryStorage(m.serviceRegistry, cloud, m.minionRegistry),
+		"minions":                minion.NewRegistryStorage(m.minionRegistry),
 	}
 }
 
 // Run begins serving the Kubernetes API. It never returns.
 func (m *kubernetesMaster) run(myAddress, apiPrefix string) error {
-	endpoints := registry.MakeEndpointController(m.serviceRegistry, m.client)
+	endpoints := endpoint.NewEndpointController(m.serviceRegistry, m.client)
 	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, syncPeriod)
 
 	s := &http.Server{
 		Addr:           myAddress,
-		Handler:        apiserver.New(m.storage, api.Codec, apiPrefix),
+		Handler:        apiserver.Handle(m.storage, api.Codec, apiPrefix),
 		ReadTimeout:    httpReadTimeout,
 		WriteTimeout:   httpWriteTimeout,
 		MaxHeaderBytes: 1 << 20,
