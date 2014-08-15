@@ -10,7 +10,7 @@
         "image": "dockerfile/nginx",
         "ports": [{
           "containerPort": 80,
-          "hostPort": 8081
+          "hostPort": 31000
         }],
         "livenessProbe": {
           "enabled": true,

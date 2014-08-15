@@ -122,10 +122,10 @@ func (t *PodTask) AcceptOffer(slaveId string, offer* mesos.Offer) bool {
 				bp := r.GetBegin()
 				ep := r.GetEnd()
 
-				log.V(2).Infof("Evaluating port range {%d:%d}", bp, ep)
-
 				for port, _ := range requiredPorts {
-					if (bp <= port) && (port >= ep) {
+					log.V(2).Infof("Evaluating port range {%d:%d} %d", bp, ep, port)
+
+					if (bp <= port) && (port <= ep) {
 						delete(requiredPorts, port)
 					}
 				}
