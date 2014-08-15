@@ -277,6 +277,7 @@ func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 
 	task.Pod.CurrentState.Status = api.PodRunning
 	task.Pod.CurrentState.Manifest = task.Pod.DesiredState.Manifest
+	task.Pod.CurrentState.Host = slave.HostName
 
 	if taskStatus.Data != nil {
 		var target api.PodInfo
