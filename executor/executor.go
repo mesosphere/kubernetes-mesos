@@ -140,8 +140,7 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 
 	// TODO(nnielsen): Fail if container is already running.
 
-        // Checkpoint pods.
-
+	// Checkpoint pods.
 
 	// Send the pod updates to the channel.
 	// TODO(yifan): Replace SET with ADD when it's implemented.

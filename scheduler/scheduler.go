@@ -3,9 +3,9 @@ package scheduler
 import (
 	"container/ring"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
-	"errors"
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
@@ -13,8 +13,8 @@ import (
 	kubernetes "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
-	"gopkg.in/v1/yaml"
 	"github.com/mesosphere/kubernetes-mesos/uuid"
+	"gopkg.in/v1/yaml"
 )
 
 var errSchedulerTimeout = fmt.Errorf("Schedule time out")
@@ -400,10 +400,10 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, minionLister kubernetes.Mini
 	return <-task.SelectedMachine, nil
 }
 
-// Call ScheduleFunc and substract some resources.
+// Call ScheduleFunc and subtract some resources.
 func (k *KubernetesScheduler) doSchedule() {
 	if tasks := k.scheduleFunc(k.slaves, k.pendingTasks); tasks != nil {
-		// Substract offers.
+		// Subtract offers.
 		for _, task := range tasks {
 			for _, offerId := range task.OfferIds {
 				slaveId := task.TaskInfo.GetSlaveId().GetValue()

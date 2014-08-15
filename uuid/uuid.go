@@ -1,8 +1,8 @@
 package uuid
 
 import (
-	"os/exec"
 	"errors"
+	"os/exec"
 )
 
 func Gen() (string, error) {
@@ -17,5 +17,5 @@ func Gen() (string, error) {
 	}
 
 	// Strip trailing newline.
-	return string(out[:len(out) - 1]), nil
+	return string(out[:len(out)-1]), nil
 }

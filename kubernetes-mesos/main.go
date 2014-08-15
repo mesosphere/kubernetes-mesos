@@ -20,12 +20,12 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
-	"fmt"
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
@@ -45,8 +45,8 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	goetcd "github.com/coreos/go-etcd/etcd"
 	log "github.com/golang/glog"
-	kmscheduler "github.com/mesosphere/kubernetes-mesos/scheduler"
 	"github.com/mesos/mesos-go/mesos"
+	kmscheduler "github.com/mesosphere/kubernetes-mesos/scheduler"
 )
 
 var (
@@ -61,10 +61,10 @@ var (
 )
 
 const (
-	artifactPort =     9000
-	cachePeriod =      10 * time.Second
-	syncPeriod =       30 * time.Second
-	httpReadTimeout =  10 * time.Second
+	artifactPort     = 9000
+	cachePeriod      = 10 * time.Second
+	syncPeriod       = 30 * time.Second
+	httpReadTimeout  = 10 * time.Second
 	httpWriteTimeout = 10 * time.Second
 )
 
@@ -74,12 +74,12 @@ func init() {
 }
 
 type kubernetesMaster struct {
-  podRegistry        pod.Registry
-  controllerRegistry controller.Registry
-  serviceRegistry    service.Registry
-  minionRegistry     minion.Registry
-  storage            map[string]apiserver.RESTStorage
-  client             *client.Client
+	podRegistry        pod.Registry
+	controllerRegistry controller.Registry
+	serviceRegistry    service.Registry
+	minionRegistry     minion.Registry
+	storage            map[string]apiserver.RESTStorage
+	client             *client.Client
 }
 
 // Copied from cmd/apiserver.go
@@ -93,7 +93,7 @@ func main() {
 	}
 
 	serveExecutorArtifact := func(path string) string {
-		serveFile := func(pattern string, filename string){
+		serveFile := func(pattern string, filename string) {
 			http.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 				http.ServeFile(w, r, filename)
 			})
@@ -103,11 +103,11 @@ func main() {
 		pathSplit := strings.Split(path, "/")
 		var base string
 		if len(pathSplit) > 0 {
-			base = pathSplit[len(pathSplit) - 1]
+			base = pathSplit[len(pathSplit)-1]
 		} else {
 			base = path
 		}
-		serveFile("/" + base, path)
+		serveFile("/"+base, path)
 
 		hostURI := fmt.Sprintf("http://%s:%d/%s", *address, artifactPort, base)
 		log.V(2).Infof("Hosting artifact '%s' at '%s'", path, hostURI)
@@ -139,8 +139,8 @@ func main() {
 		Command: &mesos.CommandInfo{
 			Value: proto.String(executorCommand),
 			Uris: []*mesos.CommandInfo_URI{
-				&mesos.CommandInfo_URI{Value: &executorURI},
-				&mesos.CommandInfo_URI{Value: &proxyURI},
+				{Value: &executorURI},
+				{Value: &proxyURI},
 			},
 		},
 		Name:   proto.String("Kubelet Executor"),

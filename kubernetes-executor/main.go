@@ -1,25 +1,25 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
-	"encoding/json"
-	"io/ioutil"
 
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	kconfig "github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/config"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/fsouza/go-dockerclient"
 	log "github.com/golang/glog"
-	"github.com/mesosphere/kubernetes-mesos/executor"
 	"github.com/mesos/mesos-go/mesos"
+	"github.com/mesosphere/kubernetes-mesos/executor"
 )
 
 var (
@@ -110,16 +110,16 @@ func main() {
 		log.Fatal(err)
 	}
 
-        // TODO(nnielsen): Factor check-pointing into subsystem.
-        dat, err := ioutil.ReadFile("/tmp/kubernetes-pods")
-        if err == nil {
+	// TODO(nnielsen): Factor check-pointing into subsystem.
+	dat, err := ioutil.ReadFile("/tmp/kubernetes-pods")
+	if err == nil {
 		var target []api.PodInfo
 		err := json.Unmarshal(dat, &target)
 		if err == nil {
-                        log.Infof("Checkpoint: '%v'", target)
+			log.Infof("Checkpoint: '%v'", target)
 		}
-        }
-        // Recover running containers from check pointed pod list.
+	}
+	// Recover running containers from check pointed pod list.
 
 	driver.Join()
 
