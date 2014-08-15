@@ -25,8 +25,6 @@ const (
 	defaultFinishedTasksSize = 1024
 )
 
-// TODO(nnielsen): Rename KubernetesScheduler -> KubernetesScheduler.
-
 // PodScheduleFunc implements how to schedule
 // pods among slaves. We can have different implementation
 // for different scheduling policy.
@@ -49,24 +47,103 @@ type PodTask struct {
 	OfferIds        []string
 }
 
-// Fill the TaskInfo in the PodTask, should be called in PodScheduleFunc.
-func (t *PodTask) FillTaskInfo(slaveId string, offers ...*mesos.Offer) {
-	for _, offer := range offers {
-		t.OfferIds = append(t.OfferIds, offer.GetId().GetValue())
+func rangeResource(name string, ports []uint64) *mesos.Resource {
+	return &mesos.Resource {
+		Name:   proto.String(name),
+		Type:   mesos.Value_RANGES.Enum(),
+		Ranges: NewRanges(ports),
 	}
+}
+
+// func NewRange(begin uint64, end uint64) *mesos.Value_Ranges {
+func NewRanges(ports []uint64) *mesos.Value_Ranges {
+	r := make([]*mesos.Value_Range, 0)
+	for _, port := range ports {
+		r = append(r, &mesos.Value_Range { Begin: &port, End: &port})
+	}
+	return &mesos.Value_Ranges { Range: r }
+}
+
+// Fill the TaskInfo in the PodTask, should be called in PodScheduleFunc.
+func (t *PodTask) FillTaskInfo(slaveId string, offer *mesos.Offer) {
+	t.OfferIds = append(t.OfferIds, offer.GetId().GetValue())
 
 	var err error
 
+	// TODO(nnielsen): We only launch one pod per offer. We should be able to launch multiple.
+
+	// TODO(nnielsen): Assign/aquire pod port.
 	t.TaskInfo.TaskId = &mesos.TaskID{Value: proto.String(t.ID)}
 	t.TaskInfo.SlaveId = &mesos.SlaveID{Value: proto.String(slaveId)}
 	t.TaskInfo.Resources = []*mesos.Resource{
 		mesos.ScalarResource("cpus", containerCpus),
 		mesos.ScalarResource("mem", containerMem),
+		rangeResource("ports", t.Ports()),
 	}
 	t.TaskInfo.Data, err = yaml.Marshal(&t.Pod.DesiredState.Manifest)
 	if err != nil {
 		log.Warningf("Failed to marshal the manifest")
 	}
+}
+
+func (t *PodTask) Ports() []uint64 {
+	ports := make([]uint64, 0)
+	for _, container := range t.Pod.DesiredState.Manifest.Containers {
+		for _, port := range container.Ports {
+			// HostPort is int, not uint64.
+			ports = append(ports, uint64(port.HostPort))
+		}
+	}
+
+	return ports
+}
+
+func (t *PodTask) AcceptOffer(slaveId string, offer* mesos.Offer) bool {
+	var cpus float64 = 0
+	var mem float64 = 0
+
+	// Mimic set type
+	requiredPorts := make(map[uint64]struct{})
+	for _, port := range t.Ports() {
+		requiredPorts[port] = struct{}{}
+	}
+
+	for _, resource := range offer.Resources {
+		if resource.GetName() == "cpus" {
+			cpus = *resource.GetScalar().Value
+		}
+
+		if resource.GetName() == "mem" {
+			mem = *resource.GetScalar().Value
+		}
+
+		if resource.GetName() == "ports" {
+			for _, r := range (*resource).GetRanges().Range {
+				bp := r.GetBegin()
+				ep := r.GetEnd()
+
+				log.V(2).Infof("Evaluating port range {%d:%d}", bp, ep)
+
+				for port, _ := range requiredPorts {
+					if (bp <= port) && (port >= ep) {
+						delete(requiredPorts, port)
+					}
+				}
+			}
+		}
+	}
+
+	unsatisfiedPorts := len(requiredPorts)
+	if unsatisfiedPorts > 0 {
+		log.V(2).Infof("Could not schedule pod %s: %d ports could not be allocated on slave %d", t.Pod.ID, unsatisfiedPorts, slaveId)
+		return false
+	}
+
+	if (cpus < containerCpus) || (mem < containerMem) {
+		return false
+	}
+
+	return true
 }
 
 func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo, machines []string) (*PodTask, error) {
@@ -498,6 +575,7 @@ func (k *KubernetesScheduler) CreatePod(machine string, pod api.Pod) error {
 // Update an existing pod.
 func (k *KubernetesScheduler) UpdatePod(pod api.Pod) error {
 	// TODO(yifan): Need to send a special message to the slave/executor.
+	// TODO(nnielsen): Pod updates not yet supported by kubelet.
 	return fmt.Errorf("Not implemented: UpdatePod")
 }
 
@@ -524,10 +602,17 @@ func FCFSScheduleFunc(slaves map[string]*Slave, tasks map[string]*PodTask) []*Po
 			if !containsHostName(task.Machines, slave.HostName) {
 				continue
 			}
+
 			for _, offer := range slave.Offers {
+				if !task.AcceptOffer(slaveId, offer) {
+					continue
+				}
+
 				// Fill the task info.
 				task.FillTaskInfo(slaveId, offer)
 				task.SelectedMachine <- slave.HostName
+
+				// TODO(nnielsen): Schedule multiple pods.
 				// Just schedule one task for now.
 				return []*PodTask{task}
 			}
