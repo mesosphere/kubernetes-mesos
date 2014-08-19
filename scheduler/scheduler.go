@@ -102,6 +102,29 @@ func (t *PodTask) AcceptOffer(slaveId string, offer* mesos.Offer) bool {
 	var cpus float64 = 0
 	var mem float64 = 0
 
+	label := t.Pod.Labels["cluster"]
+	if label != "" {
+		var label_match = false
+		log.V(2).Infof("Matching against 'cluster' label: %v\n", label)
+		for _, attribute := range offer.Attributes {
+			log.V(3).Infof("attr: %v (%v) : %v\n", attribute.GetName(), attribute.GetType(), attribute.GetText().GetValue())
+			if attribute.GetName() == "cluster" {
+				attr := attribute.GetText().GetValue()
+				if attr == label {
+					log.V(2).Infof("Attribute cluster:'%v' == label cluster:'%v'\n", attr, label)
+					label_match = true
+					break
+				} else {
+					log.V(3).Infof("Attribute cluster:'%v' != label cluster:'%v'\n", attr, label)
+				}
+			}
+		}
+		if label_match == false {
+			log.V(2).Infof("Could not schedule pod %s: no matching attribute for label cluster=%v", t.Pod.ID, label)
+			return false
+		}
+	}
+
 	// Mimic set type
 	requiredPorts := make(map[uint64]struct{})
 	for _, port := range t.Ports() {
