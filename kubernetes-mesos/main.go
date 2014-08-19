@@ -36,7 +36,6 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/controller"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/endpoint"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/etcd"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/memory"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/minion"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/pod"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/service"
@@ -90,6 +89,10 @@ func main() {
 
 	if len(machineList) == 0 {
 		log.Fatal("No machines specified!")
+	}
+
+	if len(etcdServerList) <= 0 {
+		log.Fatal("No etcd severs specified!")
 	}
 
 	serveExecutorArtifact := func(path string) string {
@@ -163,7 +166,6 @@ func main() {
 	go driver.Start()
 
 	log.V(2).Info("Serving executor artifacts...")
-
 	// TODO(nnielsen): Using default pod info getter until
 	// MesosPodInfoGetter supports network containers.
 
@@ -183,27 +185,17 @@ func main() {
 func newKubernetesMaster(scheduler *kmscheduler.KubernetesScheduler, c *master.Config) *kubernetesMaster {
 	var m *kubernetesMaster
 
-	if len(c.EtcdServers) > 0 {
-		etcdClient := goetcd.NewClient(c.EtcdServers)
-		minionRegistry := minion.NewRegistry(c.Minions) // TODO(adam): Mimic minionRegistryMaker(c)?
-		m = &kubernetesMaster{
-			podRegistry:        scheduler,
-			controllerRegistry: etcd.NewRegistry(etcdClient, minionRegistry),
-			serviceRegistry:    etcd.NewRegistry(etcdClient, minionRegistry),
-			minionRegistry:     minionRegistry,
-			client:             c.Client,
-		}
-		m.init(scheduler, c.Cloud, c.PodInfoGetter)
-	} else {
-		m = &kubernetesMaster{
-			podRegistry:        scheduler,
-			controllerRegistry: memory.NewRegistry(),
-			serviceRegistry:    memory.NewRegistry(),
-			minionRegistry:     minion.NewRegistry(c.Minions),
-			client:             c.Client,
-		}
-		m.init(scheduler, c.Cloud, c.PodInfoGetter)
+	etcdClient := goetcd.NewClient(c.EtcdServers)
+	minionRegistry := minion.NewRegistry(c.Minions) // TODO(adam): Mimic minionRegistryMaker(c)?
+	m = &kubernetesMaster{
+		podRegistry:        scheduler,
+		controllerRegistry: etcd.NewRegistry(etcdClient, minionRegistry),
+		serviceRegistry:    etcd.NewRegistry(etcdClient, minionRegistry),
+		minionRegistry:     minionRegistry,
+		client:             c.Client,
 	}
+	m.init(scheduler, c.Cloud, c.PodInfoGetter)
+
 	return m
 }
 

@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"runtime/debug"
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	kubernetes "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/uuid"
@@ -552,6 +554,9 @@ func (k *KubernetesScheduler) ListPods(selector labels.Selector) ([]api.Pod, err
 // Get a specific pod.
 func (k *KubernetesScheduler) GetPod(podID string) (*api.Pod, error) {
 	log.V(2).Infof("Get pod '%s'\n", podID)
+
+	debug.PrintStack()
+
 	k.RLock()
 	defer k.RUnlock()
 
@@ -570,6 +575,8 @@ func (k *KubernetesScheduler) GetPod(podID string) (*api.Pod, error) {
 	}
 	if task, exists := k.runningTasks[taskId]; exists {
 		log.V(2).Infof("Running Pod '%s': %v", podID, task.Pod)
+		// HACK!
+		task.Pod.CurrentState.Status = api.PodRunning
 		return task.Pod, nil
 	}
 	return nil, fmt.Errorf("Unknown Pod %v", podID)
@@ -616,6 +623,10 @@ func (k *KubernetesScheduler) DeletePod(podID string) error {
 	}
 
 	return fmt.Errorf("Cannot kill pod '%s': pod not found", podID)
+}
+
+func (k *KubernetesScheduler) WatchPods(resourceVersion uint64) (watch.Interface, error) {
+	return nil, nil
 }
 
 // A FCFS scheduler.
