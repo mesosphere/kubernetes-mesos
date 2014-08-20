@@ -101,7 +101,6 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 		// may be duplicated messages or duplicated task id.
 		return
 	}
-
 	// Get the container manifest from the taskInfo.
 	var manifest api.ContainerManifest
 	if err := yaml.Unmarshal(taskInfo.GetData(), &manifest); err != nil {
@@ -121,7 +120,7 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 		containerManifest: &manifest,
 	}
 
-	k.pods = append(k.pods,
+	k.pods = append(k.pods, kubelet.Pod {
 		Name:      podID,
 		Namespace: "etcd",
 		Manifest:  manifest,
@@ -191,6 +190,10 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 					time.Sleep(containerPollTime)
 					_, err := getPidInfo(podID)
 					if err != nil {
+						if _, ok := k.tasks[taskId]; !ok {
+							log.Infof("Ignoring lost container: task not present")
+							return
+						}
 						k.sendStatusUpdate(taskInfo.GetTaskId(), mesos.TaskState_TASK_LOST, "Task lost: container disappeared")
 						return
 					}
