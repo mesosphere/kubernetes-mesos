@@ -133,7 +133,7 @@ func main() {
 	executorCommand := "./kubernetes-executor -v=2"
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
-		executorCommand = "./kubernetes-executor -v=2 -etcd_servers=" + etcdServerArguments
+		executorCommand = "./kubernetes-executor -v=2 -hostname_override=0.0.0.0 -etcd_servers=" + etcdServerArguments
 	}
 
 	// Create mesos scheduler driver.

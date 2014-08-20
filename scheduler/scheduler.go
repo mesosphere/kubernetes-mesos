@@ -37,7 +37,7 @@ const (
 // After deciding which slave to schedule the pod, it fills the task info and the
 //'SelectedMachine' channel  with the host name of the slave.
 // See the FIFOScheduleFunc for example.
-type PodScheduleFunc func(slaves map[string]*Slave, tasks map[string]*PodTask) []*PodTask
+type PodScheduleFunc func(k *KubernetesScheduler, slaves map[string]*Slave, tasks map[string]*PodTask) []*PodTask
 
 // A struct describes a pod task.
 type PodTask struct {
@@ -137,7 +137,7 @@ func (t *PodTask) AcceptOffer(slaveId string, offer* mesos.Offer) bool {
 
 	unsatisfiedPorts := len(requiredPorts)
 	if unsatisfiedPorts > 0 {
-		log.V(2).Infof("Could not schedule pod %s: %d ports could not be allocated on slave %d", t.Pod.ID, unsatisfiedPorts, slaveId)
+		log.V(2).Infof("Could not schedule pod %s: %d ports could not be allocated on slave %s", t.Pod.ID, unsatisfiedPorts, slaveId)
 		return false
 	}
 
@@ -390,6 +390,11 @@ func (k *KubernetesScheduler) handleTaskFinished(taskStatus *mesos.TaskStatus) {
 		return
 	}
 
+	task := k.runningTasks[taskId]
+	_, exists = k.podToTask[task.ID] ; if exists {
+		delete(k.podToTask, task.ID)
+	}
+
 	k.finishedTasks.Next().Value = taskId
 	delete(k.runningTasks, taskId)
 	delete(slave.tasks, taskId)
@@ -400,11 +405,22 @@ func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 
 	taskId := taskStatus.GetTaskId().GetValue()
 
+	podId := ""
 	if _, exists := k.pendingTasks[taskId]; exists {
+		task := k.pendingTasks[taskId]
+		podId = task.Pod.ID
 		delete(k.pendingTasks, taskId)
 	}
 	if _, exists := k.runningTasks[taskId]; exists {
+		task := k.runningTasks[taskId]
+		podId = task.Pod.ID
 		delete(k.runningTasks, taskId)
+	}
+
+	if podId != "" {
+		_, exists := k.podToTask[podId] ; if exists {
+			delete(k.podToTask, podId)
+		}
 	}
 }
 
@@ -412,11 +428,23 @@ func (k *KubernetesScheduler) handleTaskKilled(taskStatus *mesos.TaskStatus) {
 	log.Errorf("Task killed: '%v'", taskStatus)
 	taskId := taskStatus.GetTaskId().GetValue()
 
+	podId := ""
 	if _, exists := k.pendingTasks[taskId]; exists {
+		task := k.pendingTasks[taskId]
+		podId = task.Pod.ID
 		delete(k.pendingTasks, taskId)
 	}
 	if _, exists := k.runningTasks[taskId]; exists {
+		task := k.runningTasks[taskId]
+		podId = task.Pod.ID
 		delete(k.runningTasks, taskId)
+	}
+
+	if podId != "" {
+		log.V(2).Infof("Trying to delete pod: %s", podId)
+		_, exists := k.podToTask[podId] ; if exists {
+			delete(k.podToTask, podId)
+		}
 	}
 }
 
@@ -424,11 +452,22 @@ func (k *KubernetesScheduler) handleTaskLost(taskStatus *mesos.TaskStatus) {
 	log.Errorf("Task lost: '%v'", taskStatus)
 	taskId := taskStatus.GetTaskId().GetValue()
 
+	podId := ""
 	if _, exists := k.pendingTasks[taskId]; exists {
+		task := k.pendingTasks[taskId]
+		podId = task.Pod.ID
 		delete(k.pendingTasks, taskId)
 	}
 	if _, exists := k.runningTasks[taskId]; exists {
+		task := k.runningTasks[taskId]
+		podId = task.Pod.ID
 		delete(k.runningTasks, taskId)
+	}
+
+	if podId != "" {
+		_, exists := k.podToTask[podId] ; if exists {
+			delete(k.podToTask, podId)
+		}
 	}
 }
 
@@ -472,17 +511,22 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, minionLister kubernetes.Mini
 	}
 
 	k.Lock()
+	defer k.Unlock()
+
+	if _, ok := k.podToTask[pod.JSONBase.ID] ; ok {
+		return "", fmt.Errorf("Pod %s already launched. Please choose a unique pod name", pod.JSONBase.ID)
+	}
+
 	k.podToTask[pod.JSONBase.ID] = task.ID
 	k.pendingTasks[task.ID] = task
 	k.doSchedule()
-	k.Unlock()
 
 	return <-task.SelectedMachine, nil
 }
 
 // Call ScheduleFunc and subtract some resources.
 func (k *KubernetesScheduler) doSchedule() {
-	if tasks := k.scheduleFunc(k.slaves, k.pendingTasks); tasks != nil {
+	if tasks := k.scheduleFunc(k, k.slaves, k.pendingTasks); tasks != nil {
 		// Subtract offers.
 		for _, task := range tasks {
 			for _, offerId := range task.OfferIds {
@@ -607,15 +651,14 @@ func (k *KubernetesScheduler) WatchPods(resourceVersion uint64) (watch.Interface
 }
 
 // A FCFS scheduler.
-func FCFSScheduleFunc(slaves map[string]*Slave, tasks map[string]*PodTask) []*PodTask {
+func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, tasks map[string]*PodTask) []*PodTask {
 	for _, task := range tasks {
 		for slaveId, slave := range slaves {
-			if !containsHostName(task.Machines, slave.HostName) {
-				continue
-			}
-
 			for _, offer := range slave.Offers {
 				if !task.AcceptOffer(slaveId, offer) {
+					k.Driver.DeclineOffer(offer.Id, nil)
+					delete(k.offers, offer.Id.GetValue())
+					delete(k.slaves[slaveId].Offers, offer.Id.GetValue())
 					continue
 				}
 
