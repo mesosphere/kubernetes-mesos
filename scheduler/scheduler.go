@@ -22,8 +22,8 @@ import (
 var errSchedulerTimeout = fmt.Errorf("Schedule time out")
 
 const (
-	containerCpus            = 1
-	containerMem             = 512
+	containerCpus            = 0.25
+	containerMem             = 128
 	defaultFinishedTasksSize = 1024
 )
 
@@ -142,6 +142,7 @@ func (t *PodTask) AcceptOffer(slaveId string, offer* mesos.Offer) bool {
 	}
 
 	if (cpus < containerCpus) || (mem < containerMem) {
+		log.V(2).Infof("Not enough resources: cpus: %f mem: %f", cpus, mem)
 		return false
 	}
 
@@ -656,6 +657,7 @@ func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, tasks ma
 		for slaveId, slave := range slaves {
 			for _, offer := range slave.Offers {
 				if !task.AcceptOffer(slaveId, offer) {
+					log.V(2).Infof("Declining offer %v" , offer)
 					k.Driver.DeclineOffer(offer.Id, nil)
 					delete(k.offers, offer.Id.GetValue())
 					delete(k.slaves[slaveId].Offers, offer.Id.GetValue())
