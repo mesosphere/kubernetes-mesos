@@ -71,6 +71,24 @@ func main() {
 		kconfig.NewSourceEtcd(kconfig.EtcdKeyForHost(hostname), etcdClient, 30*time.Second, cfg.Channel("etcd"))
 	}
 
+	// Hack: Destroy existing k8s containers for now - we don't know how to reconcile yet.
+	containers, err := dockerClient.ListContainers(docker.ListContainersOptions{All: true})
+	if err == nil {
+		for _, container := range containers {
+			log.V(2).Infof("Existing container: %v", container.Names)
+
+			for _, containerName := range container.Names {
+				if strings.HasPrefix(containerName, "/k8s--") {
+					id := container.ID
+					log.V(2).Infof("Removing container: %v", id)
+					err = dockerClient.RemoveContainer(docker.RemoveContainerOptions{ID: id, RemoveVolumes: true})
+					continue
+				}
+			}
+
+		}
+	}
+
 	kl := kubelet.NewMainKubelet(hostname, dockerClient, nil, etcdClient, "/", *syncFrequency)
 
 	driver := new(mesos.MesosExecutorDriver)
