@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"flag"
 	"io/ioutil"
-	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -68,7 +67,7 @@ func main() {
 	if len(etcdServerList) > 0 {
 		log.Infof("Watching for etcd configs at %v", etcdServerList)
 		etcdClient = etcd.NewClient(etcdServerList)
-		kconfig.NewSourceEtcd(kconfig.EtcdKeyForHost(hostname), etcdClient, 30*time.Second, cfg.Channel("etcd"))
+		kconfig.NewSourceEtcd(kconfig.EtcdKeyForHost(hostname), etcdClient, cfg.Channel("etcd"))
 	}
 
 	// Hack: Destroy existing k8s containers for now - we don't know how to reconcile yet.
@@ -109,7 +108,7 @@ func main() {
 	go util.Forever(func() {
 		// TODO(nnielsen): Don't hardwire port, but use port from
 		// resource offer.
-		kubelet.ListenAndServeKubeletServer(kl, cfg.Channel("http"), http.DefaultServeMux, hostname, 10250)
+		kubelet.ListenAndServeKubeletServer(kl, cfg.Channel("http"), hostname, 10250)
 	}, 1*time.Second)
 
 	log.V(2).Infof("Starting proxy process...")
