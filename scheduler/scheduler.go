@@ -540,7 +540,7 @@ func (k *KubernetesScheduler) doSchedule() {
 }
 
 // ListPods obtains a list of pods that match selector.
-func (k *KubernetesScheduler) ListPods(selector labels.Selector) ([]api.Pod, error) {
+func (k *KubernetesScheduler) ListPods(selector labels.Selector) (*api.PodList, error) {
 	log.V(2).Infof("List pods for '%v'\n", selector)
 
 	k.RLock()
@@ -570,7 +570,7 @@ func (k *KubernetesScheduler) ListPods(selector labels.Selector) ([]api.Pod, err
 
 	log.V(2).Infof("Returning pods: '%v'\n", result)
 
-	return result, nil
+	return &api.PodList{Items:result}, nil
 }
 
 // Get a specific pod.
@@ -605,7 +605,7 @@ func (k *KubernetesScheduler) GetPod(podID string) (*api.Pod, error) {
 }
 
 // Create a pod based on a specification, schedule it onto a specific machine.
-func (k *KubernetesScheduler) CreatePod(machine string, pod api.Pod) error {
+func (k *KubernetesScheduler) CreatePod(pod api.Pod) error {
 	log.V(2).Infof("Create pod: '%v'\n", pod)
 	podID := pod.JSONBase.ID
 	taskId, exists := k.podToTask[podID]
@@ -647,7 +647,7 @@ func (k *KubernetesScheduler) DeletePod(podID string) error {
 	return fmt.Errorf("Cannot kill pod '%s': pod not found", podID)
 }
 
-func (k *KubernetesScheduler) WatchPods(resourceVersion uint64) (watch.Interface, error) {
+func (k *KubernetesScheduler) WatchPods(resourceVersion uint64, filter func(*api.Pod) bool) (watch.Interface, error) {
 	return nil, nil
 }
 
