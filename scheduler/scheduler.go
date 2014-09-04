@@ -10,9 +10,13 @@ import (
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
-	kubernetes "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
+	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
+	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/uuid"
@@ -39,11 +43,10 @@ const (
 // See the FIFOScheduleFunc for example.
 type PodScheduleFunc func(k *KubernetesScheduler, slaves map[string]*Slave, tasks map[string]*PodTask) []*PodTask
 
-// A struct describes a pod task.
+// A struct that describes a pod task.
 type PodTask struct {
 	ID              string
 	Pod             *api.Pod
-	Machines        []string
 	SelectedMachine chan string
 	TaskInfo        *mesos.TaskInfo
 	OfferIds        []string
@@ -149,7 +152,7 @@ func (t *PodTask) AcceptOffer(slaveId string, offer* mesos.Offer) bool {
 	return true
 }
 
-func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo, machines []string) (*PodTask, error) {
+func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
 	taskId, err := uuid.Gen()
 	if err != nil {
 		return nil, errors.New("Failed to generate task id: " + err.Error())
@@ -158,11 +161,9 @@ func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo, machines []string) (
 	task := &PodTask{
 		ID:              taskId, // pod.JSONBase.ID,
 		Pod:             pod,
-		Machines:        make([]string, len(machines)),
 		SelectedMachine: make(chan string, 1),
 		TaskInfo:        new(mesos.TaskInfo),
 	}
-	copy(task.Machines, machines)
 	task.TaskInfo.Name = proto.String("PodTask")
 	task.TaskInfo.Executor = executor
 	return task, nil
@@ -218,10 +219,13 @@ type KubernetesScheduler struct {
 
 	// The function that does scheduling.
 	scheduleFunc PodScheduleFunc
+
+	client *client.Client
+	podQueue *cache.FIFO
 }
 
 // New create a new KubernetesScheduler
-func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc) *KubernetesScheduler {
+func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client) *KubernetesScheduler {
 	return &KubernetesScheduler{
 		new(sync.RWMutex),
 		executor,
@@ -237,6 +241,8 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc) *Kubernetes
 		ring.New(defaultFinishedTasksSize),
 		make(map[string]string),
 		scheduleFunc,
+		client,
+		cache.NewFIFO(),
 	}
 }
 
@@ -498,15 +504,9 @@ func (k *KubernetesScheduler) Error(driver mesos.SchedulerDriver, message string
 
 // Schedule implements the Scheduler interface of the Kubernetes.
 // It returns the selectedMachine's name and error (if there's any).
-func (k *KubernetesScheduler) Schedule(pod api.Pod, minionLister kubernetes.MinionLister) (string, error) {
+func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (string, error) {
 	log.Infof("Try to schedule pod\n")
-	machineLists, err := minionLister.List()
-	if err != nil {
-		log.Warningf("minionLister.List() error %v\n", err)
-		return "", err
-	}
-
-	task, err := newPodTask(&pod, k.executor, machineLists)
+	task, err := newPodTask(&pod, k.executor)
 	if err != nil {
 		return "", err
 	}
@@ -522,6 +522,7 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, minionLister kubernetes.Mini
 	k.pendingTasks[task.ID] = task
 	k.doSchedule()
 
+	// XXX timeout handling here??
 	return <-task.SelectedMachine, nil
 }
 
@@ -537,6 +538,37 @@ func (k *KubernetesScheduler) doSchedule() {
 			}
 		}
 	}
+}
+
+// implementation of scheduling plugin's NextPod func; see plugin/pkg/scheduler
+func(k *KubernetesScheduler) yield() *api.Pod {
+	pod := k.podQueue.Pop().(*api.Pod)
+	// TODO: Remove or reduce verbosity by sep 6th, 2014. Leave until then to
+	// make it easy to find scheduling problems.
+	log.Infof("About to try and schedule pod %v\n", pod.ID)
+	return pod
+}
+
+// implementation of scheduling plugin's Error func; see plugin/pkg/scheduler
+func (k *KubernetesScheduler) handleSchedulingError(pod *api.Pod, err error) {
+        log.Errorf("Error scheduling %v: %v; retrying", pod.ID, err)
+
+        // Retry asynchronously.
+        // Note that this is extremely rudimentary and we need a more real error handling path.
+        go func() {
+                defer util.HandleCrash()
+                podID := pod.ID
+                // Get the pod again; it may have changed/been scheduled already.
+                pod = &api.Pod{}
+                err := k.client.Get().Path("pods").Path(podID).Do().Into(pod)
+                if err != nil {
+                        log.Errorf("Error getting pod %v for retry: %v; abandoning", podID, err)
+                        return
+                }
+                if pod.DesiredState.Host == "" {
+                        k.podQueue.Add(pod.ID, pod)
+                }
+        }()
 }
 
 // ListPods obtains a list of pods that match selector.
@@ -604,10 +636,17 @@ func (k *KubernetesScheduler) GetPod(podID string) (*api.Pod, error) {
 	return nil, fmt.Errorf("Unknown Pod %v", podID)
 }
 
-// Create a pod based on a specification, schedule it onto a specific machine.
+// Create a pod based on a specification; DOES NOT schedule it onto a specific machine,
+// instead the pod is queued for scheduling.
 func (k *KubernetesScheduler) CreatePod(pod api.Pod) error {
 	log.V(2).Infof("Create pod: '%v'\n", pod)
-	podID := pod.JSONBase.ID
+	k.podQueue.Add(pod.ID, &pod)
+	return nil
+}
+
+// implements binding.Registry
+func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
+	podID := binding.PodID
 	taskId, exists := k.podToTask[podID]
 	if !exists {
 		return fmt.Errorf("Could not resolve pod '%s' to task id", podID)
@@ -621,7 +660,9 @@ func (k *KubernetesScheduler) CreatePod(pod api.Pod) error {
 	// TODO(yifan): By this time, there is a chance that the slave is disconnected.
 	offerId := &mesos.OfferID{Value: proto.String(task.OfferIds[0])}
 	k.Driver.LaunchTasks(offerId, []*mesos.TaskInfo{task.TaskInfo}, nil)
-	return nil
+
+	// TODO(jdefelice): Wait for confirmation that the kublet is running before binding to etcd
+	return k.client.Post().Path("bindings").Body(binding).Do().Error()
 }
 
 // Update an existing pod.
@@ -697,4 +738,20 @@ func containsTask(finishedTasks *ring.Ring, taskId string) bool {
 		}
 	}
 	return false
+}
+
+// Create creates a scheduler and all support functions.
+func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
+
+        return &plugin.Config{
+                MinionLister: nil,
+                Algorithm:    k,
+                Binder:       k,
+                NextPod: func() *api.Pod {
+                        return k.yield()
+                },
+                Error: func(pod *api.Pod, err error) {
+			k.handleSchedulingError(pod,err)
+		},
+        }
 }
