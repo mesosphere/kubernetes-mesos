@@ -32,6 +32,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/binding"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/controller"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/etcd"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/minion"
@@ -41,6 +42,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 
 	kscheduler "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
+	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	goetcd "github.com/coreos/go-etcd/etcd"
 	log "github.com/golang/glog"
@@ -77,8 +79,10 @@ type kubernetesMaster struct {
 	controllerRegistry controller.Registry
 	serviceRegistry    service.Registry
 	minionRegistry     minion.Registry
+	bindingRegistry    binding.Registry
 	storage            map[string]apiserver.RESTStorage
 	client             *client.Client
+	scheduler	   *kmscheduler.KubernetesScheduler
 }
 
 // Copied from cmd/apiserver.go
@@ -153,7 +157,7 @@ func main() {
 		Source: proto.String("kubernetes"),
 	}
 
-	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc)
+	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc, client)
 	driver := &mesos.MesosSchedulerDriver{
 		Master: *mesosMaster,
 		Framework: mesos.FrameworkInfo{
@@ -190,12 +194,15 @@ func newKubernetesMaster(scheduler *kmscheduler.KubernetesScheduler, c *master.C
 
 	etcdClient := goetcd.NewClient(c.EtcdServers)
 	minionRegistry := minion.NewRegistry(c.Minions) // TODO(adam): Mimic minionRegistryMaker(c)?
+	
 	m = &kubernetesMaster{
 		podRegistry:        scheduler,
 		controllerRegistry: etcd.NewRegistry(etcdClient),
 		serviceRegistry:    etcd.NewRegistry(etcdClient),
 		minionRegistry:     minionRegistry,
+		bindingRegistry:    etcd.NewRegistry(etcdClient),
 		client:             c.Client,
+		scheduler:	    scheduler,
 	}
 	m.init(scheduler, c.Cloud, c.PodInfoGetter)
 
@@ -215,6 +222,8 @@ func (m *kubernetesMaster) init(scheduler kscheduler.Scheduler, cloud cloudprovi
 		"replicationControllers": controller.NewRegistryStorage(m.controllerRegistry, m.podRegistry),
 		"services":               service.NewRegistryStorage(m.serviceRegistry, cloud, m.minionRegistry),
 		"minions":                minion.NewRegistryStorage(m.minionRegistry),
+		// TODO: should appear only in scheduler API group.
+		"bindings": binding.NewBindingStorage(m.bindingRegistry),
 	}
 }
 
@@ -222,6 +231,7 @@ func (m *kubernetesMaster) init(scheduler kscheduler.Scheduler, cloud cloudprovi
 func (m *kubernetesMaster) run(myAddress, apiPrefix string) error {
 	endpoints := endpoint.NewEndpointController(m.serviceRegistry, m.client)
 	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, syncPeriod)
+	plugin.New( m.scheduler.NewPluginConfig() ).Run()
 
 	s := &http.Server{
 		Addr:           myAddress,
