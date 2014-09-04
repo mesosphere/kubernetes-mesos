@@ -506,24 +506,21 @@ func (k *KubernetesScheduler) Error(driver mesos.SchedulerDriver, message string
 // It returns the selectedMachine's name and error (if there's any).
 func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (string, error) {
 	log.Infof("Try to schedule pod\n")
-	task, err := newPodTask(&pod, k.executor)
-	if err != nil {
-		return "", err
-	}
 
 	k.Lock()
 	defer k.Unlock()
 
-	if _, ok := k.podToTask[pod.JSONBase.ID] ; ok {
-		return "", fmt.Errorf("Pod %s already launched. Please choose a unique pod name", pod.JSONBase.ID)
+	if taskID, ok := k.podToTask[pod.ID] ; !ok {
+		return "", fmt.Errorf("Pod %s cannot be resolved to a task", pod.ID)
+	} else {
+		if task, found := k.pendingTasks[taskID]; !found {
+			return "", fmt.Errorf("Task %s is not pending, nothing to schedule", taskID)
+		} else {
+			k.doSchedule()
+			// XXX timeout handling here??
+			return <-task.SelectedMachine, nil
+		}
 	}
-
-	k.podToTask[pod.JSONBase.ID] = task.ID
-	k.pendingTasks[task.ID] = task
-	k.doSchedule()
-
-	// XXX timeout handling here??
-	return <-task.SelectedMachine, nil
 }
 
 // Call ScheduleFunc and subtract some resources.
@@ -640,9 +637,32 @@ func (k *KubernetesScheduler) GetPod(podID string) (*api.Pod, error) {
 // instead the pod is queued for scheduling.
 func (k *KubernetesScheduler) CreatePod(pod api.Pod) error {
 	log.V(2).Infof("Create pod: '%v'\n", pod)
+	// Set current status to "Waiting".
+	pod.CurrentState.Status = api.PodWaiting
+	pod.CurrentState.Host = ""
+	// DesiredState.Host == "" is a signal to the scheduler that this pod needs scheduling.
+	pod.DesiredState.Status = api.PodRunning
+	pod.DesiredState.Host = ""
+
+	task, err := newPodTask(&pod, k.executor)
+	if err != nil {
+		return err
+	}
+
+	k.Lock()
+	defer k.Unlock()
+
+	if _, ok := k.podToTask[pod.ID] ; ok {
+		return fmt.Errorf("Pod %s already launched. Please choose a unique pod name", pod.JSONBase.ID)
+	}
+
 	k.podQueue.Add(pod.ID, &pod)
-	return nil
+	k.podToTask[pod.JSONBase.ID] = task.ID
+	k.pendingTasks[task.ID] = task
+
+        return nil
 }
+
 
 // implements binding.Registry
 func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
