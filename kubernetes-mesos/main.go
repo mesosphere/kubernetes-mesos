@@ -43,6 +43,7 @@ import (
 
 	kscheduler "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	goetcd "github.com/coreos/go-etcd/etcd"
 	log "github.com/golang/glog"
@@ -157,7 +158,13 @@ func main() {
 		Source: proto.String("kubernetes"),
 	}
 
-	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc, client)
+	etcdClient := goetcd.NewClient(etcdServerList)
+	helper := tools.EtcdHelper{
+		etcdClient,
+		runtime.Codec,
+		runtime.ResourceVersioner,
+	}
+	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc, client, helper)
 	driver := &mesos.MesosSchedulerDriver{
 		Master: *mesosMaster,
 		Framework: mesos.FrameworkInfo{
@@ -185,14 +192,13 @@ func main() {
 		Minions:       machineList,
 		PodInfoGetter: podInfoGetter,
 		EtcdServers:   etcdServerList,
-	})
+	}, etcdClient)
 	log.Fatal(m.run(net.JoinHostPort(*address, strconv.Itoa(int(*port))), *apiPrefix))
 }
 
-func newKubernetesMaster(scheduler *kmscheduler.KubernetesScheduler, c *master.Config) *kubernetesMaster {
+func newKubernetesMaster(scheduler *kmscheduler.KubernetesScheduler, c *master.Config, etcdClient tools.EtcdClient) *kubernetesMaster {
 	var m *kubernetesMaster
 
-	etcdClient := goetcd.NewClient(c.EtcdServers)
 	minionRegistry := minion.NewRegistry(c.Minions) // TODO(adam): Mimic minionRegistryMaker(c)?
 	
 	m = &kubernetesMaster{
