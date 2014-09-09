@@ -14,6 +14,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
@@ -641,7 +642,7 @@ func (k *KubernetesScheduler) GetPod(podID string) (*api.Pod, error) {
 
 // Create a pod based on a specification; DOES NOT schedule it onto a specific machine,
 // instead the pod is queued for scheduling.
-func (k *KubernetesScheduler) CreatePod(pod api.Pod) error {
+func (k *KubernetesScheduler) CreatePod(pod *api.Pod) error {
 	log.V(2).Infof("Create pod: '%v'\n", pod)
 	// Set current status to "Waiting".
 	pod.CurrentState.Status = api.PodWaiting
@@ -650,7 +651,7 @@ func (k *KubernetesScheduler) CreatePod(pod api.Pod) error {
 	pod.DesiredState.Status = api.PodRunning
 	pod.DesiredState.Host = ""
 
-	task, err := newPodTask(&pod, k.executor)
+	task, err := newPodTask(pod, k.executor)
 	if err != nil {
 		return err
 	}
@@ -662,7 +663,7 @@ func (k *KubernetesScheduler) CreatePod(pod api.Pod) error {
 		return fmt.Errorf("Pod %s already launched. Please choose a unique pod name", pod.JSONBase.ID)
 	}
 
-	k.podQueue.Add(pod.ID, &pod)
+	k.podQueue.Add(pod.ID, pod)
 	k.podToTask[pod.JSONBase.ID] = task.ID
 	k.pendingTasks[task.ID] = task
 
@@ -692,7 +693,7 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 }
 
 // Update an existing pod.
-func (k *KubernetesScheduler) UpdatePod(pod api.Pod) error {
+func (k *KubernetesScheduler) UpdatePod(pod *api.Pod) error {
 	// TODO(yifan): Need to send a special message to the slave/executor.
 	// TODO(nnielsen): Pod updates not yet supported by kubelet.
 	return fmt.Errorf("Not implemented: UpdatePod")
@@ -749,7 +750,7 @@ func (k *KubernetesScheduler) unbindPod(podID string) error {
 	}
 	// Next, remove the pod from the machine atomically.
 	contKey := makeContainerKey(machine)
-	return k.AtomicUpdate(contKey, &api.ContainerManifestList{}, func(in interface{}) (interface{}, error) {
+	return k.AtomicUpdate(contKey, &api.ContainerManifestList{}, func(in runtime.Object) (runtime.Object, error) {
 		manifests := in.(*api.ContainerManifestList)
 		newManifests := make([]api.ContainerManifest, 0, len(manifests.Items))
 		found := false

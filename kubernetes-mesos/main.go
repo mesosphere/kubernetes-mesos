@@ -161,8 +161,8 @@ func main() {
 	etcdClient := goetcd.NewClient(etcdServerList)
 	helper := tools.EtcdHelper{
 		etcdClient,
-		runtime.Codec,
-		runtime.ResourceVersioner,
+		runtime.DefaultCodec,
+		runtime.DefaultResourceVersioner,
 	}
 	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc, client, helper)
 	driver := &mesos.MesosSchedulerDriver{
@@ -193,7 +193,7 @@ func main() {
 		PodInfoGetter: podInfoGetter,
 		EtcdServers:   etcdServerList,
 	}, etcdClient)
-	log.Fatal(m.run(net.JoinHostPort(*address, strconv.Itoa(int(*port))), *apiPrefix))
+	log.Fatal(m.run(net.JoinHostPort(*address, strconv.Itoa(int(*port))), *apiPrefix, helper.Codec))
 }
 
 func newKubernetesMaster(scheduler *kmscheduler.KubernetesScheduler, c *master.Config, etcdClient tools.EtcdClient) *kubernetesMaster {
@@ -219,29 +219,29 @@ func (m *kubernetesMaster) init(scheduler kscheduler.Scheduler, cloud cloudprovi
 	podCache := master.NewPodCache(podInfoGetter, m.podRegistry)
 	go util.Forever(func() { podCache.UpdateAllContainers() }, cachePeriod)
 	m.storage = map[string]apiserver.RESTStorage{
-		"pods": pod.NewRegistryStorage(&pod.RegistryStorageConfig{
+		"pods": pod.NewREST(&pod.RESTConfig{
 			CloudProvider: cloud,
 			PodCache:      podCache,
 			PodInfoGetter: podInfoGetter,
 			Registry:      m.podRegistry,
 		}),
-		"replicationControllers": controller.NewRegistryStorage(m.controllerRegistry, m.podRegistry),
-		"services":               service.NewRegistryStorage(m.serviceRegistry, cloud, m.minionRegistry),
-		"minions":                minion.NewRegistryStorage(m.minionRegistry),
+		"replicationControllers": controller.NewREST(m.controllerRegistry, m.podRegistry),
+		"services":               service.NewREST(m.serviceRegistry, cloud, m.minionRegistry),
+		"minions":                minion.NewREST(m.minionRegistry),
 		// TODO: should appear only in scheduler API group.
-		"bindings": binding.NewBindingStorage(m.bindingRegistry),
+		"bindings": binding.NewREST(m.bindingRegistry),
 	}
 }
 
 // Run begins serving the Kubernetes API. It never returns.
-func (m *kubernetesMaster) run(myAddress, apiPrefix string) error {
+func (m *kubernetesMaster) run(myAddress, apiPrefix string, codec runtime.Codec) error {
 	endpoints := endpoint.NewEndpointController(m.serviceRegistry, m.client)
 	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, syncPeriod)
 	plugin.New( m.scheduler.NewPluginConfig() ).Run()
 
 	s := &http.Server{
 		Addr:           myAddress,
-		Handler:        apiserver.Handle(m.storage, runtime.Codec, apiPrefix),
+		Handler:        apiserver.Handle(m.storage, codec, apiPrefix),
 		ReadTimeout:    httpReadTimeout,
 		WriteTimeout:   httpWriteTimeout,
 		MaxHeaderBytes: 1 << 20,
