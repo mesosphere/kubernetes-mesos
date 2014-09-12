@@ -26,6 +26,7 @@ var (
 	hostnameOverride = flag.String("hostname_override", "", "If non-empty, will use this string as identification instead of the actual hostname.")
 	dockerEndpoint   = flag.String("docker_endpoint", "", "If non-empty, use this for the docker endpoint to communicate with")
 	etcdServerList   util.StringList
+	allowPrivileged    = flag.Bool("allow_privileged", false, "If true, allow containers to request privileged mode.")
 )
 
 func main() {
@@ -88,7 +89,7 @@ func main() {
 		}
 	}
 
-	kl := kubelet.NewMainKubelet(hostname, dockerClient, nil, etcdClient, "/", *syncFrequency)
+	kl := kubelet.NewMainKubelet(hostname, dockerClient, nil, etcdClient, "/", *syncFrequency, *allowPrivileged)
 
 	driver := new(mesos.MesosExecutorDriver)
 	kubeletExecutor := executor.New(driver, kl)
