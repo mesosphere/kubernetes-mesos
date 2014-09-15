@@ -6,26 +6,6 @@
 	],
 	"Deps": [
 		{
-			"ImportPath": "code.google.com/p/go-uuid/uuid",
-			"Comment": "null-12",
-			"Rev": "7dda39b2e7d5e265014674c5af696ba4186679e9"
-		},
-		{
-			"ImportPath": "code.google.com/p/go.net/html",
-			"Comment": "null-144",
-			"Rev": "ad01a6fcc8a19d3a4478c836895ffe883bd2ceab"
-		},
-		{
-			"ImportPath": "code.google.com/p/go.net/websocket",
-			"Comment": "null-144",
-			"Rev": "ad01a6fcc8a19d3a4478c836895ffe883bd2ceab"
-		},
-		{
-			"ImportPath": "code.google.com/p/goprotobuf/proto",
-			"Comment": "go.r60-152",
-			"Rev": "36be16571e14f67e114bb0af619e5de2c1591679"
-		},
-		{
 			"ImportPath": "github.com/GoogleCloudPlatform/kubernetes/pkg/api",
 			"Comment": "v0.2-108-g1853c66",
 			"Rev": "1853c66ddfdfb7d673371e9a2f4be65c066ac81b"
@@ -166,31 +146,8 @@
 			"Rev": "1853c66ddfdfb7d673371e9a2f4be65c066ac81b"
 		},
 		{
-			"ImportPath": "github.com/coreos/go-etcd/etcd",
-			"Comment": "v0.2.0-rc1-120-g23142f6",
-			"Rev": "23142f6773a676cc2cae8dd0cb90b2ea761c853f"
-		},
-		{
-			"ImportPath": "github.com/fsouza/go-dockerclient",
-			"Comment": "0.2.1-245-gf78c5cd",
-			"Rev": "f78c5cda09b1be9d35d2aac9fca91c94e3719915"
-		},
-		{
-			"ImportPath": "github.com/golang/glog",
-			"Rev": "d1c4472bf2efd3826f2b5bdcc02d8416798d678c"
-		},
-		{
-			"ImportPath": "github.com/google/cadvisor/info",
-			"Comment": "0.3.0-16-g4397c6e",
-			"Rev": "4397c6ed3222696e8cf3da9bf58f431005346031"
-		},
-		{
 			"ImportPath": "github.com/mesos/mesos-go/mesos",
 			"Rev": "9c6a968b270c50e35f99d6cf649a18521b76c18a"
-		},
-		{
-			"ImportPath": "gopkg.in/v1/yaml",
-			"Rev": "fc7f19eff1782a0beae3065097c776183e7d01d0"
 		}
 	]
 }
