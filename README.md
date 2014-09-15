@@ -6,7 +6,7 @@ When [Google Kubernetes](https://github.com/GoogleCloudPlatform/kubernetes) meet
 
 [![GoDoc] (https://godoc.org/github.com/mesosphere/kubernetes-mesos?status.png)](https://godoc.org/github.com/mesosphere/kubernetes-mesos)
 
-Kubernetes and Mesos are a match made in heaven. Kubernetes enables the Pod (group of co-located containers) abstraction, along with Pod labels for service discovery, load-balancing, and replication control. Mesos provides the fine-grained resource allocations for pods across nodes in a cluster, and can make Kubernetes play nicely with other frameworks running on the same cluster resources. With the Kubernetes framework for Mesos, the framework scheduler will register Kubernetes with Mesos, and then Mesos will begin offering Kubernetes sets of available resources from the cluster nodes (slaves/minions). The framework scheduler will match Mesos' resource offers to Kubernetes pods to run, and then send a launchTasks message to the Mesos master, which will forward the request onto the appropriate slaves. The slave will then fetch the kubelet/executor and start running it. The kubelet will pull down the pod, start running it, and send a TASK_RUNNING update back to the Kubernetes framework scheduler. Once the pods are running on the slaves/minions, they can make use of Kubernetes' pod labels to register themselves in etcd for service discovery, load-balancing, and replication control. 
+Kubernetes and Mesos are a match made in heaven. Kubernetes enables the Pod (group of co-located containers) abstraction, along with Pod labels for service discovery, load-balancing, and replication control. Mesos provides the fine-grained resource allocations for pods across nodes in a cluster, and can make Kubernetes play nicely with other frameworks running on the same cluster resources. Within the Kubernetes framework for Mesos, the framework scheduler first registers with Mesos and begins watching etcd's pod registry, and then Mesos offers the scheduler sets of available resources from the cluster nodes (slaves/minions). The scheduler matches Mesos' resource offers to unassigned Kubernetes pods, and then sends a launchTasks message to the Mesos master, which claims the resources and forwards the request onto the appropriate slave. The slave then fetches the kubelet/executor and starts running it. Once the scheduler knows that there are resource claimed for the kubelet to launch its pod, the scheduler writes a Binding to etcd to assign the pod to a specific host. The appropriate kubelet notices the assignment, pulls down the pod, and runs it.
 
 ### Roadmap
 This is still very much a work-in-progress, but stay tuned for updates as we continue development. If you have ideas or patches, feel free to contribute!
@@ -24,7 +24,11 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
 
 ### Build
 
-**NOTE** Kubernetes for Mesos requires Go 1.2+ and protobuf 2.5.0.
+**NOTE** Kubernetes for Mesos requires Go 1.2+, protobuf 2.5.0, etcd, and Mesos 0.19+.
+
+To install etcd, see [github.com/coreos/etcd](https://github.com/coreos/etcd/releases/)
+
+To install Mesos, see [mesosphere.io/downloads](http://mesosphere.io/downloads)
 
 ```shell
 $ sudo aptitude install golang libprotobuf-dev mercurial
@@ -48,6 +52,7 @@ Assuming your mesos cluster is started, and the master is running on `127.0.1.1:
 $ ./bin/kubernetes-mesos \
   -machines=$(hostname) \
   -mesos_master=127.0.1.1:5050 \
+  -etcd_servers=http://$(hostname):4001 \
   -executor_path=$(pwd)/bin/kubernetes-executor \
   -proxy_path=$(pwd)/bin/proxy
 ```
