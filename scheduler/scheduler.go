@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"runtime/debug"
+	"sync"
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
@@ -16,10 +16,10 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
-	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
+	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/uuid"
@@ -56,7 +56,7 @@ type PodTask struct {
 }
 
 func rangeResource(name string, ports []uint64) *mesos.Resource {
-	return &mesos.Resource {
+	return &mesos.Resource{
 		Name:   proto.String(name),
 		Type:   mesos.Value_RANGES.Enum(),
 		Ranges: NewRanges(ports),
@@ -67,9 +67,9 @@ func rangeResource(name string, ports []uint64) *mesos.Resource {
 func NewRanges(ports []uint64) *mesos.Value_Ranges {
 	r := make([]*mesos.Value_Range, 0)
 	for _, port := range ports {
-		r = append(r, &mesos.Value_Range { Begin: &port, End: &port})
+		r = append(r, &mesos.Value_Range{Begin: &port, End: &port})
 	}
-	return &mesos.Value_Ranges { Range: r }
+	return &mesos.Value_Ranges{Range: r}
 }
 
 // Fill the TaskInfo in the PodTask, should be called in PodScheduleFunc.
@@ -106,7 +106,7 @@ func (t *PodTask) Ports() []uint64 {
 	return ports
 }
 
-func (t *PodTask) AcceptOffer(slaveId string, offer* mesos.Offer) bool {
+func (t *PodTask) AcceptOffer(slaveId string, offer *mesos.Offer) bool {
 	var cpus float64 = 0
 	var mem float64 = 0
 
@@ -226,7 +226,7 @@ type KubernetesScheduler struct {
 	// The function that does scheduling.
 	scheduleFunc PodScheduleFunc
 
-	client *client.Client
+	client   *client.Client
 	podQueue *cache.FIFO
 }
 
@@ -405,7 +405,8 @@ func (k *KubernetesScheduler) handleTaskFinished(taskStatus *mesos.TaskStatus) {
 	}
 
 	task := k.runningTasks[taskId]
-	_, exists = k.podToTask[task.ID] ; if exists {
+	_, exists = k.podToTask[task.ID]
+	if exists {
 		delete(k.podToTask, task.ID)
 	}
 
@@ -432,7 +433,8 @@ func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 	}
 
 	if podId != "" {
-		_, exists := k.podToTask[podId] ; if exists {
+		_, exists := k.podToTask[podId]
+		if exists {
 			delete(k.podToTask, podId)
 		}
 	}
@@ -456,7 +458,8 @@ func (k *KubernetesScheduler) handleTaskKilled(taskStatus *mesos.TaskStatus) {
 
 	if podId != "" {
 		log.V(2).Infof("Trying to delete pod: %s", podId)
-		_, exists := k.podToTask[podId] ; if exists {
+		_, exists := k.podToTask[podId]
+		if exists {
 			delete(k.podToTask, podId)
 		}
 	}
@@ -479,7 +482,8 @@ func (k *KubernetesScheduler) handleTaskLost(taskStatus *mesos.TaskStatus) {
 	}
 
 	if podId != "" {
-		_, exists := k.podToTask[podId] ; if exists {
+		_, exists := k.podToTask[podId]
+		if exists {
 			delete(k.podToTask, podId)
 		}
 	}
@@ -517,7 +521,7 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionListe
 	k.Lock()
 	defer k.Unlock()
 
-	if taskID, ok := k.podToTask[pod.ID] ; !ok {
+	if taskID, ok := k.podToTask[pod.ID]; !ok {
 		return "", fmt.Errorf("Pod %s cannot be resolved to a task", pod.ID)
 	} else {
 		if task, found := k.pendingTasks[taskID]; !found {
@@ -545,7 +549,7 @@ func (k *KubernetesScheduler) doSchedule() {
 }
 
 // implementation of scheduling plugin's NextPod func; see plugin/pkg/scheduler
-func(k *KubernetesScheduler) yield() *api.Pod {
+func (k *KubernetesScheduler) yield() *api.Pod {
 	pod := k.podQueue.Pop().(*api.Pod)
 	// TODO: Remove or reduce verbosity by sep 6th, 2014. Leave until then to
 	// make it easy to find scheduling problems.
@@ -555,24 +559,24 @@ func(k *KubernetesScheduler) yield() *api.Pod {
 
 // implementation of scheduling plugin's Error func; see plugin/pkg/scheduler
 func (k *KubernetesScheduler) handleSchedulingError(pod *api.Pod, err error) {
-        log.Errorf("Error scheduling %v: %v; retrying", pod.ID, err)
+	log.Errorf("Error scheduling %v: %v; retrying", pod.ID, err)
 
-        // Retry asynchronously.
-        // Note that this is extremely rudimentary and we need a more real error handling path.
-        go func() {
-                defer util.HandleCrash()
-                podID := pod.ID
-                // Get the pod again; it may have changed/been scheduled already.
-                pod = &api.Pod{}
-                err := k.client.Get().Path("pods").Path(podID).Do().Into(pod)
-                if err != nil {
-                        log.Errorf("Error getting pod %v for retry: %v; abandoning", podID, err)
-                        return
-                }
-                if pod.DesiredState.Host == "" {
-                        k.podQueue.Add(pod.ID, pod)
-                }
-        }()
+	// Retry asynchronously.
+	// Note that this is extremely rudimentary and we need a more real error handling path.
+	go func() {
+		defer util.HandleCrash()
+		podID := pod.ID
+		// Get the pod again; it may have changed/been scheduled already.
+		pod = &api.Pod{}
+		err := k.client.Get().Path("pods").Path(podID).Do().Into(pod)
+		if err != nil {
+			log.Errorf("Error getting pod %v for retry: %v; abandoning", podID, err)
+			return
+		}
+		if pod.DesiredState.Host == "" {
+			k.podQueue.Add(pod.ID, pod)
+		}
+	}()
 }
 
 // ListPods obtains a list of pods that match selector.
@@ -606,7 +610,7 @@ func (k *KubernetesScheduler) ListPods(selector labels.Selector) (*api.PodList, 
 
 	log.V(2).Infof("Returning pods: '%v'\n", result)
 
-	return &api.PodList{Items:result}, nil
+	return &api.PodList{Items: result}, nil
 }
 
 // Get a specific pod.
@@ -659,7 +663,7 @@ func (k *KubernetesScheduler) CreatePod(pod *api.Pod) error {
 	k.Lock()
 	defer k.Unlock()
 
-	if _, ok := k.podToTask[pod.ID] ; ok {
+	if _, ok := k.podToTask[pod.ID]; ok {
 		return fmt.Errorf("Pod %s already launched. Please choose a unique pod name", pod.JSONBase.ID)
 	}
 
@@ -667,9 +671,8 @@ func (k *KubernetesScheduler) CreatePod(pod *api.Pod) error {
 	k.podToTask[pod.JSONBase.ID] = task.ID
 	k.pendingTasks[task.ID] = task
 
-        return nil
+	return nil
 }
-
 
 // implements binding.Registry
 func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
@@ -708,7 +711,7 @@ func (k *KubernetesScheduler) DeletePod(podID string) error {
 		// proceed to attempt task removal anyway since we may have already
 		// launched a task for this pod but the binding may have failed
 	}
-	
+
 	taskId, exists := k.podToTask[podID]
 	if !exists {
 		return fmt.Errorf("Could not resolve pod '%s' to task id", podID)
@@ -771,15 +774,16 @@ func (k *KubernetesScheduler) unbindPod(podID string) error {
 		return manifests, nil
 	})
 }
+
 // needed by unbindPod
 func makePodKey(podID string) string {
 	return "/registry/pods/" + podID
 }
+
 // needed by unbindPod
 func makeContainerKey(machine string) string {
 	return "/registry/hosts/" + machine + "/kubelet"
 }
-
 
 func (k *KubernetesScheduler) WatchPods(resourceVersion uint64, filter func(*api.Pod) bool) (watch.Interface, error) {
 	return nil, nil
@@ -791,7 +795,7 @@ func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, tasks ma
 		for slaveId, slave := range slaves {
 			for _, offer := range slave.Offers {
 				if !task.AcceptOffer(slaveId, offer) {
-					log.V(2).Infof("Declining offer %v" , offer)
+					log.V(2).Infof("Declining offer %v", offer)
 					k.Driver.DeclineOffer(offer.Id, nil)
 					delete(k.offers, offer.Id.GetValue())
 					delete(k.slaves[slaveId].Offers, offer.Id.GetValue())
@@ -836,15 +840,15 @@ func containsTask(finishedTasks *ring.Ring, taskId string) bool {
 // Create creates a scheduler and all support functions.
 func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
 
-        return &plugin.Config{
-                MinionLister: nil,
-                Algorithm:    k,
-                Binder:       k,
-                NextPod: func() *api.Pod {
-                        return k.yield()
-                },
-                Error: func(pod *api.Pod, err error) {
-			k.handleSchedulingError(pod,err)
+	return &plugin.Config{
+		MinionLister: nil,
+		Algorithm:    k,
+		Binder:       k,
+		NextPod: func() *api.Pod {
+			return k.yield()
 		},
-        }
+		Error: func(pod *api.Pod, err error) {
+			k.handleSchedulingError(pod, err)
+		},
+	}
 }

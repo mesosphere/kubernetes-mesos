@@ -122,7 +122,7 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 		containerManifest: &manifest,
 	}
 
-	k.pods = append(k.pods, kubelet.Pod {
+	k.pods = append(k.pods, kubelet.Pod{
 		Name:      podID,
 		Namespace: "etcd",
 		Manifest:  manifest,

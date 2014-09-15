@@ -38,13 +38,13 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/minion"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/pod"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/service"
-	endpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
+	endpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
 
 	kscheduler "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
-	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
 	goetcd "github.com/coreos/go-etcd/etcd"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
@@ -83,7 +83,7 @@ type kubernetesMaster struct {
 	bindingRegistry    binding.Registry
 	storage            map[string]apiserver.RESTStorage
 	client             *client.Client
-	scheduler	   *kmscheduler.KubernetesScheduler
+	scheduler          *kmscheduler.KubernetesScheduler
 }
 
 // Copied from cmd/apiserver.go
@@ -200,7 +200,7 @@ func newKubernetesMaster(scheduler *kmscheduler.KubernetesScheduler, c *master.C
 	var m *kubernetesMaster
 
 	minionRegistry := minion.NewRegistry(c.Minions) // TODO(adam): Mimic minionRegistryMaker(c)?
-	
+
 	m = &kubernetesMaster{
 		podRegistry:        scheduler,
 		controllerRegistry: etcd.NewRegistry(etcdClient),
@@ -208,7 +208,7 @@ func newKubernetesMaster(scheduler *kmscheduler.KubernetesScheduler, c *master.C
 		minionRegistry:     minionRegistry,
 		bindingRegistry:    etcd.NewRegistry(etcdClient),
 		client:             c.Client,
-		scheduler:	    scheduler,
+		scheduler:          scheduler,
 	}
 	m.init(scheduler, c.Cloud, c.PodInfoGetter)
 
@@ -237,7 +237,7 @@ func (m *kubernetesMaster) init(scheduler kscheduler.Scheduler, cloud cloudprovi
 func (m *kubernetesMaster) run(myAddress, apiPrefix string, codec runtime.Codec) error {
 	endpoints := endpoint.NewEndpointController(m.serviceRegistry, m.client)
 	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, syncPeriod)
-	plugin.New( m.scheduler.NewPluginConfig() ).Run()
+	plugin.New(m.scheduler.NewPluginConfig()).Run()
 
 	s := &http.Server{
 		Addr:           myAddress,
