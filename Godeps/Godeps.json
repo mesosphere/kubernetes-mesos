@@ -172,8 +172,8 @@
 		},
 		{
 			"ImportPath": "github.com/fsouza/go-dockerclient",
-			"Comment": "0.2.1-245-gf78c5cd",
-			"Rev": "f78c5cda09b1be9d35d2aac9fca91c94e3719915"
+			"Comment": "0.2.1-241-g0dbb508",
+			"Rev": "0dbb508e94dd899a6743d035d8f249c7634d26da"
 		},
 		{
 			"ImportPath": "github.com/golang/glog",
@@ -181,8 +181,8 @@
 		},
 		{
 			"ImportPath": "github.com/google/cadvisor/info",
-			"Comment": "0.3.0-16-g4397c6e",
-			"Rev": "4397c6ed3222696e8cf3da9bf58f431005346031"
+			"Comment": "0.2.0-27-g17b0ec5",
+			"Rev": "17b0ec576bcbeb321c133e4378dee1e500c9850d"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/mesos",
@@ -190,7 +190,7 @@
 		},
 		{
 			"ImportPath": "gopkg.in/v1/yaml",
-			"Rev": "fc7f19eff1782a0beae3065097c776183e7d01d0"
+			"Rev": "1b9791953ba4027efaeb728c7355e542a203be5e"
 		}
 	]
 }
