@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
@@ -516,7 +517,7 @@ func (k *KubernetesScheduler) Error(driver mesos.SchedulerDriver, message string
 // Schedule implements the Scheduler interface of the Kubernetes.
 // It returns the selectedMachine's name and error (if there's any).
 func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (string, error) {
-	log.Infof("Try to schedule pod\n")
+	log.Infof("Try to schedule pod %v\n", pod.ID)
 
 	k.Lock()
 	defer k.Unlock()
@@ -528,8 +529,13 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionListe
 			return "", fmt.Errorf("Task %s is not pending, nothing to schedule", taskID)
 		} else {
 			k.doSchedule()
-			// XXX timeout handling here??
-			return <-task.SelectedMachine, nil
+			select {
+			case machine := <-task.SelectedMachine:
+				return machine, nil
+			case <- time.After(time.Second * 10):
+				// XXX don't hard code this, use something configurable
+				return "", errSchedulerTimeout
+			}
 		}
 	}
 }
