@@ -798,6 +798,10 @@ func (k *KubernetesScheduler) WatchPods(resourceVersion uint64, filter func(*api
 // A FCFS scheduler.
 func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, tasks map[string]*PodTask) []*PodTask {
 	for _, task := range tasks {
+		if task.TaskInfo.TaskId != nil {
+			// skip tasks that have already made it through FillTaskInfo
+			continue
+		}
 		for slaveId, slave := range slaves {
 			for _, offer := range slave.Offers {
 				if !task.AcceptOffer(slaveId, offer) {
