@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"code.google.com/p/goprotobuf/proto"
 	"code.google.com/p/go-uuid/uuid"
@@ -55,6 +56,10 @@ type PodTask struct {
 }
 
 func rangeResource(name string, ports []uint64) *mesos.Resource {
+	if len(ports) == 0 {
+		// pod may consist of a container that doesn't expose any ports on the host
+		return nil
+	}
 	return &mesos.Resource{
 		Name:   proto.String(name),
 		Type:   mesos.Value_RANGES.Enum(),
@@ -85,7 +90,9 @@ func (t *PodTask) FillTaskInfo(slaveId string, offer *mesos.Offer) {
 	t.TaskInfo.Resources = []*mesos.Resource{
 		mesos.ScalarResource("cpus", containerCpus),
 		mesos.ScalarResource("mem", containerMem),
-		rangeResource("ports", t.Ports()),
+	}
+	if ports := rangeResource("ports", t.Ports()); ports != nil {
+		t.TaskInfo.Resources = append(t.TaskInfo.Resources, ports)
 	}
 	t.TaskInfo.Data, err = yaml.Marshal(&t.Pod.DesiredState.Manifest)
 	if err != nil {
@@ -96,9 +103,14 @@ func (t *PodTask) FillTaskInfo(slaveId string, offer *mesos.Offer) {
 func (t *PodTask) Ports() []uint64 {
 	ports := make([]uint64, 0)
 	for _, container := range t.Pod.DesiredState.Manifest.Containers {
+		// strip all port==0 from this array; k8s already knows what to do with zero-
+		// ports (it does not create 'port bindings' on the minion-host); we need to
+		// remove the wildcards from this array since they don't consume host resources
 		for _, port := range container.Ports {
 			// HostPort is int, not uint64.
-			ports = append(ports, uint64(port.HostPort))
+			if port.HostPort != 0 {
+				ports = append(ports, uint64(port.HostPort))
+			}
 		}
 	}
 
@@ -511,7 +523,7 @@ func (k *KubernetesScheduler) Error(driver mesos.SchedulerDriver, message string
 // Schedule implements the Scheduler interface of the Kubernetes.
 // It returns the selectedMachine's name and error (if there's any).
 func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (string, error) {
-	log.Infof("Try to schedule pod\n")
+	log.Infof("Try to schedule pod %v\n", pod.ID)
 
 	k.Lock()
 	defer k.Unlock()
@@ -523,8 +535,13 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionListe
 			return "", fmt.Errorf("Task %s is not pending, nothing to schedule", taskID)
 		} else {
 			k.doSchedule()
-			// XXX timeout handling here??
-			return <-task.SelectedMachine, nil
+			select {
+			case machine := <-task.SelectedMachine:
+				return machine, nil
+			case <- time.After(time.Second * 10):
+				// XXX don't hard code this, use something configurable
+				return "", errSchedulerTimeout
+			}
 		}
 	}
 }
@@ -683,8 +700,11 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	}
 
 	// TODO(yifan): By this time, there is a chance that the slave is disconnected.
+	log.V(2).Infof("Launching task : %v", task)
 	offerId := &mesos.OfferID{Value: proto.String(task.OfferIds[0])}
-	k.Driver.LaunchTasks(offerId, []*mesos.TaskInfo{task.TaskInfo}, nil)
+	if err := k.Driver.LaunchTasks(offerId, []*mesos.TaskInfo{task.TaskInfo}, nil); err != nil {
+		return fmt.Errorf("Failed to launch task for pod %s: %v", podID, err)
+	}
 
 	// TODO(jdefelice): Wait for confirmation that the kublet is running before binding to etcd
 	return k.client.Post().Path("bindings").Body(binding).Do().Error()
@@ -787,6 +807,10 @@ func (k *KubernetesScheduler) WatchPods(resourceVersion uint64, filter func(*api
 // A FCFS scheduler.
 func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, tasks map[string]*PodTask) []*PodTask {
 	for _, task := range tasks {
+		if task.TaskInfo.TaskId != nil {
+			// skip tasks that have already made it through FillTaskInfo
+			continue
+		}
 		for slaveId, slave := range slaves {
 			for _, offer := range slave.Offers {
 				if !task.AcceptOffer(slaveId, offer) {
