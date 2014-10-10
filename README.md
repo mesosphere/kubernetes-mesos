@@ -37,10 +37,11 @@ $ sudo aptitude install golang libprotobuf-dev mercurial
 
 $ cd $GOPATH # If you don't have one, create directory and set GOPATH accordingly.
 
-$ go get -d github.com/mesosphere/kubernetes-mesos/kubernetes-mesos
+$ mkdir -p src/github.com/mesosphere/kubernetes-mesos
+$ git clone git@github.com:mesosphere/kubernetes-mesos.git src/github.com/mesosphere/kubernetes-mesos
 $ cd src/github.com/mesosphere/kubernetes-mesos && godep restore
-$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 $ go install github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
+$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 ```
 
 ### Start the framework
