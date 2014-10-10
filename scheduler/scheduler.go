@@ -3,13 +3,13 @@ package scheduler
 import (
 	"container/ring"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync"
 	"time"
 
 	"code.google.com/p/goprotobuf/proto"
+	"code.google.com/p/go-uuid/uuid"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	apierrors "github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
@@ -23,7 +23,6 @@ import (
 	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
-	"github.com/mesosphere/kubernetes-mesos/uuid"
 	"gopkg.in/v1/yaml"
 )
 
@@ -168,11 +167,7 @@ func (t *PodTask) AcceptOffer(slaveId string, offer *mesos.Offer) bool {
 }
 
 func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
-	taskId, err := uuid.Gen()
-	if err != nil {
-		return nil, errors.New("Failed to generate task id: " + err.Error())
-	}
-
+	taskId := uuid.NewUUID().String()
 	task := &PodTask{
 		ID:              taskId, // pod.JSONBase.ID,
 		Pod:             pod,
