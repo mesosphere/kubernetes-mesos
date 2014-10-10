@@ -7,9 +7,8 @@ current_dir	:= $(patsubst %/,%,$(dir $(mkfile_path)))
 fail		:= ${MAKE} --no-print-directory --quiet -f $(current_dir)/Makefile error
 
 PROXY_SRC	:= github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
-FRAMEWORK_SRC	:= github.com/mesosphere/kubernetes-mesos/kubernetes-mesos \
-		   github.com/mesosphere/kubernetes-mesos/kubernetes-executor
 
+# TODO: make this something more reasonable
 DESTDIR		?= /target
 
 .PHONY: all error require-godep framework require-k8s require-vendor proxy install info bootstrap require-gopath
@@ -52,11 +51,13 @@ proxy: require-godep
 require-vendor:
 
 framework: require-godep
-	env $(WITH_MESOS_CGO_FLAGS) go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
+	env $(WITH_MESOS_CGO_FLAGS) go install \
+	  github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 
 install: all
 	mkdir -p $(DESTDIR)
-	(pkg="$(GOPATH)"; pkg="$${pkg%%:*}"; /bin/cp -vpf -t $(DESTDIR) "$${pkg}"/bin/{proxy,kubernetes-mesos,kubernetes-executor})
+	(pkg="$(GOPATH)"; pkg="$${pkg%%:*}"; \
+	 /bin/cp -vpf -t $(DESTDIR) "$${pkg}"/bin/{proxy,kubernetes-mesos,kubernetes-executor})
 
 info:
 	@echo GOPATH=$(GOPATH)
