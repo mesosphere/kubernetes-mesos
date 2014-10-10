@@ -11,7 +11,7 @@ PROXY_SRC	:= github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
 # TODO: make this something more reasonable
 DESTDIR		?= /target
 
-.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath
+.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format
 
 ifneq ($(WITH_MESOS_DIR),)
 
@@ -53,6 +53,9 @@ require-vendor:
 framework: require-godep
 	env $(WITH_MESOS_CGO_FLAGS) go install \
 	  github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
+
+format: require-gopath
+	go fmt github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 
 install: all
 	mkdir -p $(DESTDIR)

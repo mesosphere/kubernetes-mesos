@@ -126,7 +126,7 @@ func main() {
 	executorURI := serveExecutorArtifact(*executorPath)
 	proxyURI := serveExecutorArtifact(*proxyPath)
 
-	go http.ListenAndServe(fmt.Sprintf("%s:%d",*address,artifactPort), nil)
+	go http.ListenAndServe(fmt.Sprintf("%s:%d", *address, artifactPort), nil)
 
 	podInfoGetter := &client.HTTPPodInfoGetter{
 		Client: http.DefaultClient,
