@@ -11,7 +11,7 @@ PROXY_SRC	:= github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
 # TODO: make this something more reasonable
 DESTDIR		?= /target
 
-.PHONY: all error require-godep framework require-k8s require-vendor proxy install info bootstrap require-gopath
+.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath
 
 ifneq ($(WITH_MESOS_DIR),)
 
