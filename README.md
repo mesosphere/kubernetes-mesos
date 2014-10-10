@@ -24,23 +24,22 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
 
 ### Build
 
-**NOTE** Kubernetes for Mesos requires Go 1.2+, protobuf 2.5.0, etcd, and Mesos 0.19+.
+**NOTE** Kubernetes for Mesos requires Go 1.2+, protobuf 2.5.0, etcd, and Mesos 0.19+. Building the project is grealy simplified by using godep.
 
 To install etcd, see [github.com/coreos/etcd](https://github.com/coreos/etcd/releases/)
 
 To install Mesos, see [mesosphere.io/downloads](http://mesosphere.io/downloads)
+
+To install godep, see [github.com/tools/godep](https://github.com/tools/godep)
 
 ```shell
 $ sudo aptitude install golang libprotobuf-dev mercurial
 
 $ cd $GOPATH # If you don't have one, create directory and set GOPATH accordingly.
 
-$ go get github.com/mesos/mesos-go/mesos
-$ export GOPATH=$GOPATH:$GOPATH/src/github.com/GoogleCloudPlatform/kubernetes/third_party
-$ go get github.com/mesosphere/kubernetes-mesos/kubernetes-mesos # If version.go fails to build, rerun after:
-$ ./src/github.com/GoogleCloudPlatform/kubernetes/hack/version-gen.sh
-$ go get github.com/mesosphere/kubernetes-mesos/kubernetes-mesos
-$ go get github.com/mesosphere/kubernetes-mesos/kubernetes-executor
+$ go get -d github.com/mesosphere/kubernetes-mesos/kubernetes-mesos
+$ cd src/github.com/mesosphere/kubernetes-mesos && godep restore
+$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 $ go install github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
 ```
 
