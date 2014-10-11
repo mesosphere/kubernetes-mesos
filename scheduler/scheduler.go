@@ -52,6 +52,7 @@ type PodTask struct {
 	SelectedMachine chan string
 	TaskInfo        *mesos.TaskInfo
 	OfferIds        []string
+	Launched	bool
 }
 
 func rangeResource(name string, ports []uint64) *mesos.Resource {
@@ -161,6 +162,7 @@ func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
 		Pod:             pod,
 		SelectedMachine: make(chan string, 1),
 		TaskInfo:        new(mesos.TaskInfo),
+		Launched:	 false,
 	}
 	task.TaskInfo.Name = proto.String("PodTask")
 	task.TaskInfo.Executor = executor
@@ -560,16 +562,23 @@ func (k *KubernetesScheduler) handleSchedulingError(pod *api.Pod, err error) {
 	// Note that this is extremely rudimentary and we need a more real error handling path.
 	go func() {
 		defer util.HandleCrash()
-		podID := pod.ID
+		podId := pod.ID
 		// Get the pod again; it may have changed/been scheduled already.
 		pod = &api.Pod{}
-		err := k.client.Get().Path("pods").Path(podID).Do().Into(pod)
+		err := k.client.Get().Path("pods").Path(podId).Do().Into(pod)
 		if err != nil {
-			log.Errorf("Error getting pod %v for retry: %v; abandoning", podID, err)
+			log.Errorf("Error getting pod %v for retry: %v; abandoning", podId, err)
 			return
 		}
 		if pod.DesiredState.Host == "" {
-			k.podQueue.Add(pod.ID, pod)
+			// ensure that the pod hasn't been deleted while we were trying to schedule it
+			k.RLock()
+			defer k.RUnlock()
+			if _, exists := k.podToTask[podId]; exists {
+				k.podQueue.Add(pod.ID, pod)
+			} else {
+				log.Infof("Scheduler detected deleted pod: %v, will not re-queue", podId)
+			}
 		}
 	}()
 }
@@ -609,34 +618,34 @@ func (k *KubernetesScheduler) ListPods(selector labels.Selector) (*api.PodList, 
 }
 
 // Get a specific pod.
-func (k *KubernetesScheduler) GetPod(podID string) (*api.Pod, error) {
-	log.V(2).Infof("Get pod '%s'\n", podID)
+func (k *KubernetesScheduler) GetPod(podId string) (*api.Pod, error) {
+	log.V(2).Infof("Get pod '%s'\n", podId)
 
 	debug.PrintStack()
 
 	k.RLock()
 	defer k.RUnlock()
 
-	taskId, exists := k.podToTask[podID]
+	taskId, exists := k.podToTask[podId]
 	if !exists {
-		return nil, fmt.Errorf("Could not resolve pod '%s' to task id", podID)
+		return nil, fmt.Errorf("Could not resolve pod '%s' to task id", podId)
 	}
 
 	if task, exists := k.pendingTasks[taskId]; exists {
-		// return nil, fmt.Errorf("Pod '%s' is still pending", podID)
-		log.V(2).Infof("Pending Pod '%s': %v", podID, task.Pod)
+		// return nil, fmt.Errorf("Pod '%s' is still pending", podId)
+		log.V(2).Infof("Pending Pod '%s': %v", podId, task.Pod)
 		return task.Pod, nil
 	}
 	if containsTask(k.finishedTasks, taskId) {
-		return nil, fmt.Errorf("Pod '%s' is finished", podID)
+		return nil, fmt.Errorf("Pod '%s' is finished", podId)
 	}
 	if task, exists := k.runningTasks[taskId]; exists {
-		log.V(2).Infof("Running Pod '%s': %v", podID, task.Pod)
+		log.V(2).Infof("Running Pod '%s': %v", podId, task.Pod)
 		// HACK!
 		task.Pod.CurrentState.Status = api.PodRunning
 		return task.Pod, nil
 	}
-	return nil, fmt.Errorf("Unknown Pod %v", podID)
+	return nil, fmt.Errorf("Unknown Pod %v", podId)
 }
 
 // Create a pod based on a specification; DOES NOT schedule it onto a specific machine,
@@ -671,10 +680,13 @@ func (k *KubernetesScheduler) CreatePod(pod *api.Pod) error {
 
 // implements binding.Registry
 func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
-	podID := binding.PodID
-	taskId, exists := k.podToTask[podID]
+	k.RLock()
+	defer k.RUnlock()
+
+	podId := binding.PodID
+	taskId, exists := k.podToTask[podId]
 	if !exists {
-		return fmt.Errorf("Could not resolve pod '%s' to task id", podID)
+		return fmt.Errorf("Could not resolve pod '%s' to task id", podId)
 	}
 
 	task, exists := k.pendingTasks[taskId]
@@ -684,9 +696,14 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 
 	// TODO(yifan): By this time, there is a chance that the slave is disconnected.
 	offerId := &mesos.OfferID{Value: proto.String(task.OfferIds[0])}
-	k.Driver.LaunchTasks(offerId, []*mesos.TaskInfo{task.TaskInfo}, nil)
+	if err := k.Driver.LaunchTasks(offerId, []*mesos.TaskInfo{task.TaskInfo}, nil); err != nil {
+		return fmt.Errorf("Failed to launch task %v : %v", task, err)
+	}
+	task.Launched = true
 
 	// TODO(jdefelice): Wait for confirmation that the kublet is running before binding to etcd
+
+	// XXX I suspect this method is triggering a callback to list pods, which attepts to re-lock !!!
 	return k.client.Post().Path("bindings").Body(binding).Do().Error()
 }
 
@@ -698,36 +715,57 @@ func (k *KubernetesScheduler) UpdatePod(pod *api.Pod) error {
 }
 
 // Delete an existing pod.
-func (k *KubernetesScheduler) DeletePod(podID string) error {
-	log.V(2).Infof("Delete pod '%s'\n", podID)
+func (k *KubernetesScheduler) DeletePod(podId string) error {
+	log.V(2).Infof("Delete pod '%s'\n", podId)
 
-	if err := k.unbindPod(podID); err != nil {
-		log.Warningf("Failed to unbind pod '%s' from etcd: %v", podID, err)
+	if err := k.unbindPod(podId); err != nil {
+		log.Warningf("Failed to unbind pod '%s' from etcd: %v", podId, err)
 		// proceed to attempt task removal anyway since we may have already
 		// launched a task for this pod but the binding may have failed
 	}
 
-	taskId, exists := k.podToTask[podID]
+	k.Lock()
+	defer k.Unlock()
+
+	// prevent the scheduler from attempting to pop this; it's also possible that
+	// it's concurrently being scheduled (somewhere between pod scheduling and
+	// binding)
+	k.podQueue.Delete(podId)
+
+	taskId, exists := k.podToTask[podId]
 	if !exists {
-		return fmt.Errorf("Could not resolve pod '%s' to task id", podID)
+		return fmt.Errorf("Could not resolve pod '%s' to task id", podId)
 	}
+
+	// determine if the task has already been launched to mesos, if not then
+	// cleanup is easier (podToTask,pendingTasks) since there's no state to sync
 
 	if task, exists := k.runningTasks[taskId]; exists {
 		taskId := &mesos.TaskID{Value: proto.String(task.ID)}
 		return k.Driver.KillTask(taskId)
 	}
 
-	return fmt.Errorf("Cannot kill pod '%s': pod not found", podID)
+	if task, exists := k.pendingTasks[taskId]; exists {
+		if !task.Launched {
+			delete(k.podToTask,podId)
+			delete(k.pendingTasks,taskId)
+			return nil;
+		}
+		taskId := &mesos.TaskID{Value: proto.String(task.ID)}
+		return k.Driver.KillTask(taskId)
+	}
+
+	return fmt.Errorf("Cannot kill pod '%s': pod not found", podId)
 }
 
 // HACK copied from pkg.registry.etcd; should not need to do this once our scheduler is
 // refactored to use the default kubernetes master pod registry
-func (k *KubernetesScheduler) unbindPod(podID string) error {
+func (k *KubernetesScheduler) unbindPod(podId string) error {
 	var pod api.Pod
-	podKey := makePodKey(podID)
+	podKey := makePodKey(podId)
 	err := k.ExtractObj(podKey, &pod, false)
 	if tools.IsEtcdNotFound(err) {
-		return apierrors.NewNotFound("pod", podID)
+		return apierrors.NewNotFound("pod", podId)
 	}
 	if err != nil {
 		return err
@@ -736,7 +774,7 @@ func (k *KubernetesScheduler) unbindPod(podID string) error {
 	// machine and attempt to put it somewhere.
 	err = k.Delete(podKey, true)
 	if tools.IsEtcdNotFound(err) {
-		return apierrors.NewNotFound("pod", podID)
+		return apierrors.NewNotFound("pod", podId)
 	}
 	if err != nil {
 		return err
@@ -753,7 +791,7 @@ func (k *KubernetesScheduler) unbindPod(podID string) error {
 		newManifests := make([]api.ContainerManifest, 0, len(manifests.Items))
 		found := false
 		for _, manifest := range manifests.Items {
-			if manifest.ID != podID {
+			if manifest.ID != podId {
 				newManifests = append(newManifests, manifest)
 			} else {
 				found = true
@@ -763,7 +801,7 @@ func (k *KubernetesScheduler) unbindPod(podID string) error {
 			// This really shouldn't happen, it indicates something is broken, and likely
 			// there is a lost pod somewhere.
 			// However it is "deleted" so log it and move on
-			log.Infof("Couldn't find: %s in %#v", podID, manifests)
+			log.Infof("Couldn't find: %s in %#v", podId, manifests)
 		}
 		manifests.Items = newManifests
 		return manifests, nil
@@ -771,8 +809,8 @@ func (k *KubernetesScheduler) unbindPod(podID string) error {
 }
 
 // needed by unbindPod
-func makePodKey(podID string) string {
-	return "/registry/pods/" + podID
+func makePodKey(podId string) string {
+	return "/registry/pods/" + podId
 }
 
 // needed by unbindPod
