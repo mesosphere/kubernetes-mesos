@@ -7,6 +7,7 @@ current_dir	:= $(patsubst %/,%,$(dir $(mkfile_path)))
 fail		:= ${MAKE} --no-print-directory --quiet -f $(current_dir)/Makefile error
 
 PROXY_SRC	:= github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
+CONTROLLER_SRC	:= github.com/GoogleCloudPlatform/kubernetes/cmd/controller-manager
 
 # TODO: make this something more reasonable
 DESTDIR		?= /target
@@ -47,6 +48,7 @@ require-gopath:
 
 proxy: require-godep
 	go install $(PROXY_SRC)
+	go install $(CONTROLLER_SRC)
 
 require-vendor:
 
@@ -57,7 +59,7 @@ framework: require-godep
 install: all
 	mkdir -p $(DESTDIR)
 	(pkg="$(GOPATH)"; pkg="$${pkg%%:*}"; \
-	 /bin/cp -vpf -t $(DESTDIR) "$${pkg}"/bin/{proxy,kubernetes-mesos,kubernetes-executor})
+	 /bin/cp -vpf -t $(DESTDIR) "$${pkg}"/bin/{proxy,controller-manager,kubernetes-mesos,kubernetes-executor})
 
 info:
 	@echo GOPATH=$(GOPATH)
