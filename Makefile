@@ -53,7 +53,7 @@ proxy: require-godep
 require-vendor:
 
 framework: require-godep
-	env $(WITH_MESOS_CGO_FLAGS) go install \
+	env $(WITH_MESOS_CGO_FLAGS) go install -race \
 	  github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 
 install: all
