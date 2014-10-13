@@ -720,8 +720,6 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	task.Launched = true
 
 	// TODO(jdefelice): Wait for confirmation that the kublet is running before binding to etcd
-
-	// XXX I suspect this method is triggering a callback to list pods, which attepts to re-lock !!!
 	return k.client.Post().Path("bindings").Body(binding).Do().Error()
 }
 
