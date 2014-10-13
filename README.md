@@ -40,7 +40,7 @@ $ cd $GOPATH # If you don't have one, create directory and set GOPATH accordingl
 $ mkdir -p src/github.com/mesosphere/kubernetes-mesos
 $ git clone git@github.com:mesosphere/kubernetes-mesos.git src/github.com/mesosphere/kubernetes-mesos
 $ cd src/github.com/mesosphere/kubernetes-mesos && godep restore
-$ go install github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
+$ go install github.com/GoogleCloudPlatform/kubernetes/cmd/{proxy,controller-manager}
 $ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 ```
 
@@ -55,6 +55,11 @@ $ ./bin/kubernetes-mesos \
   -etcd_servers=http://$(hostname):4001 \
   -executor_path=$(pwd)/bin/kubernetes-executor \
   -proxy_path=$(pwd)/bin/proxy
+```
+
+To enable replication control, start a controller instance:
+```shell
+$ ./bin/controller-manager -master=$(hostname):8080
 ```
 
 ###Launch a Pod
