@@ -64,15 +64,15 @@ $ ./bin/controller-manager -master=$(hostname):8080
 
 ###Launch a Pod
 
-Assuming your framework is running on `localhost:8080`, then:
+Assuming your framework is running on `$(hostname):8080`, then:
 
 ```shell
-$ curl -L http://localhost:8080/api/v1beta1/pods -XPOST -d @examples/pod.json
+$ curl -L http://$(hostname):8080/api/v1beta1/pods -XPOST -d @examples/pod.json
 ```
 
 After the pod get launched, you can check it's status via `curl` or your web browser:
 ```shell
-$ curl -L http://localhost:8080/api/v1beta1/pods
+$ curl -L http://$(hostname):8080/api/v1beta1/pods
 ```
 
 ```json
