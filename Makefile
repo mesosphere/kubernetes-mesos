@@ -53,7 +53,7 @@ proxy: require-godep
 require-vendor:
 
 framework: require-godep
-	env $(WITH_MESOS_CGO_FLAGS) go install -race \
+	env $(WITH_MESOS_CGO_FLAGS) go install $${WITH_RACE:+-race} \
 	  github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 
 format: require-gopath
@@ -71,6 +71,7 @@ info:
 	@echo CGO_CPPFLAGS="$(CGO_CPPFLAGS)"
 	@echo CGO_CXXFLAGS="$(CGO_CXXFLAGS)"
 	@echo CGO_LDFLAGS="$(CGO_LDFLAGS)"
+	@echo RACE_FLAGS=$${WITH_RACE:+-race}
 
 bootstrap: require-godep
 	godep restore
