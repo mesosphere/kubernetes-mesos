@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"code.google.com/p/goprotobuf/proto"
 	"code.google.com/p/go-uuid/uuid"
+	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	apierrors "github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
@@ -53,7 +53,7 @@ type PodTask struct {
 	SelectedMachine chan string
 	TaskInfo        *mesos.TaskInfo
 	OfferIds        []string
-	Launched	bool
+	Launched        bool
 }
 
 func rangeResource(name string, ports []uint64) *mesos.Resource {
@@ -174,7 +174,7 @@ func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
 		Pod:             pod,
 		SelectedMachine: make(chan string, 1),
 		TaskInfo:        new(mesos.TaskInfo),
-		Launched:	 false,
+		Launched:        false,
 	}
 	task.TaskInfo.Name = proto.String("PodTask")
 	task.TaskInfo.Executor = executor
@@ -540,7 +540,7 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionListe
 			select {
 			case machine := <-task.SelectedMachine:
 				return machine, nil
-			case <- time.After(time.Second * 10):
+			case <-time.After(time.Second * 10):
 				// XXX don't hard code this, use something configurable
 				return "", errSchedulerTimeout
 			}
@@ -763,9 +763,9 @@ func (k *KubernetesScheduler) DeletePod(podId string) error {
 
 	if task, exists := k.pendingTasks[taskId]; exists {
 		if !task.Launched {
-			delete(k.podToTask,podId)
-			delete(k.pendingTasks,taskId)
-			return nil;
+			delete(k.podToTask, podId)
+			delete(k.pendingTasks, taskId)
+			return nil
 		}
 		taskId := &mesos.TaskID{Value: proto.String(task.ID)}
 		return k.Driver.KillTask(taskId)

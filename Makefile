@@ -57,7 +57,8 @@ framework: require-godep
 	  github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 
 format: require-gopath
-	go fmt github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
+	go fmt	github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor} \
+		github.com/mesosphere/kubernetes-mesos/{scheduler,executor}
 
 install: all
 	mkdir -p $(DESTDIR)
