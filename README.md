@@ -46,33 +46,34 @@ $ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 
 ### Start the framework
 
-Assuming your mesos cluster is started, and the master is running on `127.0.1.1:5050`, then:
+Assuming your mesos cluster is started, and the master is running on `${servicehost}:5050`, then:
 
 ```shell
 $ ./bin/kubernetes-mesos \
-  -machines=$(hostname) \
-  -mesos_master=127.0.1.1:5050 \
-  -etcd_servers=http://$(hostname):4001 \
+  -address=${servicehost} \
+  -machines=${servicehost} \
+  -mesos_master=${servicehost}:5050 \
+  -etcd_servers=http://${servicehost}:4001 \
   -executor_path=$(pwd)/bin/kubernetes-executor \
   -proxy_path=$(pwd)/bin/proxy
 ```
 
 To enable replication control, start a controller instance:
 ```shell
-$ ./bin/controller-manager -master=$(hostname):8080
+$ ./bin/controller-manager -master=${servicehost}:8080
 ```
 
 ###Launch a Pod
 
-Assuming your framework is running on `$(hostname):8080`, then:
+Assuming your framework is running on `${servicehost}:8080`, then:
 
 ```shell
-$ curl -L http://$(hostname):8080/api/v1beta1/pods -XPOST -d @examples/pod.json
+$ curl -L http://${servicehost}:8080/api/v1beta1/pods -XPOST -d @examples/pod.json
 ```
 
 After the pod get launched, you can check it's status via `curl` or your web browser:
 ```shell
-$ curl -L http://$(hostname):8080/api/v1beta1/pods
+$ curl -L http://${servicehost}:8080/api/v1beta1/pods
 ```
 
 ```json
