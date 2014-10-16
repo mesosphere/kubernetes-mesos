@@ -18,7 +18,7 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
   1. Kubelet as Executor+Containerizer
 - [x] Pod Labels: for Service Discovery + Load Balancing
 - [x] Running multi-node on GCE
-- [ ] Replication Control
+- [x] Replication Control
 - [ ] Use resource shapes to schedule pods
 - [ ] Even smarter (Marathon-like) scheduling
 
