@@ -26,7 +26,10 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
 
 **NOTE** Kubernetes for Mesos requires Go 1.2+, protobuf 2.5.0, etcd, and Mesos 0.19+. Building the project is grealy simplified by using godep.
 
-To install etcd, see [github.com/coreos/etcd](https://github.com/coreos/etcd/releases/)
+To install etcd, see [github.com/coreos/etcd](https://github.com/coreos/etcd/releases/), or run it via docker:
+```shell
+$ sudo docker run -d --net=host coreos/etcd -name etcd-node1
+```
 
 To install Mesos, see [mesosphere.io/downloads](http://mesosphere.io/downloads)
 
@@ -46,7 +49,7 @@ $ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 
 ### Start the framework
 
-Assuming your mesos cluster is started, and the master is running on `${servicehost}:5050`, then:
+Assuming your mesos cluster is started, and that the mesos-master and etcd are running on `${servicehost}`, then:
 
 ```shell
 $ ./bin/kubernetes-mesos \
@@ -58,7 +61,7 @@ $ ./bin/kubernetes-mesos \
   -proxy_path=$(pwd)/bin/proxy
 ```
 
-To enable replication control, start a controller instance:
+To enable replication control, start a kubernetes controller instance:
 ```shell
 $ ./bin/controller-manager -master=${servicehost}:8080
 ```
@@ -223,6 +226,86 @@ Or, you can run `docker ps -a` to verify that the example container is running:
 CONTAINER ID        IMAGE                     COMMAND                CREATED             STATUS              PORTS                   NAMES
 02d2d7c91d4f        dockerfile/nginx:latest   nginx                  24 seconds ago      Up 24 seconds                               k8s--nginx_-_01.249c7d76--nginx_-_id_-_01.etcd--ba48b2b2_-_55a7_-_11e4_-_8ec3_-_08002766f5aa--4d088f48
 6c4dd34a8d21        kubernetes/pause:latest   /pause                 5 minutes ago       Up 5 minutes        0.0.0.0:31000->80/tcp   k8s--net.fa4b7d08--nginx_-_id_-_01.etcd--ba48b2b2_-_55a7_-_11e4_-_8ec3_-_08002766f5aa--9acb0442
+```
+
+###Launch a Replication Controller
+
+Assuming your framework is running on `${servicehost}:8080` and that you have multiple mesos slaves in your cluster, then:
+
+```shell
+$ curl -L http://${servicehost}:8080/api/v1beta1/replicationControllers -XPOST -d@examples/controller-nginx.json
+```
+
+After the pod get launched, you can check it's status via `curl` or your web browser:
+```shell
+$ curl -L http://${servicehost}:8080/api/v1beta1/replicationControllers
+```
+
+```json
+{
+    "kind": "ReplicationControllerList",
+    "creationTimestamp": null,
+    "resourceVersion": 7,
+    "apiVersion": "v1beta1",
+    "items": [
+        {
+            "id": "nginxController",
+            "creationTimestamp": "2014-10-17T11:10:29Z",
+            "resourceVersion": 3,
+            "desiredState": {
+                "replicas": 2,
+                "replicaSelector": {
+                    "name": "nginx"
+                },
+                "podTemplate": {
+                    "desiredState": {
+                        "manifest": {
+                            "version": "v1beta1",
+                            "id": "",
+                            "volumes": null,
+                            "containers": [
+                                {
+                                    "name": "nginx",
+                                    "image": "dockerfile/nginx",
+                                    "ports": [
+                                        {
+                                            "hostPort": 31001,
+                                            "containerPort": 80,
+                                            "protocol": "TCP"
+                                        }
+                                    ]
+                                }
+                            ],
+                            "restartPolicy": {
+                                "always": {}
+                            }
+                        }
+                    },
+                    "labels": {
+                        "name": "nginx"
+                    }
+                }
+            },
+            "currentState": {
+                "replicas": 2,
+                "podTemplate": {
+                    "desiredState": {
+                        "manifest": {
+                            "version": "",
+                            "id": "",
+                            "volumes": null,
+                            "containers": null,
+                            "restartPolicy": {}
+                        }
+                    }
+                }
+            },
+            "labels": {
+                "name": "nginx"
+            }
+        }
+    ]
+}
 ```
 
 ### Test
