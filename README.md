@@ -68,7 +68,7 @@ $ ./bin/controller-manager -master=${servicehost}:8080
 Assuming your framework is running on `${servicehost}:8080`, then:
 
 ```shell
-$ curl -L http://${servicehost}:8080/api/v1beta1/pods -XPOST -d @examples/pod.json
+$ curl -L http://${servicehost}:8080/api/v1beta1/pods -XPOST -d @examples/pod-nginx.json
 ```
 
 After the pod get launched, you can check it's status via `curl` or your web browser:
@@ -78,59 +78,151 @@ $ curl -L http://${servicehost}:8080/api/v1beta1/pods
 
 ```json
 {
-	"kind": "PodList",
-	"items": [
-		{
-			"id": "php",
-			"labels": {
-				"name": "foo"
-			},
-			"desiredState": {
-				"manifest": {
-					"version": "v1beta1",
-					"id": "php",
-					"volumes": null,
-					"containers": [
-						{
-							"name": "nginx",
-							"image": "dockerfile/nginx",
-							"ports": [
-								{
-									"hostPort": 8080,
-									"containerPort": 80
-								}
-							],
-							"livenessProbe": {
-								"enabled": true,
-								"type": "http",
-								"httpGet": {
-									"path": "/index.html",
-									"port": "8080"
-								},
-								"initialDelaySeconds": 30
-							}
-						}
-					]
-				}
-			},
-			"currentState": {
-				"manifest": {
-					"version": "",
-					"id": "",
-					"volumes": null,
-					"containers": null
-				}
-			}
-		}
-	]
+    "kind": "PodList",
+    "creationTimestamp": null,
+    "apiVersion": "v1beta1",
+    "items": [
+        {
+            "id": "nginx-id-01",
+            "creationTimestamp": "2014-10-17T02:46:00Z",
+            "labels": {
+                "name": "foo"
+            },
+            "desiredState": {
+                "manifest": {
+                    "version": "v1beta1",
+                    "id": "nginx-id-01",
+                    "uuid": "ba48b2b2-55a7-11e4-8ec3-08002766f5aa",
+                    "volumes": null,
+                    "containers": [
+                        {
+                            "name": "nginx-01",
+                            "image": "dockerfile/nginx",
+                            "ports": [
+                                {
+                                    "hostPort": 31000,
+                                    "containerPort": 80,
+                                    "protocol": "TCP"
+                                }
+                            ],
+                            "livenessProbe": {
+                                "type": "http",
+                                "httpGet": {
+                                    "path": "/index.html",
+                                    "port": "8081"
+                                },
+                                "initialDelaySeconds": 30
+                            }
+                        }
+                    ],
+                    "restartPolicy": {
+                        "always": {}
+                    }
+                },
+                "status": "Running"
+            },
+            "currentState": {
+                "manifest": {
+                    "version": "v1beta1",
+                    "id": "nginx-id-01",
+                    "uuid": "ba48b2b2-55a7-11e4-8ec3-08002766f5aa",
+                    "volumes": null,
+                    "containers": [
+                        {
+                            "name": "nginx-01",
+                            "image": "dockerfile/nginx",
+                            "ports": [
+                                {
+                                    "hostPort": 31000,
+                                    "containerPort": 80,
+                                    "protocol": "TCP"
+                                }
+                            ],
+                            "livenessProbe": {
+                                "type": "http",
+                                "httpGet": {
+                                    "path": "/index.html",
+                                    "port": "8081"
+                                },
+                                "initialDelaySeconds": 30
+                            }
+                        }
+                    ],
+                    "restartPolicy": {
+                        "always": {}
+                    }
+                },
+                "status": "Waiting",
+                "info": {
+                    "net": {
+                        "Id": "6c4dd34a8d213bc276103985baee053e49cec5236706b7d56acf24441e0f975d",
+                        "Created": "2014-10-17T02:46:01.923547392Z",
+                        "Path": "/pause",
+                        "Config": {
+                            "Hostname": "nginx-id-01",
+                            "ExposedPorts": {
+                                "80/tcp": {}
+                            },
+                            "Env": [
+                                "HOME=/",
+                                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                            ],
+                            "Image": "kubernetes/pause:latest",
+                            "Entrypoint": [
+                                "/pause"
+                            ]
+                        },
+                        "State": {
+                            "Running": true,
+                            "Pid": 13594,
+                            "StartedAt": "2014-10-17T02:46:02.005492006Z",
+                            "FinishedAt": "0001-01-01T00:00:00Z"
+                        },
+                        "Image": "6c4579af347b649857e915521132f15a06186d73faa62145e3eeeb6be0e97c27",
+                        "NetworkSettings": {
+                            "IPAddress": "172.17.0.13",
+                            "IPPrefixLen": 16,
+                            "Gateway": "172.17.42.1",
+                            "Bridge": "docker0",
+                            "Ports": {
+                                "80/tcp": [
+                                    {
+                                        "HostIP": "0.0.0.0",
+                                        "HostPort": "31000"
+                                    }
+                                ]
+                            }
+                        },
+                        "ResolvConfPath": "/etc/resolv.conf",
+                        "HostnamePath": "/var/lib/docker/containers/6c4dd34a8d213bc276103985baee053e49cec5236706b7d56acf24441e0f975d/hostname",
+                        "HostsPath": "/var/lib/docker/containers/6c4dd34a8d213bc276103985baee053e49cec5236706b7d56acf24441e0f975d/hosts",
+                        "Name": "/k8s--net.fa4b7d08--nginx_-_id_-_01.etcd--ba48b2b2_-_55a7_-_11e4_-_8ec3_-_08002766f5aa--9acb0442",
+                        "Driver": "aufs",
+                        "HostConfig": {
+                            "PortBindings": {
+                                "80/tcp": [
+                                    {
+                                        "HostIP": "0.0.0.0",
+                                        "HostPort": "31000"
+                                    }
+                                ]
+                            },
+                            "RestartPolicy": {}
+                        }
+                    }
+                }
+            }
+        }
+    ]
 }
 ```
 
 Or, you can run `docker ps -a` to verify that the example container is running:
 
 ```shell
-CONTAINER ID        IMAGE                       COMMAND                CREATED             STATUS              PORTS               NAMES
-3fba73ff274a        busybox:buildroot-2014.02   sh -c 'rm -f nap &&    57 minutes ago                                              k8s--net--php--9acb0442   
+CONTAINER ID        IMAGE                     COMMAND                CREATED             STATUS              PORTS                   NAMES
+02d2d7c91d4f        dockerfile/nginx:latest   nginx                  24 seconds ago      Up 24 seconds                               k8s--nginx_-_01.249c7d76--nginx_-_id_-_01.etcd--ba48b2b2_-_55a7_-_11e4_-_8ec3_-_08002766f5aa--4d088f48
+6c4dd34a8d21        kubernetes/pause:latest   /pause                 5 minutes ago       Up 5 minutes        0.0.0.0:31000->80/tcp   k8s--net.fa4b7d08--nginx_-_id_-_01.etcd--ba48b2b2_-_55a7_-_11e4_-_8ec3_-_08002766f5aa--9acb0442
 ```
 
 ### Test
