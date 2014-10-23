@@ -63,12 +63,11 @@ func main() {
 		}
 	}
 
-	cfg := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
+	cfg := kconfig.NewPodConfig(kconfig.PodConfigNotificationIncremental)
 	var etcdClient tools.EtcdClient
 	if len(etcdServerList) > 0 {
-		log.Infof("Watching for etcd configs at %v", etcdServerList)
+		log.Infof("Connecting to etcd at %v", etcdServerList)
 		etcdClient = etcd.NewClient(etcdServerList)
-		kconfig.NewSourceEtcd(kconfig.EtcdKeyForHost(hostname), etcdClient, cfg.Channel("etcd"))
 	}
 
 	// Hack: Destroy existing k8s containers for now - we don't know how to reconcile yet.
@@ -92,10 +91,8 @@ func main() {
 	kl := kubelet.NewMainKubelet(hostname, dockerClient, nil, etcdClient, "/", *syncFrequency, *allowPrivileged)
 
 	driver := new(mesos.MesosExecutorDriver)
-	kubeletExecutor := executor.New(driver, kl)
+	kubeletExecutor := executor.New(driver, kl, cfg.Channel("mesos"))
 	driver.Executor = kubeletExecutor
-
-	go kubeletExecutor.RunKubelet()
 
 	log.V(2).Infof("Initialize executor driver...")
 	driver.Init()
@@ -138,6 +135,8 @@ func main() {
 		}
 	}
 	// Recover running containers from check pointed pod list.
+
+	go util.Forever(func() { kl.Run(cfg.Updates()) }, 0)
 
 	driver.Join()
 
