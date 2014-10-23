@@ -63,7 +63,7 @@ func main() {
 		}
 	}
 
-	cfg := kconfig.NewPodConfig(kconfig.PodConfigNotificationIncremental)
+	cfg := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
 	var etcdClient tools.EtcdClient
 	if len(etcdServerList) > 0 {
 		log.Infof("Connecting to etcd at %v", etcdServerList)
