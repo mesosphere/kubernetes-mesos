@@ -451,6 +451,7 @@ func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 			delete(k.podToTask, podId)
 		}
 	}
+	// TODO (jdefelice) delete from slave.tasks?
 }
 
 func (k *KubernetesScheduler) handleTaskKilled(taskStatus *mesos.TaskStatus) {
@@ -476,6 +477,7 @@ func (k *KubernetesScheduler) handleTaskKilled(taskStatus *mesos.TaskStatus) {
 			delete(k.podToTask, podId)
 		}
 	}
+	// TODO (jdefelice) delete from slave.tasks?
 }
 
 func (k *KubernetesScheduler) handleTaskLost(taskStatus *mesos.TaskStatus) {
@@ -500,6 +502,7 @@ func (k *KubernetesScheduler) handleTaskLost(taskStatus *mesos.TaskStatus) {
 			delete(k.podToTask, podId)
 		}
 	}
+	// TODO (jdefelice) delete from slave.tasks?
 }
 
 // FrameworkMessage is called when the scheduler receives a message from the executor.
@@ -617,7 +620,9 @@ func (k *KubernetesScheduler) ListPods(selector labels.Selector) (*api.PodList, 
 
 		var l labels.Set = pod.Labels
 		if selector.Matches(l) || selector.Empty() {
-			result = append(result, *(task.Pod))
+			// HACK!
+			pod.CurrentState.Status = api.PodRunning
+			result = append(result, pod)
 		}
 	}
 
