@@ -616,31 +616,32 @@ func (k *KubernetesScheduler) ListPods(selector labels.Selector) (*api.PodList, 
 
 	var result []api.Pod
 	for _, task := range k.runningTasks {
-		pod := *(task.Pod)
+		pod := task.Pod
 
 		var l labels.Set = pod.Labels
 		if selector.Matches(l) || selector.Empty() {
 			// HACK!
 			pod.CurrentState.Status = api.PodRunning
-			result = append(result, pod)
+			result = append(result, *pod)
 		}
 	}
 
 	// TODO(nnielsen): Refactor tasks append for the three lists.
 	for _, task := range k.pendingTasks {
-		pod := *(task.Pod)
+		pod := task.Pod
 
 		var l labels.Set = pod.Labels
 		if selector.Matches(l) || selector.Empty() {
-			result = append(result, *(task.Pod))
+			result = append(result, *pod)
 		}
 	}
 
 	// TODO(nnielsen): Wire up check in finished tasks
 
-	log.V(2).Infof("Returning pods: '%v'\n", result)
+	matches := &api.PodList{Items: result}
+	log.V(2).Infof("Returning pods: '%v'\n", matches)
 
-	return &api.PodList{Items: result}, nil
+	return matches, nil
 }
 
 // Get a specific pod.
