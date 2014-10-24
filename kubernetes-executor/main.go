@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -117,17 +119,30 @@ func main() {
 	var cmd *exec.Cmd
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
-		cmd = exec.Command("./proxy", "-etcd_servers="+etcdServerArguments)
+		cmd = exec.Command("./proxy", "-etcd_servers="+etcdServerArguments, "-logtostderr=true", "-v=1")
 	} else {
-		cmd = exec.Command("./proxy")
+		cmd = exec.Command("./proxy", "-logtostderr=true", "-v=1")
 	}
 	_, err = cmd.StdoutPipe()
 	if err != nil {
 		log.Fatal(err)
 	}
+	proxylogs, err := cmd.StderrPipe()
+	if err != nil {
+		log.Fatal(err)
+	}
+	logfile, err := os.Create("./proxy-log")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer logfile.Close()
+	writer := bufio.NewWriter(logfile)
+	defer writer.Flush()
+
 	if err := cmd.Start(); err != nil {
 		log.Fatal(err)
 	}
+	go io.Copy(writer, proxylogs)
 
 	// TODO(nnielsen): Factor check-pointing into subsystem.
 	dat, err := ioutil.ReadFile("/tmp/kubernetes-pods")
