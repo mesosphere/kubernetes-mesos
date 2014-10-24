@@ -34,10 +34,11 @@ type KubernetesExecutor struct {
 	tasks      map[string]*kuberTask
 	pods       map[string]*kubelet.Pod
         lock       sync.RWMutex
+	namespace  string
 }
 
 // New creates a new kubernete executor.
-func New(driver mesos.ExecutorDriver, kl *kubelet.Kubelet, ch chan<- interface{}) *KubernetesExecutor {
+func New(driver mesos.ExecutorDriver, kl *kubelet.Kubelet, ch chan<- interface{}, ns string) *KubernetesExecutor {
 	return &KubernetesExecutor{
 		kl:         kl,
 		updateChan: ch,
@@ -45,6 +46,7 @@ func New(driver mesos.ExecutorDriver, kl *kubelet.Kubelet, ch chan<- interface{}
 		registered: false,
 		tasks:      make(map[string]*kuberTask),
 		pods:       make(map[string]*kubelet.Pod),
+		namespace:  ns,
 	}
 }
 
@@ -112,13 +114,13 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 
 	pod := kubelet.Pod{
 		Name:      podID,
-		Namespace: "mesos",
+		Namespace: k.namespace,
 		Manifest:  manifest,
 	}
 	k.pods[podID] = &pod
 
 	getPidInfo := func(name string) (api.PodInfo, error) {
-		podFullName := kubelet.GetPodFullName(&kubelet.Pod{Name: name, Namespace: "mesos"})
+		podFullName := kubelet.GetPodFullName(&kubelet.Pod{Name: name, Namespace: k.namespace})
 
 		info, err := k.kl.GetPodInfo(podFullName, uuid)
 		if err == dockertools.ErrNoContainersInPod {

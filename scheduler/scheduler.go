@@ -11,11 +11,9 @@ import (
 	"code.google.com/p/go-uuid/uuid"
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	apierrors "github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
@@ -466,7 +464,7 @@ func (k *KubernetesScheduler) handleTaskKilled(taskStatus *mesos.TaskStatus) {
 	}
 
 	if podId != "" {
-		log.V(2).Infof("Trying to delete pod: %s", podId)
+		log.V(2).Infof("Deleting pod-task mapping: %s", podId)
 		_, exists := k.podToTask[podId]
 		if exists {
 			delete(k.podToTask, podId)
@@ -695,10 +693,10 @@ func (k *KubernetesScheduler) CreatePod(pod *api.Pod) error {
 	return nil
 }
 
-// implements binding.Registry
+// implements binding.Registry, launches the pod-associated-task in mesos
 func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
-	k.RLock()
-	defer k.RUnlock()
+	k.Lock()
+	defer k.Unlock()
 
 	podId := binding.PodID
 	taskId, exists := k.podToTask[podId]
@@ -718,9 +716,9 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 		return fmt.Errorf("Failed to launch task for pod %s: %v", podId, err)
 	}
 	task.Launched = true
-
-	// TODO(jdefelice): Wait for confirmation that the kublet is running before binding to etcd
-	return k.client.Post().Path("bindings").Body(binding).Do().Error()
+	// we *intentionally* do not record our binding to etcd since we're not using bindings
+	// to manage pod lifecycle
+	return nil
 }
 
 // Update an existing pod.
@@ -733,12 +731,6 @@ func (k *KubernetesScheduler) UpdatePod(pod *api.Pod) error {
 // Delete an existing pod.
 func (k *KubernetesScheduler) DeletePod(podId string) error {
 	log.V(2).Infof("Delete pod '%s'\n", podId)
-
-	if err := k.unbindPod(podId); err != nil {
-		log.Warningf("Failed to unbind pod '%s' from etcd: %v", podId, err)
-		// proceed to attempt task removal anyway since we may have already
-		// launched a task for this pod but the binding may have failed
-	}
 
 	k.Lock()
 	defer k.Unlock()
@@ -772,66 +764,6 @@ func (k *KubernetesScheduler) DeletePod(podId string) error {
 	}
 
 	return fmt.Errorf("Cannot kill pod '%s': pod not found", podId)
-}
-
-// HACK copied from pkg.registry.etcd; should not need to do this once our scheduler is
-// refactored to use the default kubernetes master pod registry
-func (k *KubernetesScheduler) unbindPod(podId string) error {
-	var pod api.Pod
-	podKey := makePodKey(podId)
-	err := k.ExtractObj(podKey, &pod, false)
-	if tools.IsEtcdNotFound(err) {
-		return apierrors.NewNotFound("pod", podId)
-	}
-	if err != nil {
-		return err
-	}
-	// First delete the pod, so a scheduler doesn't notice it getting removed from the
-	// machine and attempt to put it somewhere.
-	err = k.Delete(podKey, true)
-	if tools.IsEtcdNotFound(err) {
-		return apierrors.NewNotFound("pod", podId)
-	}
-	if err != nil {
-		return err
-	}
-	machine := pod.DesiredState.Host
-	if machine == "" {
-		// Pod was never scheduled anywhere, just return.
-		return nil
-	}
-	// Next, remove the pod from the machine atomically.
-	contKey := makeContainerKey(machine)
-	return k.AtomicUpdate(contKey, &api.ContainerManifestList{}, func(in runtime.Object) (runtime.Object, error) {
-		manifests := in.(*api.ContainerManifestList)
-		newManifests := make([]api.ContainerManifest, 0, len(manifests.Items))
-		found := false
-		for _, manifest := range manifests.Items {
-			if manifest.ID != podId {
-				newManifests = append(newManifests, manifest)
-			} else {
-				found = true
-			}
-		}
-		if !found {
-			// This really shouldn't happen, it indicates something is broken, and likely
-			// there is a lost pod somewhere.
-			// However it is "deleted" so log it and move on
-			log.Infof("Couldn't find: %s in %#v", podId, manifests)
-		}
-		manifests.Items = newManifests
-		return manifests, nil
-	})
-}
-
-// needed by unbindPod
-func makePodKey(podId string) string {
-	return "/registry/pods/" + podId
-}
-
-// needed by unbindPod
-func makeContainerKey(machine string) string {
-	return "/registry/hosts/" + machine + "/kubelet"
 }
 
 func (k *KubernetesScheduler) WatchPods(resourceVersion uint64, filter func(*api.Pod) bool) (watch.Interface, error) {

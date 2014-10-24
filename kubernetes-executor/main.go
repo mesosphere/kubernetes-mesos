@@ -29,6 +29,10 @@ var (
 	allowPrivileged  = flag.Bool("allow_privileged", false, "If true, allow containers to request privileged mode.")
 )
 
+const (
+	POD_NS string = "mesos"	// k8s pod namespace
+)
+
 func main() {
 	flag.Var(&etcdServerList, "etcd_servers", "List of etcd servers to watch (http://ip:port), comma separated")
 
@@ -91,7 +95,7 @@ func main() {
 	kl := kubelet.NewMainKubelet(hostname, dockerClient, nil, etcdClient, "/", *syncFrequency, *allowPrivileged)
 
 	driver := new(mesos.MesosExecutorDriver)
-	kubeletExecutor := executor.New(driver, kl, cfg.Channel("mesos"))
+	kubeletExecutor := executor.New(driver, kl, cfg.Channel(POD_NS), POD_NS)
 	driver.Executor = kubeletExecutor
 
 	log.V(2).Infof("Initialize executor driver...")
@@ -106,7 +110,7 @@ func main() {
 	go util.Forever(func() {
 		// TODO(nnielsen): Don't hardwire port, but use port from
 		// resource offer.
-		kubelet.ListenAndServeKubeletServer(kl, cfg.Channel("http"), hostname, 10250)
+		executor.ListenAndServeKubeletServer(kl, cfg.Channel("http"), hostname, 10250, POD_NS)
 	}, 1*time.Second)
 
 	log.V(2).Infof("Starting proxy process...")
