@@ -314,9 +314,15 @@ func (k *KubernetesScheduler) OfferRescinded(driver mesos.SchedulerDriver, offer
 	k.Lock()
 	defer k.Unlock()
 
-	slaveId := k.offers[offerId.GetValue()].GetSlaveId().GetValue()
-	delete(k.offers, offerId.GetValue())
-	delete(k.slaves[slaveId].Offers, offerId.GetValue())
+	oid := offerId.GetValue()
+	slaveId := k.offers[oid].GetSlaveId().GetValue()
+	delete(k.offers, oid)
+
+	if slave, found := k.slaves[slaveId]; !found {
+		log.Warningf("No slave for id %s associated with rescinded offer id %s", slaveId, oid)
+	} else {
+		delete(slave.Offers, oid)
+	}
 }
 
 // StatusUpdate is called when a status update message is sent to the scheduler.
