@@ -390,6 +390,19 @@ func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 		err := json.Unmarshal(taskStatus.Data, &target)
 		if err == nil {
 			task.Pod.CurrentState.Info = target
+			/// XXX this is problematic using default Docker networking on a default
+			/// Docker bridge -- meaning that pod IP's are not routable across the
+			/// k8s-mesos cluster. For now, I've duplicated logic from k8s fillPodInfo
+			netContainerInfo, ok := target["net"] // docker.Container
+			if ok {
+				if netContainerInfo.NetworkSettings != nil {
+					task.Pod.CurrentState.PodIP = netContainerInfo.NetworkSettings.IPAddress
+				} else {
+					log.Warningf("No network settings: %#v", netContainerInfo)
+				}
+			} else {
+				log.Warningf("Couldn't find network container for %s in %v", task.Pod.ID, target)
+			}
 		}
 	}
 
