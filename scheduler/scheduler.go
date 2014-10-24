@@ -404,6 +404,8 @@ func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 				log.Warningf("Couldn't find network container for %s in %v", task.Pod.ID, target)
 			}
 		}
+	} else {
+		log.Warningf("Missing Data for task '%v'", taskId)
 	}
 
 	k.runningTasks[taskId] = task
