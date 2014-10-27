@@ -307,22 +307,26 @@ func (k *KubernetesScheduler) ResourceOffers(driver mesos.SchedulerDriver, offer
 	k.doSchedule()
 }
 
+// requires the caller to have locked the offers and slaves state
+func (k *KubernetesScheduler) deleteOffer(oid string) {
+	slaveId := k.offers[oid].GetSlaveId().GetValue()
+	delete(k.offers, oid)
+
+	if slave, found := k.slaves[slaveId]; !found {
+		log.Warningf("No slave for id %s associated with offer id %s", slaveId, oid)
+	} else {
+		delete(slave.Offers, oid)
+	}
+}
+
 // OfferRescinded is called when the resources are recinded from the scheduler.
 func (k *KubernetesScheduler) OfferRescinded(driver mesos.SchedulerDriver, offerId *mesos.OfferID) {
 	log.Infof("Offer rescinded %v\n", offerId)
 
 	k.Lock()
 	defer k.Unlock()
-
 	oid := offerId.GetValue()
-	slaveId := k.offers[oid].GetSlaveId().GetValue()
-	delete(k.offers, oid)
-
-	if slave, found := k.slaves[slaveId]; !found {
-		log.Warningf("No slave for id %s associated with rescinded offer id %s", slaveId, oid)
-	} else {
-		delete(slave.Offers, oid)
-	}
+	k.deleteOffer(oid)
 }
 
 // StatusUpdate is called when a status update message is sent to the scheduler.
@@ -381,9 +385,9 @@ func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 
 	log.Infof("Received running status: '%v'", taskStatus)
 
-	task.Pod.CurrentState.Status = api.PodRunning
+	task.Pod.CurrentState.Status = task.Pod.DesiredState.Status
 	task.Pod.CurrentState.Manifest = task.Pod.DesiredState.Manifest
-	task.Pod.CurrentState.Host = slave.HostName
+	task.Pod.CurrentState.Host = task.Pod.DesiredState.Host
 
 	if taskStatus.Data != nil {
 		var target api.PodInfo
@@ -576,9 +580,7 @@ func (k *KubernetesScheduler) doSchedule() {
 		// Subtract offers.
 		for _, task := range tasks {
 			for _, offerId := range task.OfferIds {
-				slaveId := task.TaskInfo.GetSlaveId().GetValue()
-				delete(k.offers, offerId)
-				delete(k.slaves[slaveId].Offers, offerId)
+				k.deleteOffer(offerId)
 			}
 		}
 	}
@@ -635,8 +637,6 @@ func (k *KubernetesScheduler) ListPods(selector labels.Selector) (*api.PodList, 
 
 		var l labels.Set = pod.Labels
 		if selector.Matches(l) || selector.Empty() {
-			// HACK!
-			pod.CurrentState.Status = api.PodRunning
 			result = append(result, *pod)
 		}
 	}
@@ -683,8 +683,6 @@ func (k *KubernetesScheduler) GetPod(podId string) (*api.Pod, error) {
 	}
 	if task, exists := k.runningTasks[taskId]; exists {
 		log.V(2).Infof("Running Pod '%s': %v", podId, task.Pod)
-		// HACK!
-		task.Pod.CurrentState.Status = api.PodRunning
 		return task.Pod, nil
 	}
 	return nil, fmt.Errorf("Unknown Pod %v", podId)
@@ -740,9 +738,12 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	log.V(2).Infof("Launching task : %v", task)
 	offerId := &mesos.OfferID{Value: proto.String(task.OfferIds[0])}
 	if err := k.Driver.LaunchTasks(offerId, []*mesos.TaskInfo{task.TaskInfo}, nil); err != nil {
+		// TODO(jdefelice): should we attempt to reschedule the pod here?
 		return fmt.Errorf("Failed to launch task for pod %s: %v", podId, err)
 	}
+	task.Pod.DesiredState.Host = binding.Host
 	task.Launched = true
+
 	// we *intentionally* do not record our binding to etcd since we're not using bindings
 	// to manage pod lifecycle
 	return nil
@@ -808,9 +809,10 @@ func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, tasks ma
 			for _, offer := range slave.Offers {
 				if !task.AcceptOffer(slaveId, offer) {
 					log.V(2).Infof("Declining offer %v", offer)
-					k.Driver.DeclineOffer(offer.Id, nil)
-					delete(k.offers, offer.Id.GetValue())
-					delete(k.slaves[slaveId].Offers, offer.Id.GetValue())
+					if err := k.Driver.DeclineOffer(offer.Id, nil); err != nil {
+						log.Warningf("Failed to decline offer %v", offer.Id)
+					}
+					k.deleteOffer(offer.Id.GetValue())
 					continue
 				}
 
