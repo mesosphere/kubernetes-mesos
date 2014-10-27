@@ -8,7 +8,6 @@ import (
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	"gopkg.in/v1/yaml"
@@ -121,13 +120,7 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 
 	getPidInfo := func(name string) (api.PodInfo, error) {
 		podFullName := kubelet.GetPodFullName(&kubelet.Pod{Name: name, Namespace: k.namespace})
-
-		info, err := k.kl.GetPodInfo(podFullName, uuid)
-		if err == dockertools.ErrNoContainersInPod {
-			return nil, err
-		}
-
-		return info, nil
+		return k.kl.GetPodInfo(podFullName, uuid)
 	}
 
 	// TODO(nnielsen): Fail if container is already running.
