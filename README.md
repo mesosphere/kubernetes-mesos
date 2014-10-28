@@ -6,7 +6,15 @@ When [Google Kubernetes](https://github.com/GoogleCloudPlatform/kubernetes) meet
 
 [![GoDoc] (https://godoc.org/github.com/mesosphere/kubernetes-mesos?status.png)](https://godoc.org/github.com/mesosphere/kubernetes-mesos)
 
-Kubernetes and Mesos are a match made in heaven. Kubernetes enables the Pod (group of co-located containers) abstraction, along with Pod labels for service discovery, load-balancing, and replication control. Mesos provides the fine-grained resource allocations for pods across nodes in a cluster, and can make Kubernetes play nicely with other frameworks running on the same cluster resources. Within the Kubernetes framework for Mesos, the framework scheduler first registers with Mesos and begins watching etcd's pod registry, and then Mesos offers the scheduler sets of available resources from the cluster nodes (slaves/minions). The scheduler matches Mesos' resource offers to unassigned Kubernetes pods, and then sends a launchTasks message to the Mesos master, which claims the resources and forwards the request onto the appropriate slave. The slave then fetches the kubelet/executor and starts running it. Once the scheduler knows that there are resource claimed for the kubelet to launch its pod, the scheduler writes a Binding to etcd to assign the pod to a specific host. The appropriate kubelet notices the assignment, pulls down the pod, and runs it.
+Kubernetes and Mesos are a match made in heaven.
+Kubernetes enables the Pod (group of co-located containers) abstraction, along with Pod labels for service discovery, load-balancing, and replication control.
+Mesos provides the fine-grained resource allocations for pods across nodes in a cluster, and can make Kubernetes play nicely with other frameworks running on the same cluster resources.
+
+Within the Kubernetes framework for Mesos the framework scheduler first registers with Mesos and begins accepting API requests.
+At some point Mesos offers the scheduler sets of available resources from the cluster nodes (slaves/minions).
+Once the scheduler is able to match a Mesos resource offer to an unassigned Kubernetes pod it marks the pod for execution on the slave and then sends a launchTasks message to the Mesos master.
+Mesos marks the resources as claimed and then forwards the request onto the appropriate slave.
+The slave fetches the kubelet/executor and starts running it, spawning the pod containers and communicating the task status back to Mesos.
 
 ### Roadmap
 This is still very much a work-in-progress, but stay tuned for updates as we continue development. If you have ideas or patches, feel free to contribute!
@@ -65,6 +73,9 @@ To enable replication control, start a kubernetes controller instance:
 ```shell
 $ ./bin/controller-manager -master=${servicehost}:8080
 ```
+
+You can increase logging by including, for example `-v=2`.
+This can be very helpful while debugging.
 
 ###Launch a Pod
 
