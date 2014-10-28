@@ -32,7 +32,7 @@ type KubernetesExecutor struct {
 	registered bool
 	tasks      map[string]*kuberTask
 	pods       map[string]*kubelet.Pod
-        lock       sync.RWMutex
+	lock       sync.RWMutex
 	namespace  string
 }
 
@@ -190,7 +190,7 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 
 // Returns true if the pod becomes unkown and there is on longer a task record on file
 // TODO (jdefelice) don't send false alarms for deleted pods (KILLED tasks)
-func (k *KubernetesExecutor) checkForLostPodTask(taskInfo *mesos.TaskInfo, isKnownPod func() bool ) bool {
+func (k *KubernetesExecutor) checkForLostPodTask(taskInfo *mesos.TaskInfo, isKnownPod func() bool) bool {
 	k.lock.RLock()
 	defer k.lock.RUnlock()
 

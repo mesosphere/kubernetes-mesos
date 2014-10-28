@@ -32,7 +32,7 @@ var (
 )
 
 const (
-	POD_NS string = "mesos"	// k8s pod namespace
+	POD_NS string = "mesos" // k8s pod namespace
 )
 
 func main() {
