@@ -39,7 +39,6 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/pod"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/service"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
-	endpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
 
 	kscheduler "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
@@ -49,6 +48,7 @@ import (
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	kmscheduler "github.com/mesosphere/kubernetes-mesos/scheduler"
+	endpoint "github.com/mesosphere/kubernetes-mesos/service"
 )
 
 var (
