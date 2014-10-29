@@ -54,11 +54,14 @@ require-vendor:
 
 framework: require-godep
 	env $(WITH_MESOS_CGO_FLAGS) go install $${WITH_RACE:+-race} \
-	  github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
+	  github.com/mesosphere/kubernetes-mesos/kubernetes-mesos \
+	  github.com/mesosphere/kubernetes-mesos/kubernetes-executor
 
 format: require-gopath
-	go fmt	github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor} \
-		github.com/mesosphere/kubernetes-mesos/{scheduler,executor}
+	go fmt	github.com/mesosphere/kubernetes-mesos/kubernetes-mesos \
+		github.com/mesosphere/kubernetes-mesos/kubernetes-executor \
+		github.com/mesosphere/kubernetes-mesos/scheduler \
+		github.com/mesosphere/kubernetes-mesos/executor
 
 install: all
 	mkdir -p $(DESTDIR)
