@@ -7,6 +7,7 @@ current_dir	:= $(patsubst %/,%,$(dir $(mkfile_path)))
 fail		:= ${MAKE} --no-print-directory --quiet -f $(current_dir)/Makefile error
 
 PROXY_SRC	:= github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
+CONTROLLER_SRC	:= github.com/GoogleCloudPlatform/kubernetes/cmd/controller-manager
 
 # TODO: make this something more reasonable
 DESTDIR		?= /target
@@ -47,20 +48,25 @@ require-gopath:
 
 proxy: require-godep
 	go install $(PROXY_SRC)
+	go install $(CONTROLLER_SRC)
 
 require-vendor:
 
 framework: require-godep
-	env $(WITH_MESOS_CGO_FLAGS) go install \
-	  github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
+	env $(WITH_MESOS_CGO_FLAGS) go install $${WITH_RACE:+-race} \
+	  github.com/mesosphere/kubernetes-mesos/kubernetes-mesos \
+	  github.com/mesosphere/kubernetes-mesos/kubernetes-executor
 
 format: require-gopath
-	go fmt github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
+	go fmt	github.com/mesosphere/kubernetes-mesos/kubernetes-mesos \
+		github.com/mesosphere/kubernetes-mesos/kubernetes-executor \
+		github.com/mesosphere/kubernetes-mesos/scheduler \
+		github.com/mesosphere/kubernetes-mesos/executor
 
 install: all
 	mkdir -p $(DESTDIR)
 	(pkg="$(GOPATH)"; pkg="$${pkg%%:*}"; \
-	 /bin/cp -vpf -t $(DESTDIR) "$${pkg}"/bin/{proxy,kubernetes-mesos,kubernetes-executor})
+	 /bin/cp -vpf -t $(DESTDIR) "$${pkg}"/bin/{proxy,controller-manager,kubernetes-mesos,kubernetes-executor})
 
 info:
 	@echo GOPATH=$(GOPATH)
@@ -68,6 +74,7 @@ info:
 	@echo CGO_CPPFLAGS="$(CGO_CPPFLAGS)"
 	@echo CGO_CXXFLAGS="$(CGO_CXXFLAGS)"
 	@echo CGO_LDFLAGS="$(CGO_LDFLAGS)"
+	@echo RACE_FLAGS=$${WITH_RACE:+-race}
 
 bootstrap: require-godep
 	godep restore
