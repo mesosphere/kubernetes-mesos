@@ -2,22 +2,20 @@ package executor
 
 import (
 	"encoding/json"
+	"sync"
 	"time"
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	"gopkg.in/v1/yaml"
 )
 
 const (
-	defaultChanSize   = 1024
 	containerPollTime = 300 * time.Millisecond
 	launchGracePeriod = 5 * time.Minute
-	maxPods           = 256
 )
 
 type kuberTask struct {
@@ -29,38 +27,26 @@ type kuberTask struct {
 // in a minion machine.
 type KubernetesExecutor struct {
 	kl         *kubelet.Kubelet // the kubelet instance.
-	updateChan chan kubelet.PodUpdate
+	updateChan chan<- interface{}
 	driver     mesos.ExecutorDriver
 	registered bool
 	tasks      map[string]*kuberTask
-	pods       []kubelet.Pod
+	pods       map[string]*kubelet.Pod
+	lock       sync.RWMutex
+	namespace  string
 }
 
-// New creates a new kubernete executor.
-func New(driver mesos.ExecutorDriver, kl *kubelet.Kubelet) *KubernetesExecutor {
+// New creates a new kubernetes executor.
+func New(driver mesos.ExecutorDriver, kl *kubelet.Kubelet, ch chan<- interface{}, ns string) *KubernetesExecutor {
 	return &KubernetesExecutor{
 		kl:         kl,
-		updateChan: make(chan kubelet.PodUpdate, defaultChanSize),
+		updateChan: ch,
 		driver:     driver,
 		registered: false,
 		tasks:      make(map[string]*kuberTask),
+		pods:       make(map[string]*kubelet.Pod),
+		namespace:  ns,
 	}
-}
-
-// Runkubelet runs the kubelet.
-func (k *KubernetesExecutor) RunKubelet() {
-	k.kl.Run(k.updateChan)
-}
-
-func (k *KubernetesExecutor) gatherContainerManifests() []api.ContainerManifest {
-	var manifests []api.ContainerManifest
-	for _, task := range k.tasks {
-		manifests = append(manifests, *task.containerManifest)
-	}
-	return manifests
-}
-
-func (k *KubernetesExecutor) checkpoint() {
 }
 
 // Registered is called when the executor is successfully registered with the slave.
@@ -95,6 +81,9 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 		return
 	}
 
+	k.lock.Lock()
+	defer k.lock.Unlock()
+
 	taskId := taskInfo.GetTaskId().GetValue()
 	if _, found := k.tasks[taskId]; found {
 		log.Warningf("Task already launched\n")
@@ -122,34 +111,25 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 		containerManifest: &manifest,
 	}
 
-	k.pods = append(k.pods, kubelet.Pod{
+	pod := kubelet.Pod{
 		Name:      podID,
-		Namespace: "etcd",
+		Namespace: k.namespace,
 		Manifest:  manifest,
-	})
+	}
+	k.pods[podID] = &pod
 
 	getPidInfo := func(name string) (api.PodInfo, error) {
-		podFullName := kubelet.GetPodFullName(&kubelet.Pod{Name: name, Namespace: "etcd"})
-
-		info, err := k.kl.GetPodInfo(podFullName, uuid)
-		if err == dockertools.ErrNoContainersInPod {
-			return nil, err
-		}
-
-		return info, nil
+		podFullName := kubelet.GetPodFullName(&kubelet.Pod{Name: name, Namespace: k.namespace})
+		return k.kl.GetPodInfo(podFullName, uuid)
 	}
 
 	// TODO(nnielsen): Fail if container is already running.
-
-	// Checkpoint pods.
+	// TODO(nnielsen) Checkpoint pods.
 
 	// Send the pod updates to the channel.
-	// TODO(yifan): Replace SET with ADD when it's implemented.
-	// TODO(nnielsen): Incoming launch requests end up destroying already
-	// running pods.
-	update := kubelet.PodUpdate{
-		Pods: k.pods,
-		Op:   kubelet.SET,
+	update := kubelet.PodUpdate{Op: kubelet.SET}
+	for _, p := range k.pods {
+		update.Pods = append(update.Pods, *p)
 	}
 	k.updateChan <- update
 
@@ -187,16 +167,19 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 			}
 
 			// TODO(nnielsen): Monitor health of container and report if lost.
+			// Should we also allow this to fail a couple of times before reporting lost?
+			// What if the docker daemon is restarting and we can't connect, but it's
+			// going to bring the pods back online as soon as it restarts?
+			knownPod := func() bool {
+				_, err := getPidInfo(podID)
+				return err == nil
+			}
 			go func() {
+				// Wait for the pod to go away and stop monitoring once it does
+				// TODO (jdefelice) replace with an /events watch?
 				for {
 					time.Sleep(containerPollTime)
-					_, err := getPidInfo(podID)
-					if err != nil {
-						if _, ok := k.tasks[taskId]; !ok {
-							log.Infof("Ignoring lost container: task not present")
-							return
-						}
-						k.sendStatusUpdate(taskInfo.GetTaskId(), mesos.TaskState_TASK_LOST, "Task lost: container disappeared")
+					if k.checkForLostPodTask(taskInfo, knownPod) {
 						return
 					}
 				}
@@ -204,36 +187,76 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 
 			return
 		}
+		// TODO(jdefelice) remove the task (and pod state) here?
 		k.sendStatusUpdate(taskInfo.GetTaskId(), mesos.TaskState_TASK_LOST, "Task lost: launch failed")
 	}()
 }
 
+// Intended to be executed as part of the pod monitoring loop, this fn (ultimately) checks with Docker
+// whether the pod is running and will return true if the pod becomes unkown. If there's still a task
+// record on file, but no pod in Docker, then we'll also send a TASK_LOST event.
+func (k *KubernetesExecutor) checkForLostPodTask(taskInfo *mesos.TaskInfo, isKnownPod func() bool) bool {
+	// TODO (jdefelice) don't send false alarms for deleted pods (KILLED tasks)
+	k.lock.RLock()
+	defer k.lock.RUnlock()
+
+	if !isKnownPod() {
+		taskId := taskInfo.GetTaskId().GetValue()
+		if _, ok := k.tasks[taskId]; !ok {
+			log.Infof("Ignoring lost container: task not present")
+		} else {
+			// TODO(jdefelice) remove the task (and pod state) here?
+			k.sendStatusUpdate(taskInfo.GetTaskId(), mesos.TaskState_TASK_LOST, "Task lost: container disappeared")
+		}
+		return true
+	}
+	return false
+}
+
 // KillTask is called when the executor receives a request to kill a task.
 func (k *KubernetesExecutor) KillTask(driver mesos.ExecutorDriver, taskId *mesos.TaskID) {
+	k.lock.Lock()
+	defer k.lock.Unlock()
+
 	log.Infof("Kill task %v\n", taskId)
 
 	if !k.registered {
+		//TODO(jdefelice) sent TASK_LOST here?
 		log.Warningf("Ignore kill task because the executor is disconnected\n")
 		return
 	}
 
-	tid := taskId.GetValue()
-	if _, ok := k.tasks[tid]; !ok {
+	k.killPodForTask(taskId.GetValue(), "Task killed")
+}
+
+// Kills the pod associated with the given task. Assumes that the caller is locking around
+// pod and task storage.
+func (k *KubernetesExecutor) killPodForTask(tid, reason string) {
+	task, ok := k.tasks[tid]
+	if !ok {
 		log.Infof("Failed to kill task, unknown task %v\n", tid)
 		return
 	}
 	delete(k.tasks, tid)
 
-	// Send the pod updates to the channel.
-	// TODO(yifan): Replace SET with REMOVE when it's implemented.
-	update := kubelet.PodUpdate{
-		Pods: []kubelet.Pod{},
-		Op:   kubelet.SET,
+	// TODO(nnielsen): Verify this assumption. Manifest ID's has been marked
+	// to be deprecated.
+	pid := task.containerManifest.ID
+	if _, found := k.pods[pid]; !found {
+		log.Warningf("Cannot remove Unknown pod %v\n", pid)
+	} else {
+		delete(k.pods, pid)
+
+		// Send the pod updates to the channel.
+		update := kubelet.PodUpdate{Op: kubelet.SET}
+		for _, p := range k.pods {
+			update.Pods = append(update.Pods, *p)
+		}
+		k.updateChan <- update
 	}
-	k.updateChan <- update
 	// TODO(yifan): Check the result of the kill event.
 
-	k.sendStatusUpdate(taskId, mesos.TaskState_TASK_KILLED, "Task killed")
+	k.sendStatusUpdate(task.mesosTaskInfo.GetTaskId(), mesos.TaskState_TASK_KILLED, reason)
 }
 
 // FrameworkMessage is called when the framework sends some message to the executor
@@ -246,20 +269,11 @@ func (k *KubernetesExecutor) FrameworkMessage(driver mesos.ExecutorDriver, messa
 func (k *KubernetesExecutor) Shutdown(driver mesos.ExecutorDriver) {
 	log.Infof("Shutdown the executor\n")
 
-	for tid, task := range k.tasks {
-		delete(k.tasks, tid)
+	k.lock.Lock()
+	defer k.lock.Unlock()
 
-		// Send the pod updates to the channel.
-		// TODO(yifan): Replace SET with REMOVE when it's implemented.
-		update := kubelet.PodUpdate{
-			Pods: []kubelet.Pod{},
-			Op:   kubelet.SET,
-		}
-		k.updateChan <- update
-		// TODO(yifan): Check the result of the kill event.
-
-		k.sendStatusUpdate(task.mesosTaskInfo.GetTaskId(),
-			mesos.TaskState_TASK_KILLED, "Executor shutdown")
+	for tid, _ := range k.tasks {
+		k.killPodForTask(tid, "Executor shutdown")
 	}
 }
 

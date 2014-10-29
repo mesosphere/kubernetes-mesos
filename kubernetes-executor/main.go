@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -27,6 +29,10 @@ var (
 	dockerEndpoint   = flag.String("docker_endpoint", "", "If non-empty, use this for the docker endpoint to communicate with")
 	etcdServerList   util.StringList
 	allowPrivileged  = flag.Bool("allow_privileged", false, "If true, allow containers to request privileged mode.")
+)
+
+const (
+	POD_NS string = "mesos" // k8s pod namespace
 )
 
 func main() {
@@ -66,9 +72,8 @@ func main() {
 	cfg := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
 	var etcdClient tools.EtcdClient
 	if len(etcdServerList) > 0 {
-		log.Infof("Watching for etcd configs at %v", etcdServerList)
+		log.Infof("Connecting to etcd at %v", etcdServerList)
 		etcdClient = etcd.NewClient(etcdServerList)
-		kconfig.NewSourceEtcd(kconfig.EtcdKeyForHost(hostname), etcdClient, cfg.Channel("etcd"))
 	}
 
 	// Hack: Destroy existing k8s containers for now - we don't know how to reconcile yet.
@@ -92,10 +97,8 @@ func main() {
 	kl := kubelet.NewMainKubelet(hostname, dockerClient, nil, etcdClient, "/", *syncFrequency, *allowPrivileged)
 
 	driver := new(mesos.MesosExecutorDriver)
-	kubeletExecutor := executor.New(driver, kl)
+	kubeletExecutor := executor.New(driver, kl, cfg.Channel(POD_NS), POD_NS)
 	driver.Executor = kubeletExecutor
-
-	go kubeletExecutor.RunKubelet()
 
 	log.V(2).Infof("Initialize executor driver...")
 	driver.Init()
@@ -109,24 +112,37 @@ func main() {
 	go util.Forever(func() {
 		// TODO(nnielsen): Don't hardwire port, but use port from
 		// resource offer.
-		kubelet.ListenAndServeKubeletServer(kl, cfg.Channel("http"), hostname, 10250)
+		executor.ListenAndServeKubeletServer(kl, cfg.Channel("http"), hostname, 10250, POD_NS)
 	}, 1*time.Second)
 
 	log.V(2).Infof("Starting proxy process...")
 	var cmd *exec.Cmd
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
-		cmd = exec.Command("./proxy", "-etcd_servers="+etcdServerArguments)
+		cmd = exec.Command("./proxy", "-etcd_servers="+etcdServerArguments, "-logtostderr=true", "-v=1")
 	} else {
-		cmd = exec.Command("./proxy")
+		cmd = exec.Command("./proxy", "-logtostderr=true", "-v=1")
 	}
 	_, err = cmd.StdoutPipe()
 	if err != nil {
 		log.Fatal(err)
 	}
+	proxylogs, err := cmd.StderrPipe()
+	if err != nil {
+		log.Fatal(err)
+	}
+	logfile, err := os.Create("./proxy-log")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer logfile.Close()
+	writer := bufio.NewWriter(logfile)
+	defer writer.Flush()
+
 	if err := cmd.Start(); err != nil {
 		log.Fatal(err)
 	}
+	go io.Copy(writer, proxylogs)
 
 	// TODO(nnielsen): Factor check-pointing into subsystem.
 	dat, err := ioutil.ReadFile("/tmp/kubernetes-pods")
@@ -138,6 +154,8 @@ func main() {
 		}
 	}
 	// Recover running containers from check pointed pod list.
+
+	go util.Forever(func() { kl.Run(cfg.Updates()) }, 0)
 
 	driver.Join()
 
