@@ -36,7 +36,7 @@ type KubernetesExecutor struct {
 	namespace  string
 }
 
-// New creates a new kubernete executor.
+// New creates a new kubernetes executor.
 func New(driver mesos.ExecutorDriver, kl *kubelet.Kubelet, ch chan<- interface{}, ns string) *KubernetesExecutor {
 	return &KubernetesExecutor{
 		kl:         kl,
@@ -124,7 +124,7 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 	}
 
 	// TODO(nnielsen): Fail if container is already running.
-	// TODO Checkpoint pods.
+	// TODO(nnielsen) Checkpoint pods.
 
 	// Send the pod updates to the channel.
 	update := kubelet.PodUpdate{Op: kubelet.SET}
@@ -167,11 +167,14 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 			}
 
 			// TODO(nnielsen): Monitor health of container and report if lost.
+			// Should we also allow this to fail a couple of times before reporting lost?
+			// What if the docker daemon is restarting and we can't connect, but it's
+			// going to bring the pods back online as soon as it restarts?
+			knownPod := func() bool {
+				_, err := getPidInfo(podID)
+				return err == nil
+			}
 			go func() {
-				knownPod := func() bool {
-					_, err := getPidInfo(podID)
-					return err == nil
-				}
 				// Wait for the pod to go away and stop monitoring once it does
 				// TODO (jdefelice) replace with an /events watch?
 				for {
@@ -184,13 +187,16 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 
 			return
 		}
+		// TODO(jdefelice) remove the task (and pod state) here?
 		k.sendStatusUpdate(taskInfo.GetTaskId(), mesos.TaskState_TASK_LOST, "Task lost: launch failed")
 	}()
 }
 
-// Returns true if the pod becomes unkown and there is on longer a task record on file
-// TODO (jdefelice) don't send false alarms for deleted pods (KILLED tasks)
+// Intended to be executed as part of the pod monitoring loop, this fn (ultimately) checks with Docker
+// whether the pod is running and will return true if the pod becomes unkown. If there's still a task
+// record on file, but no pod in Docker, then we'll also send a TASK_LOST event.
 func (k *KubernetesExecutor) checkForLostPodTask(taskInfo *mesos.TaskInfo, isKnownPod func() bool) bool {
+	// TODO (jdefelice) don't send false alarms for deleted pods (KILLED tasks)
 	k.lock.RLock()
 	defer k.lock.RUnlock()
 
@@ -199,6 +205,7 @@ func (k *KubernetesExecutor) checkForLostPodTask(taskInfo *mesos.TaskInfo, isKno
 		if _, ok := k.tasks[taskId]; !ok {
 			log.Infof("Ignoring lost container: task not present")
 		} else {
+			// TODO(jdefelice) remove the task (and pod state) here?
 			k.sendStatusUpdate(taskInfo.GetTaskId(), mesos.TaskState_TASK_LOST, "Task lost: container disappeared")
 		}
 		return true
@@ -214,6 +221,7 @@ func (k *KubernetesExecutor) KillTask(driver mesos.ExecutorDriver, taskId *mesos
 	log.Infof("Kill task %v\n", taskId)
 
 	if !k.registered {
+		//TODO(jdefelice) sent TASK_LOST here?
 		log.Warningf("Ignore kill task because the executor is disconnected\n")
 		return
 	}
@@ -221,7 +229,7 @@ func (k *KubernetesExecutor) KillTask(driver mesos.ExecutorDriver, taskId *mesos
 	k.killPodForTask(taskId.GetValue(), "Task killed")
 }
 
-// Kills the pod associated with the given task. Assumes that the caller has is locking around
+// Kills the pod associated with the given task. Assumes that the caller is locking around
 // pod and task storage.
 func (k *KubernetesExecutor) killPodForTask(tid, reason string) {
 	task, ok := k.tasks[tid]

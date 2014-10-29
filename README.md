@@ -12,9 +12,9 @@ Mesos provides the fine-grained resource allocations for pods across nodes in a 
 
 Within the Kubernetes framework for Mesos the framework scheduler first registers with Mesos and begins accepting API requests.
 At some point Mesos offers the scheduler sets of available resources from the cluster nodes (slaves/minions).
-Once the scheduler is able to match a Mesos resource offer to an unassigned Kubernetes pod it marks the pod for execution on the slave and then sends a launchTasks message to the Mesos master.
+Once the scheduler is able to match a Mesos resource offer to an unassigned Kubernetes pod it binds the pod to the slave, first sending a launchTasks message to the Mesos master, and then updating the pod's state (desired host).
 Mesos marks the resources as claimed and then forwards the request onto the appropriate slave.
-The slave fetches the kubelet/executor and starts running it, spawning the pod containers and communicating the task status back to Mesos.
+The slave fetches the kubelet/executor and starts running it, spawning the pod's containers and communicating the pod/task status back to Mesos.
 
 ### Roadmap
 This is still very much a work-in-progress, but stay tuned for updates as we continue development. If you have ideas or patches, feel free to contribute!
