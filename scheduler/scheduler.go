@@ -202,7 +202,7 @@ func newSlave(hostName string) *Slave {
 type KubernetesScheduler struct {
 	// We use a lock here to avoid races
 	// between invoking the mesos callback
-	// and the invoking the pob registry interfaces.
+	// and the invoking the pod registry interfaces.
 	*sync.RWMutex
 
 	// easy access to etcd ops
@@ -620,10 +620,18 @@ func (k *KubernetesScheduler) handleSchedulingError(pod *api.Pod, err error) {
 		}
 		if pod.DesiredState.Host == "" {
 			// ensure that the pod hasn't been deleted while we were trying to schedule it
-			k.RLock()
-			defer k.RUnlock()
-			if _, exists := k.podToTask[podId]; exists {
-				k.podQueue.Add(pod.ID, pod)
+			k.Lock()
+			defer k.Unlock()
+
+			if taskId, exists := k.podToTask[podId]; exists {
+				if task, ok := k.pendingTasks[taskId]; ok {
+					// "pod" now refers to a Pod instance that is not pointed to by the PodTask, so update our records
+					task.Pod = pod
+					k.podQueue.Add(pod.ID, pod)
+				} else {
+					// this state shouldn't really be possible, so I'm warning if we ever see it
+					log.Warningf("Scheduler detected pod no longer pending: %v, will not re-queue", podId)
+				}
 			} else {
 				log.Infof("Scheduler detected deleted pod: %v, will not re-queue", podId)
 			}
@@ -769,6 +777,8 @@ func (k *KubernetesScheduler) DeletePod(podId string) error {
 
 	k.Lock()
 	defer k.Unlock()
+
+	// TODO set pod.DesiredState.Host=""
 
 	// prevent the scheduler from attempting to pop this; it's also possible that
 	// it's concurrently being scheduled (somewhere between pod scheduling and
