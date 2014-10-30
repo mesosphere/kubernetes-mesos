@@ -185,10 +185,9 @@ func main() {
 
 	// podInfoGetter := MesosPodInfoGetter.New(mesosPodScheduler)
 
-	var cloud cloudprovider.Interface
 	m := newKubernetesMaster(mesosPodScheduler, &master.Config{
 		Client:        client,
-		Cloud:         cloud,
+		Cloud:         mesosPodScheduler,
 		Minions:       machineList,
 		PodInfoGetter: podInfoGetter,
 		EtcdServers:   etcdServerList,
