@@ -29,7 +29,7 @@ var errSchedulerTimeout = fmt.Errorf("Schedule time out")
 
 const (
 	containerCpus            = 0.25
-	containerMem             = 128
+	containerMem             = 64
 	defaultFinishedTasksSize = 1024
 )
 
