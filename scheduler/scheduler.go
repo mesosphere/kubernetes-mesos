@@ -75,6 +75,10 @@ func NewRanges(ports []uint64) *mesos.Value_Ranges {
 	return &mesos.Value_Ranges{Range: r}
 }
 
+func (t *PodTask) hasAcceptedOffer() bool {
+	return t.TaskInfo.TaskId != nil
+}
+
 // Fill the TaskInfo in the PodTask, should be called in PodScheduleFunc.
 func (t *PodTask) FillTaskInfo(slaveId string, offer *mesos.Offer) {
 	t.OfferIds = append(t.OfferIds, offer.GetId().GetValue())
@@ -613,13 +617,11 @@ func (k *KubernetesScheduler) handleSchedulingError(pod *api.Pod, err error) {
 		}
 		if pod.DesiredState.Host == "" {
 			// ensure that the pod hasn't been deleted while we were trying to schedule it
-			// TODO(jdef): we really need to do a better job here of avoiding rescheduling a pod that's
-			// attached to a task which has already accepted an offer
 			k.Lock()
 			defer k.Unlock()
 
 			if taskId, exists := k.podToTask[podId]; exists {
-				if task, ok := k.pendingTasks[taskId]; ok {
+				if task, ok := k.pendingTasks[taskId]; ok && !task.hasAcceptedOffer() {
 					// "pod" now refers to a Pod instance that is not pointed to by the PodTask, so update our records
 					// XXX not sure that this is strictly necessary since once the pod is schedule, only the ID is
 					// passed around in the Pod.Registry API
@@ -817,7 +819,7 @@ func (k *KubernetesScheduler) WatchPods(resourceVersion uint64, filter func(*api
 // A FCFS scheduler.
 func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, tasks map[string]*PodTask) []*PodTask {
 	for _, task := range tasks {
-		if task.TaskInfo.TaskId != nil {
+		if task.hasAcceptedOffer() {
 			// skip tasks that have already made it through FillTaskInfo
 			continue
 		}
