@@ -4,7 +4,6 @@ import (
 	"container/ring"
 	"encoding/json"
 	"fmt"
-	"net"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -389,12 +388,6 @@ func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 	task.Pod.CurrentState.Status = task.Pod.DesiredState.Status
 	task.Pod.CurrentState.Manifest = task.Pod.DesiredState.Manifest
 	task.Pod.CurrentState.Host = task.Pod.DesiredState.Host
-	if iplist, err := net.LookupIP(task.Pod.CurrentState.Host); err != nil {
-		log.Warningf("Failed to resolve HostIP from CurrentState.Host '%v': %v", task.Pod.CurrentState.Host, err)
-	} else {
-		task.Pod.CurrentState.HostIP = iplist[0].String()
-		log.V(2).Infof("Setting HostIP to '%v'", task.Pod.CurrentState.HostIP)
-	}
 
 	if taskStatus.Data != nil {
 		var target api.PodInfo
