@@ -21,6 +21,7 @@ func (k *KubernetesScheduler) Zones() (cloud.Zones, bool) {
 
 // implementation of cloud.Instances
 func (k *KubernetesScheduler) IPAddress(name string) (net.IP, error) {
+	// TODO(jdef): validate that name actually points to a slave that we know
 	if iplist, err := net.LookupIP(name); err != nil {
 		log.Warningf("Failed to resolve IP from host name '%v': %v", name, err)
 		return nil, err
