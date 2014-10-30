@@ -15,6 +15,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/service"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
@@ -239,10 +240,12 @@ type KubernetesScheduler struct {
 
 	client   *client.Client
 	podQueue *cache.FIFO
+
+	serviceRegistry service.Registry
 }
 
 // New create a new KubernetesScheduler
-func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client, helper tools.EtcdHelper) *KubernetesScheduler {
+func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client, helper tools.EtcdHelper, sr service.Registry) *KubernetesScheduler {
 	return &KubernetesScheduler{
 		new(sync.RWMutex),
 		helper,
@@ -261,6 +264,7 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 		scheduleFunc,
 		client,
 		cache.NewFIFO(),
+		sr,
 	}
 }
 
@@ -750,6 +754,19 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 		return fmt.Errorf("Pod Task does not exist %v\n", taskId)
 	}
 
+        // TODO(k8s): move this to a watch/rectification loop.
+        manifest, err := k.makeManifest(binding.Host, *task.Pod)
+        if err != nil {
+                return err
+        }
+
+	task.Pod.DesiredState.Manifest = manifest
+	task.TaskInfo.Data, err = yaml.Marshal(&manifest)
+	if err != nil {
+		log.Warningf("Failed to marshal the updated manifest")
+		return err
+	}
+
 	// TODO(yifan): By this time, there is a chance that the slave is disconnected.
 	log.V(2).Infof("Launching task : %v", task)
 	offerId := &mesos.OfferID{Value: proto.String(task.OfferIds[0])}
@@ -763,6 +780,19 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	// we *intentionally* do not record our binding to etcd since we're not using bindings
 	// to manage pod lifecycle
 	return nil
+}
+
+// hacked in from kubernetes/pkg/registry/etcd/manifest_factory.go
+func (k *KubernetesScheduler) makeManifest(machine string, pod api.Pod) (api.ContainerManifest, error) {
+        envVars, err := service.GetServiceEnvironmentVariables(k.serviceRegistry, machine)
+        if err != nil {
+                return api.ContainerManifest{}, err
+        }
+        for ix, container := range pod.DesiredState.Manifest.Containers {
+                pod.DesiredState.Manifest.ID = pod.ID
+                pod.DesiredState.Manifest.Containers[ix].Env = append(container.Env, envVars...)
+        }
+        return pod.DesiredState.Manifest, nil
 }
 
 // Update an existing pod.

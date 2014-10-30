@@ -164,7 +164,9 @@ func main() {
 		runtime.DefaultCodec,
 		runtime.DefaultResourceVersioner,
 	}
-	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc, client, helper)
+
+	serviceRegistry := etcd.NewRegistry(etcdClient)
+	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc, client, helper, serviceRegistry)
 	driver := &mesos.MesosSchedulerDriver{
 		Master: *mesosMaster,
 		Framework: mesos.FrameworkInfo{
@@ -191,11 +193,11 @@ func main() {
 		Minions:       machineList,
 		PodInfoGetter: podInfoGetter,
 		EtcdServers:   etcdServerList,
-	}, etcdClient)
+	}, etcdClient, serviceRegistry)
 	log.Fatal(m.run(net.JoinHostPort(*address, strconv.Itoa(int(*port))), *apiPrefix, helper.Codec))
 }
 
-func newKubernetesMaster(scheduler *kmscheduler.KubernetesScheduler, c *master.Config, etcdClient tools.EtcdClient) *kubernetesMaster {
+func newKubernetesMaster(scheduler *kmscheduler.KubernetesScheduler, c *master.Config, etcdClient tools.EtcdClient, sr service.Registry) *kubernetesMaster {
 	var m *kubernetesMaster
 
 	minionRegistry := minion.NewRegistry(c.Minions) // TODO(adam): Mimic minionRegistryMaker(c)?
@@ -203,7 +205,7 @@ func newKubernetesMaster(scheduler *kmscheduler.KubernetesScheduler, c *master.C
 	m = &kubernetesMaster{
 		podRegistry:        scheduler,
 		controllerRegistry: etcd.NewRegistry(etcdClient),
-		serviceRegistry:    etcd.NewRegistry(etcdClient),
+		serviceRegistry:    sr,
 		minionRegistry:     minionRegistry,
 		bindingRegistry:    etcd.NewRegistry(etcdClient),
 		client:             c.Client,
