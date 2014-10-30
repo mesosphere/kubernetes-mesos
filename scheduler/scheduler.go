@@ -620,12 +620,16 @@ func (k *KubernetesScheduler) handleSchedulingError(pod *api.Pod, err error) {
 		}
 		if pod.DesiredState.Host == "" {
 			// ensure that the pod hasn't been deleted while we were trying to schedule it
+			// TODO(jdef): we really need to do a better job here of avoiding rescheduling a pod that's
+			// attached to a task which has already accepted an offer
 			k.Lock()
 			defer k.Unlock()
 
 			if taskId, exists := k.podToTask[podId]; exists {
 				if task, ok := k.pendingTasks[taskId]; ok {
 					// "pod" now refers to a Pod instance that is not pointed to by the PodTask, so update our records
+					// XXX not sure that this is strictly necessary since once the pod is schedule, only the ID is
+					// passed around in the Pod.Registry API
 					task.Pod = pod
 					k.podQueue.Add(pod.ID, pod)
 				} else {
@@ -714,6 +718,8 @@ func (k *KubernetesScheduler) CreatePod(pod *api.Pod) error {
 	pod.DesiredState.Status = api.PodRunning
 	pod.DesiredState.Host = ""
 
+	// XXX should we make a copy of the pod object instead of just assuming that the caller is
+	// well bahaved and will not change the state of the object it has given to us?
 	task, err := newPodTask(pod, k.executor)
 	if err != nil {
 		return err
