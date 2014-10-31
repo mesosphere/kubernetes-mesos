@@ -62,7 +62,6 @@ If you ssh to that machine, you can run `docker ps` to see the actual pod:
 
 ```shell
 $ vagrant ssh mesos-2
-$ sudo docker ps
 
 vagrant@mesos-2:~$ sudo docker ps
 CONTAINER ID  IMAGE  COMMAND  CREATED  STATUS  PORTS  NAMES
