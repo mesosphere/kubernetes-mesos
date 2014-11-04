@@ -786,7 +786,9 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	return nil
 }
 
-// hacked in from kubernetes/pkg/registry/etcd/manifest_factory.go
+// TODO(jdef): hacked in from kubernetes/pkg/registry/etcd/manifest_factory.go. It would be
+// nice to have another way to get access to this default implementation, unfortunately the k8s
+// API doesn't allow for that. We should probably file a PR against k8s for such.
 func (k *KubernetesScheduler) makeManifest(machine string, pod api.Pod) (api.ContainerManifest, error) {
 	envVars, err := service.GetServiceEnvironmentVariables(k.serviceRegistry, machine)
 	if err != nil {
