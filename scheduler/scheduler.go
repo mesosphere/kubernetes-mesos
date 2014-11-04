@@ -14,8 +14,8 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
-	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/service"
+	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
@@ -402,7 +402,7 @@ func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 		err := json.Unmarshal(taskStatus.Data, &target)
 		if err == nil {
 			task.Pod.CurrentState.Info = target
-			/// XXX this is problematic using default Docker networking on a default
+			/// TODO(jdef) this is problematic using default Docker networking on a default
 			/// Docker bridge -- meaning that pod IP's are not routable across the
 			/// k8s-mesos cluster. For now, I've duplicated logic from k8s fillPodInfo
 			netContainerInfo, ok := target["net"] // docker.Container
@@ -575,7 +575,7 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionListe
 			case machine := <-task.SelectedMachine:
 				return machine, nil
 			case <-time.After(time.Second * 10):
-				// XXX don't hard code this, use something configurable
+				// TODO(jdef) don't hard code this, use something configurable
 				return "", errSchedulerTimeout
 			}
 		}
@@ -627,7 +627,7 @@ func (k *KubernetesScheduler) handleSchedulingError(pod *api.Pod, err error) {
 			if taskId, exists := k.podToTask[podId]; exists {
 				if task, ok := k.pendingTasks[taskId]; ok && !task.hasAcceptedOffer() {
 					// "pod" now refers to a Pod instance that is not pointed to by the PodTask, so update our records
-					// XXX not sure that this is strictly necessary since once the pod is schedule, only the ID is
+					// TODO(jdef) not sure that this is strictly necessary since once the pod is schedule, only the ID is
 					// passed around in the Pod.Registry API
 					task.Pod = pod
 					k.podQueue.Add(pod.ID, pod)
@@ -717,8 +717,8 @@ func (k *KubernetesScheduler) CreatePod(pod *api.Pod) error {
 	pod.DesiredState.Status = api.PodRunning
 	pod.DesiredState.Host = ""
 
-	// XXX should we make a copy of the pod object instead of just assuming that the caller is
-	// well bahaved and will not change the state of the object it has given to us?
+	// TODO(jdef) should we make a copy of the pod object instead of just assuming that the caller is
+	// well behaved and will not change the state of the object it has given to us?
 	task, err := newPodTask(pod, k.executor)
 	if err != nil {
 		return err
@@ -754,12 +754,16 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 		return fmt.Errorf("Pod Task does not exist %v\n", taskId)
 	}
 
-        // TODO(k8s): move this to a watch/rectification loop.
-        manifest, err := k.makeManifest(binding.Host, *task.Pod)
-        if err != nil {
-                return err
-        }
+	// TODO(k8s): move this to a watch/rectification loop.
+	manifest, err := k.makeManifest(binding.Host, *task.Pod)
+	if err != nil {
+		return err
+	}
 
+	// update the manifest here to pick up things like environment variables that
+	// pod containers will use for service discovery. the kubelet-executor uses this
+	// manifest to instantiate the pods and this is the last update we make before
+	// firing up the pod.
 	task.Pod.DesiredState.Manifest = manifest
 	task.TaskInfo.Data, err = yaml.Marshal(&manifest)
 	if err != nil {
@@ -784,15 +788,15 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 
 // hacked in from kubernetes/pkg/registry/etcd/manifest_factory.go
 func (k *KubernetesScheduler) makeManifest(machine string, pod api.Pod) (api.ContainerManifest, error) {
-        envVars, err := service.GetServiceEnvironmentVariables(k.serviceRegistry, machine)
-        if err != nil {
-                return api.ContainerManifest{}, err
-        }
-        for ix, container := range pod.DesiredState.Manifest.Containers {
-                pod.DesiredState.Manifest.ID = pod.ID
-                pod.DesiredState.Manifest.Containers[ix].Env = append(container.Env, envVars...)
-        }
-        return pod.DesiredState.Manifest, nil
+	envVars, err := service.GetServiceEnvironmentVariables(k.serviceRegistry, machine)
+	if err != nil {
+		return api.ContainerManifest{}, err
+	}
+	for ix, container := range pod.DesiredState.Manifest.Containers {
+		pod.DesiredState.Manifest.ID = pod.ID
+		pod.DesiredState.Manifest.Containers[ix].Env = append(container.Env, envVars...)
+	}
+	return pod.DesiredState.Manifest, nil
 }
 
 // Update an existing pod.
@@ -809,7 +813,11 @@ func (k *KubernetesScheduler) DeletePod(podId string) error {
 	k.Lock()
 	defer k.Unlock()
 
-	// TODO set pod.DesiredState.Host=""
+	// TODO(jdef): set pod.DesiredState.Host=""
+	// The k8s DeletePod() implementation does this, and the k8s REST implementation
+	// uses this state to determine what level of pod detail should be returned to the
+	// end user. Need to think more about the impact of setting this to "" before doing
+	// the same.
 
 	// prevent the scheduler from attempting to pop this; it's also possible that
 	// it's concurrently being scheduled (somewhere between pod scheduling and
