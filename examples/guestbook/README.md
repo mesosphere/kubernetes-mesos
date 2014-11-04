@@ -288,7 +288,7 @@ if (isset($_GET['cmd']) === true) {
 ```
 
 To play with the service itself, find the IP address of a Mesos slave that is running a frontend pod and visit `http://<host-ip>:31030`.
-For a list of Mesos slaves executing Kubernetes pods, you can use the mesos CLI interface:
+For a list of Mesos slaves executing Kubernetes pods, you can use the Mesos CLI interface:
 
 ```shell
 $ mesos ps --master=$MESOS_MASTER
@@ -297,7 +297,7 @@ root    Kubernete... PodTask   192.168.56.101     29.0 MB/64.0 MB    00:00:13.11
 ...
 ```
 
-Or for more details, you can use the mesos REST API (assuming that the Mesos master is running on `$servicehost`):
+Or for more details, you can use the Mesos REST API (assuming that the Mesos master is running on `$servicehost`):
 
 ```shell
 $ curl http://${servicehost}:5050/master/state.json
