@@ -72,7 +72,7 @@ func (e *EndpointController) SyncServiceEndpoints() error {
 			}
 			endpoints[ix] = net.JoinHostPort(pod.CurrentState.HostIP, strconv.Itoa(port))
 		}
-		// TODO: this is totally broken, we need to compute this and store inside an AtomicUpdate loop.
+		// TODO(k8s): this is totally broken, we need to compute this and store inside an AtomicUpdate loop.
 		err = e.serviceRegistry.UpdateEndpoints(&api.Endpoints{
 			JSONBase:  api.JSONBase{ID: service.ID},
 			Endpoints: endpoints,
@@ -93,8 +93,8 @@ func findPort(manifest *api.ContainerManifest, portName util.IntOrString) (int, 
 		return manifest.Containers[0].Ports[0].HostPort, nil
 	}
 	if portName.Kind == util.IntstrInt {
+		p := portName.IntVal
 		for _, container := range manifest.Containers {
-			p := portName.IntVal
 			for _, port := range container.Ports {
 				if port.HostPort == p {
 					return p, nil
