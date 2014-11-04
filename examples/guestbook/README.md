@@ -287,4 +287,58 @@ if (isset($_GET['cmd']) === true) {
 } ?>
 ```
 
-To play with the service itself, find the name of a frontend, find the IP address of a Mesos slave that is running a frontend pod and visit `http://<host-ip>:31030`. 
+To play with the service itself, find the IP address of a Mesos slave that is running a frontend pod and visit `http://<host-ip>:31030`.
+For a list of Mesos slaves executing Kubernetes pods, you can use the mesos CLI interface:
+
+```shell
+$ mesos ps --master=$MESOS_MASTER
+USER    FRAMEWORK    TASK      SLAVE              MEM                TIME              CPU (allocated)
+root    Kubernete... PodTask   192.168.56.101     29.0 MB/64.0 MB    00:00:13.110000   0.25
+...
+```
+
+Or for more details, you can use the mesos REST API (assuming that the Mesos master is running on `$servicehost`):
+
+```shell
+$ curl http://${servicehost}:5050/master/state.json
+{
+    "activated_slaves":3,
+...
+            "tasks": [
+                {
+                    "executor_id": "KubeleteExecutorID",
+                    "framework_id": "20141104-145004-1698212032-5050-7-0000",
+                    "id": "77b1193b-6432-11e4-a2bb-080027a5dbff",
+                    "name": "PodTask",
+                    "resources": {
+                        "cpus": 0.25,
+                        "disk": 0,
+                        "mem": 64,
+                        "ports": "[31030-31030]"
+                    },
+                    "slave_id": "20141104-145004-1698212032-5050-7-0",
+                    "state": "TASK_RUNNING",
+                    "statuses": [
+                        {
+                            "state": "TASK_RUNNING",
+                            "timestamp": 1415112883.48378
+                        }
+                    ]
+                },
+...
+    "slaves": [
+        {
+            "attributes": {},
+            "hostname": "192.168.56.101",
+            "id": "20141104-145004-1698212032-5050-7-0",
+            "pid": "slave(1)@192.168.56.101:5051",
+            "registered_time": 1415112634.18967,
+            "resources": {
+                "cpus": 1,
+                "disk": 20986,
+                "mem": 920,
+                "ports": "[31000-32000]"
+            }
+        },
+...
+```
