@@ -32,16 +32,18 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
 
 ### Build
 
-**NOTE** Kubernetes for Mesos requires Go 1.2+, protobuf 2.5.0, etcd, and Mesos 0.19+. Building the project is grealy simplified by using godep.
+**NOTE** Building Kubernetes for Mesos requires Go 1.2+, protobuf 2.5.0, and Mesos 0.19+. Building the project is grealy simplified by using godep.
 
-To install etcd, see [github.com/coreos/etcd](https://github.com/coreos/etcd/releases/), or run it via docker:
+For a binary-only install of the Kubernetes-Mesos framework you can use the Docker-based builder:
 ```shell
-$ sudo docker run -d --net=host coreos/etcd -name etcd-node1
+$ mkdir bin && chcon -Rt svirt_sandbox_file_t bin   # chcon needed for systems protected by SELinux
+$ docker run -rm -v $(pwd)/bin:/target jdef/kubernetes-mesos:dockerbuild
 ```
 
-To install Mesos, see [mesosphere.io/downloads](http://mesosphere.io/downloads)
+Instructions to build and install from source follow:
 
-To install godep, see [github.com/tools/godep](https://github.com/tools/godep)
+* To install Mesos, see [mesosphere.io/downloads](http://mesosphere.io/downloads)
+* To install godep, see [github.com/tools/godep](https://github.com/tools/godep)
 
 ```shell
 $ sudo aptitude install golang libprotobuf-dev mercurial
@@ -56,6 +58,11 @@ $ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 ```
 
 ### Start the framework
+
+To run etcd, see [github.com/coreos/etcd](https://github.com/coreos/etcd/releases/), or run it via docker:
+```shell
+$ sudo docker run -d --net=host coreos/etcd
+```
 
 Assuming your mesos cluster is started, and that the mesos-master and etcd are running on `${servicehost}`, then:
 
