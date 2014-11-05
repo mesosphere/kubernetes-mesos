@@ -6,11 +6,8 @@ The example combines a web frontend, a redis master for storage and a replicated
 
 ### Step Zero: Prerequisites
 
-This example assumes that you have forked the repository and [turned up a Kubernetes cluster](https://github.com/GoogleCloudPlatform/kubernetes-new#setup):
-
-    $ cd kubernetes
-    $ hack/dev-build-and-up.sh
-    $ hack/build-go.sh
+This example assumes that you have forked the repository and [turned up a Kubernetes-Mesos cluster](https://github.com/mesosphere/kubernetes-mesos#build).
+It also assumes that `${servicehost}` is the IP address or hostname of the host running the Kubernetes-Mesos master.
 
 ### Step One: Turn up the redis master.
 
@@ -19,6 +16,8 @@ Create a file named `redis-master.json` describing a single pod, which runs a re
 ```javascript
 {
   "id": "redis-master-2",
+  "kind": "Pod",
+  "apiVersion": "v1beta1",
   "desiredState": {
     "manifest": {
       "version": "v1beta1",
@@ -28,7 +27,7 @@ Create a file named `redis-master.json` describing a single pod, which runs a re
         "image": "dockerfile/redis",
         "ports": [{
           "containerPort": 6379,
-          "hostPort": 6379
+          "hostPort": 31010
         }]
       }]
     }
@@ -39,16 +38,16 @@ Create a file named `redis-master.json` describing a single pod, which runs a re
 }
 ```
 
-Once you have that pod file, you can create the redis pod in your Kubernetes cluster using the `kubecfg` CLI:
+Once you have that pod file, you can create the redis pod in your Kubernetes cluster using the REST API:
 
 ```shell
-$ cluster/kubecfg.sh -c examples/guestbook/redis-master.json create pods
+$ curl http://${servicehost}:8080/api/v1beta1/pods -XPOST -d@examples/guestbook/redis-master.json
 ```
 
 Once that's up you can list the pods in the cluster, to verify that the master is running:
 
 ```shell
-cluster/kubecfg.sh list pods
+$ curl http://${servicehost}:8080/api/v1beta1/pods
 ```
 
 You'll see a single redis master pod. It will also display the machine that the pod is running on.
@@ -62,10 +61,9 @@ redis-master-2      dockerfile/redis    kubernetes-minion-3.c.briandpe-api.inter
 If you ssh to that machine, you can run `docker ps` to see the actual pod:
 
 ```shell
-$ gcutil ssh --zone us-central1-b kubernetes-minion-3
-$ sudo docker ps
+$ vagrant ssh mesos-2
 
-me@kubernetes-minion-3:~$ sudo docker ps
+vagrant@mesos-2:~$ sudo docker ps
 CONTAINER ID  IMAGE  COMMAND  CREATED  STATUS  PORTS  NAMES
 417ab993cdf8  dockerfile/redis:latest  redis-server /etc/re  8 minutes ago Up 8 minutes  0.0.0.0:6379->6379/tcp  master--redis_-_master_-_2--6b944b49
 ```
@@ -80,6 +78,8 @@ The pod that you created in Step One has the label `name=redis-master`. The sele
 ```js
 {
   "id": "redismaster",
+  "kind": "Service",
+  "apiVersion": "v1beta1",
   "port": 10000,
   "selector": {
     "name": "redis-master"
@@ -89,10 +89,10 @@ The pod that you created in Step One has the label `name=redis-master`. The sele
 
 This will cause all pods to see the redis master apparently running on localhost:10000.
 
-Once you have that service description, you can create the service with the `kubecfg` cli:
+Once you have that service description, you can create the service with the REST API:
 
 ```shell
-$ cluster/kubecfg.sh -c examples/guestbook/redis-master-service.json create services
+$ curl http://${servicehost}:8080/api/v1beta1/services -XPOST -d@examples/guestbook/redis-master-service.json
 Name                Label Query         Port
 ----------          ----------          ----------
 redismaster         name=redis-master   10000
@@ -106,35 +106,38 @@ Although the redis master is a single pod, the redis read slaves are a 'replicat
 Create a file named `redis-slave-controller.json` that contains:
 
 ```js
-  {
-    "id": "redisSlaveController",
-    "desiredState": {
-      "replicas": 2,
-      "replicaSelector": {"name": "redis-slave"},
-      "podTemplate": {
-        "desiredState": {
-           "manifest": {
-             "version": "v1beta1",
-             "id": "redisSlaveController",
-             "containers": [{
-               "image": "brendanburns/redis-slave",
-               "ports": [{"containerPort": 6379, "hostPort": 6380}]
-             }]
-           }
-         },
-         "labels": {"name": "redis-slave"}
-        }},
-    "labels": {"name": "redis-slave"}
-  }
+{
+  "id": "redisSlaveController",
+  "kind": "ReplicationController",
+  "apiVersion": "v1beta1",
+  "desiredState": {
+    "replicas": 2,
+    "replicaSelector": {"name": "redisslave"},
+    "podTemplate": {
+      "desiredState": {
+         "manifest": {
+           "version": "v1beta1",
+           "id": "redisSlaveController",
+           "containers": [{
+             "name": "slave",
+             "image": "jdef/redis-slave",
+             "ports": [{"containerPort": 6379, "hostPort": 31020}]
+           }]
+         }
+       },
+       "labels": {"name": "redisslave"}
+      }},
+  "labels": {"name": "redisslave"}
+}
 ```
 
 Then you can create the service by running:
 
 ```shell
-$ cluster/kubecfg.sh -c examples/guestbook/redis-slave-controller.json create replicationControllers
+$ curl http://${servicehost}:8080/api/v1beta1/replicationControllers -XPOST -d@examples/guestbook/redis-slave-controller.json
 Name                   Image(s)                   Selector            Replicas
 ----------             ----------                 ----------          ----------
-redisSlaveController   brendanburns/redis-slave   name=redisslave     2
+redisSlaveController   jdef/redis-slave           name=redisslave     2
 ```
 
 The redis slave configures itself by looking for the Kubernetes service environment variables in the container environment.  In particular, the redis slave is started with the following command:
@@ -150,8 +153,8 @@ $ cluster/kubecfg.sh list pods
 Name                Image(s)                   Host                                          Labels
 ----------          ----------                 ----------                                    ----------
 redis-master-2      dockerfile/redis           kubernetes-minion-3.c.briandpe-api.internal   name=redis-master
-4d65822107fcfd52    brendanburns/redis-slave   kubernetes-minion-3.c.briandpe-api.internal   name=redisslave,replicationController=redisSlaveController
-78629a0f5f3f164f    brendanburns/redis-slave   kubernetes-minion-4.c.briandpe-api.internal   name=redisslave,replicationController=redisSlaveController
+4d65822107fcfd52    jdef/redis-slave           kubernetes-minion-3.c.briandpe-api.internal   name=redisslave,replicationController=redisSlaveController
+78629a0f5f3f164f    jdef/redis-slave           kubernetes-minion-4.c.briandpe-api.internal   name=redisslave,replicationController=redisSlaveController
 ```
 
 You will see a single redis master pod and two redis slave pods.
@@ -163,22 +166,24 @@ Just like the master, we want to have a service to proxy connections to the read
 ```js
 {
   "id": "redisslave",
+  "kind": "Service",
+  "apiVersion": "v1beta1",
   "port": 10001,
   "labels": {
-    "name": "redis-slave"
+    "name": "redisslave"
   },
   "selector": {
-    "name": "redis-slave"
+    "name": "redisslave"
   }
 }
 ```
 
-This time the selector for the service is `name=redis-slave`, because that identifies the pods running redis slaves. It may also be helpful to set labels on your service itself--as we've done here--to make it easy to locate them with the `kubecfg -l "label=value" list sevices` command.
+This time the selector for the service is `name=redisslave`, because that identifies the pods running redis slaves. It may also be helpful to set labels on your service itself--as we've done here--to make it easy to locate them with the `kubecfg -l "label=value" list sevices` command, or via the REST API: `curl http://${servicehost}:8080/api/v1beta1/services?labels=name=value`.
 
-Now that you have created the service specification, create it in your cluster with the `kubecfg` CLI:
+Now that you have created the service specification, create it in your cluster via the REST API:
 
 ```shell
-$ cluster/kubecfg.sh -c examples/guestbook/redis-slave-service.json create services
+$ curl http://${servicehost}:8080/api/v1beta1/services -XPOST -d@examples/guestbook/redis-slave-service.json
 Name                Label Query         Port
 ----------          ----------          ----------
 redisslave          name=redisslave     10001
@@ -193,6 +198,8 @@ Create a file named `frontend-controller.json`:
 ```js
 {
   "id": "frontendController",
+  "kind": "ReplicationController",
+  "apiVersion": "v1beta1",
   "desiredState": {
     "replicas": 3,
     "replicaSelector": {"name": "frontend"},
@@ -202,8 +209,9 @@ Create a file named `frontend-controller.json`:
            "version": "v1beta1",
            "id": "frontendController",
            "containers": [{
+             "name": "php-redis",
              "image": "brendanburns/php-redis",
-             "ports": [{"containerPort": 80, "hostPort": 8000}]
+             "ports": [{"containerPort": 80, "hostPort": 31030}]
            }]
          }
        },
@@ -216,7 +224,7 @@ Create a file named `frontend-controller.json`:
 With this file, you can turn up your frontend with:
 
 ```shell
-$ cluster/kubecfg.sh -c examples/guestbook/frontend-controller.json create replicationControllers
+$ curl http://${servicehost}:8080/api/v1beta1/replicationControllers -XPOST -d@examples/guestbook/frontend-controller.json
 Name                 Image(s)                 Selector            Replicas
 ----------           ----------               ----------          ----------
 frontendController   brendanburns/php-redis   name=frontend       3
@@ -229,11 +237,11 @@ $ cluster/kubecfg.sh list pods
 Name                Image(s)                   Host                                          Labels
 ----------          ----------                 ----------                                    ----------
 redis-master-2      dockerfile/redis           kubernetes-minion-3.c.briandpe-api.internal   name=redis-master
-4d65822107fcfd52    brendanburns/redis-slave   kubernetes-minion-3.c.briandpe-api.internal   name=redisslave,replicationController=redisSlaveController
+4d65822107fcfd52    jdef/redis-slave           kubernetes-minion-3.c.briandpe-api.internal   name=redisslave,replicationController=redisSlaveController
 380704bb7b4d7c03    brendanburns/php-redis     kubernetes-minion-3.c.briandpe-api.internal   name=frontend,replicationController=frontendController
 55104dc76695721d    brendanburns/php-redis     kubernetes-minion-2.c.briandpe-api.internal   name=frontend,replicationController=frontendController
 365a858149c6e2d1    brendanburns/php-redis     kubernetes-minion-1.c.briandpe-api.internal   name=frontend,replicationController=frontendController
-78629a0f5f3f164f    brendanburns/redis-slave   kubernetes-minion-4.c.briandpe-api.internal   name=redisslave,replicationController=redisSlaveController
+78629a0f5f3f164f    jdef/redis-slave           kubernetes-minion-4.c.briandpe-api.internal   name=redisslave,replicationController=redisSlaveController
 ```
 
 You will see a single redis master pod, two redis slaves, and three frontend pods.
@@ -242,7 +250,6 @@ The code for the PHP service looks like this:
 
 ```php
 <?
-
 set_include_path('.:/usr/share/php:/usr/share/pear:/vendor/predis');
 
 error_reporting(E_ALL);
@@ -280,20 +287,58 @@ if (isset($_GET['cmd']) === true) {
 } ?>
 ```
 
-To play with the service itself, find the name of a frontend, grab the external IP of that host from the [Google Cloud Console][cloud-console] or the `gcutil` tool, and visit `http://<host-ip>:8000`. 
+To play with the service itself, find the IP address of a Mesos slave that is running a frontend pod and visit `http://<host-ip>:31030`.
+For a list of Mesos slaves executing Kubernetes pods, you can use the Mesos CLI interface:
 
 ```shell
-$ gcutil listinstances
+$ mesos ps --master=$MESOS_MASTER
+USER    FRAMEWORK    TASK      SLAVE              MEM                TIME              CPU (allocated)
+root    Kubernete... PodTask   192.168.56.101     29.0 MB/64.0 MB    00:00:13.110000   0.25
+...
 ```
 
-You may need to open the firewall for port 8000 using the [console][cloud-console] or the `gcutil` tool. The following command will allow traffic from any source to instances tagged `kubernetes-minion`:
+Or for more details, you can use the Mesos REST API (assuming that the Mesos master is running on `$servicehost`):
 
 ```shell
-$ gcutil addfirewall --allowed=tcp:8000 --target_tags=kubernetes-minion kubernetes-minion-8000
+$ curl http://${servicehost}:5050/master/state.json
+{
+    "activated_slaves":3,
+...
+            "tasks": [
+                {
+                    "executor_id": "KubeleteExecutorID",
+                    "framework_id": "20141104-145004-1698212032-5050-7-0000",
+                    "id": "77b1193b-6432-11e4-a2bb-080027a5dbff",
+                    "name": "PodTask",
+                    "resources": {
+                        "cpus": 0.25,
+                        "disk": 0,
+                        "mem": 64,
+                        "ports": "[31030-31030]"
+                    },
+                    "slave_id": "20141104-145004-1698212032-5050-7-0",
+                    "state": "TASK_RUNNING",
+                    "statuses": [
+                        {
+                            "state": "TASK_RUNNING",
+                            "timestamp": 1415112883.48378
+                        }
+                    ]
+                },
+...
+    "slaves": [
+        {
+            "attributes": {},
+            "hostname": "192.168.56.101",
+            "id": "20141104-145004-1698212032-5050-7-0",
+            "pid": "slave(1)@192.168.56.101:5051",
+            "registered_time": 1415112634.18967,
+            "resources": {
+                "cpus": 1,
+                "disk": 20986,
+                "mem": 920,
+                "ports": "[31000-32000]"
+            }
+        },
+...
 ```
-
-If you are running Kubernetes locally, you can just visit http://localhost:8000
-For details about limiting traffic to specific sources, see the [gcutil documentation][gcutil-docs]
-
-[cloud-console]: https://console.developer.google.com
-[gcutil-docs]: https://developers.google.com/compute/docs/gcutil/reference/firewall#addfirewall
