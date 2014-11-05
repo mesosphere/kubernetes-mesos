@@ -34,7 +34,8 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
 
 For a binary-only install of the Kubernetes-Mesos framework you can use the Docker-based builder:
 ```shell
-$ mkdir bin && chcon -Rt svirt_sandbox_file_t bin   # chcon needed for systems protected by SELinux
+# chcon needed for systems protected by SELinux
+$ mkdir bin && chcon -Rt svirt_sandbox_file_t bin   
 $ docker run -rm -v $(pwd)/bin:/target jdef/kubernetes-mesos:dockerbuild
 ```
 
@@ -61,7 +62,11 @@ $ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 
 To run etcd, see [github.com/coreos/etcd](https://github.com/coreos/etcd/releases/), or run it via docker:
 ```shell
-$ sudo docker run -d --net=host coreos/etcd
+$ sudo docker run -d --net=host coreos/etcd go-wrapper run \
+   -advertise-client-urls=http://${servicehost}:4001 \
+   -listen-client-urls=http://${servicehost}:4001 \
+   -initial-advertise-peer-urls=http://${servicehost}:7001 \
+   -listen-peer-urls=http://${servicehost}:7001
 ```
 
 Assuming your mesos cluster is started, and that the mesos-master and etcd are running on `${servicehost}`, then:
