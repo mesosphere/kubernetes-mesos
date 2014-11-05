@@ -36,7 +36,7 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
 
 To install etcd, see [github.com/coreos/etcd](https://github.com/coreos/etcd/releases/), or run it via docker:
 ```shell
-$ sudo docker run -d --net=host coreos/etcd -name etcd-node1
+$ sudo docker run -d --net=host coreos/etcd go-wrapper run -addr=${servicehost}:4001 -peer-addr=${servicehost}:7001
 ```
 
 To install Mesos, see [mesosphere.io/downloads](http://mesosphere.io/downloads)
