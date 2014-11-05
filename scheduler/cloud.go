@@ -31,7 +31,7 @@ func (k *KubernetesScheduler) IPAddress(name string) (net.IP, error) {
 		return nil, err
 	} else {
 		ipaddr := iplist[0]
-		log.V(2).Infof("Resolved host to '%v' to '%v'", name, ipaddr)
+		log.V(2).Infof("Resolved host '%v' to '%v'", name, ipaddr)
 		return ipaddr, nil
 	}
 }
