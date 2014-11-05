@@ -1,0 +1,1 @@
+docker build -t k8s-mesos-builder .
