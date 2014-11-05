@@ -12,8 +12,8 @@
              "id": "redisSlaveController",
              "containers": [{
                "name": "slave",
-               "image": "brendanburns/redis-slave",
-               "ports": [{"containerPort": 6379, "hostPort": 6380}]
+               "image": "jdef/redis-slave",
+               "ports": [{"containerPort": 6379, "hostPort": 31020}]
              }]
            }
          },

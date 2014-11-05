@@ -61,12 +61,13 @@ format: require-gopath
 	go fmt	github.com/mesosphere/kubernetes-mesos/kubernetes-mesos \
 		github.com/mesosphere/kubernetes-mesos/kubernetes-executor \
 		github.com/mesosphere/kubernetes-mesos/scheduler \
+		github.com/mesosphere/kubernetes-mesos/service \
 		github.com/mesosphere/kubernetes-mesos/executor
 
 install: all
 	mkdir -p $(DESTDIR)
-	(pkg="$(GOPATH)"; pkg="$${pkg%%:*}"; \
-	 /bin/cp -vpf -t $(DESTDIR) "$${pkg}"/bin/{proxy,controller-manager,kubernetes-mesos,kubernetes-executor})
+	(pkg="$(GOPATH)"; pkg="$${pkg%%:*}"; for x in proxy controller-manager kubernetes-mesos kubernetes-executor; do \
+	 /bin/cp -vpf -t $(DESTDIR) "$${pkg}"/bin/$$x; done)
 
 info:
 	@echo GOPATH=$(GOPATH)
