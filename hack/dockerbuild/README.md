@@ -32,10 +32,10 @@ env  go install ${WITH_RACE:+-race} \
 mkdir -p /target
 (pkg="/pkg"; pkg="${pkg%%:*}"; for x in proxy controller-manager kubernetes-mesos kubernetes-executor; do \
          /bin/cp -vpf -t /target "${pkg}"/bin/$x; done)
-`/pkg/bin/proxy' -> `/target/proxy'
-`/pkg/bin/controller-manager' -> `/target/controller-manager'
-`/pkg/bin/kubernetes-mesos' -> `/target/kubernetes-mesos'
-`/pkg/bin/kubernetes-executor' -> `/target/kubernetes-executor'
+'/pkg/bin/proxy' -> `/target/proxy'
+'/pkg/bin/controller-manager' -> `/target/controller-manager'
+'/pkg/bin/kubernetes-mesos' -> `/target/kubernetes-mesos'
+'/pkg/bin/kubernetes-executor' -> `/target/kubernetes-executor'
 ```
 
 Alternatively, it can be used to generate binaries from a branch:
