@@ -13,8 +13,13 @@ $ . build
 ## Building the project
 
 Once the Docker image is generated it can be used to build binaries from the current master branch.
-This example copies the resulting binaries into `/tmp/target`, shown below as a host-mounted volume:
 
+**SELinux:** On systems with SELinux enabled you may have to add a label to your host-mounted volume directory in order for the Docker container to write the binaries there:
+```shell
+$ chcon -Rt svirt_sandbox_file_t /tmp/target
+```
+
+This example copies the resulting binaries into `/tmp/target`, shown below as a host-mounted volume:
 ```shell
 $ docker run -rm -v /tmp/target:/target k8s-mesos-builder
 ...
