@@ -20,6 +20,7 @@ RUN mkdir -pv /opt && cd /opt && go get github.com/tools/godep && ln -sv /opt/bi
 
 ENV GOPATH /pkg
 VOLUME /target
-ENTRYPOINT mkdir -pv /pkg/src/github.com/mesosphere/kubernetes-mesos && \
-    git clone https://github.com/mesosphere/kubernetes-mesos.git /pkg/src/github.com/mesosphere/kubernetes-mesos && \
-    cd /pkg/src/github.com/mesosphere/kubernetes-mesos && make bootstrap install
+CMD [ ]
+
+ADD run.sh /
+ENTRYPOINT [ "/run.sh" ]
