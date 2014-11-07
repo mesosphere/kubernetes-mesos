@@ -261,7 +261,7 @@ ca87f2981e6d        dockerfile/nginx:latest   "nginx"             30 seconds ago
 Assuming your framework is running on `${KUBERNETES_MASTER}` and that you have multiple mesos slaves in your cluster, then:
 
 ```shell
-$ bin/kubecfg -c controller-nginx.json create replicationControllers
+$ bin/kubecfg -c examples/controller-nginx.json create replicationControllers
 # -- or --
 $ curl -L ${KUBERNETES_MASTER}/api/v1beta1/replicationControllers -XPOST -d@examples/controller-nginx.json
 ```
