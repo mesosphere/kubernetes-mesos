@@ -253,8 +253,10 @@ func (m *kubernetesMaster) run(myAddress, apiPrefix string, codec runtime.Codec)
 
 func (m *kubernetesMaster) createEndpointController() kmendpoint.EndpointController {
 	if *useHostPortEndpoints {
+		log.V(2).Infof("Creating hostIP:hostPort endpoint controller")
 		return kmendpoint.NewEndpointController(m.serviceRegistry, m.client)
 	}
+	log.V(2).Infof("Creating podIP:containerPort endpoint controller")
 	stockEndpointController := kendpoint.NewEndpointController(m.serviceRegistry, m.client)
 	return stockEndpointController
 }
