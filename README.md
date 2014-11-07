@@ -73,27 +73,39 @@ $ ./bin/kubernetes-mesos \
   -proxy_path=$(pwd)/bin/proxy
 ```
 
-To enable replication control, start a kubernetes controller instance:
+For simpler execution of `kubecfg`:
 ```shell
-$ ./bin/controller-manager -master=${servicehost}:8888
+$ export KUBERNETES_MASTER=http://${servicehost}:8888
 ```
 
-You can increase logging by including, for example `-v=2`.
+To enable replication control, start a kubernetes replication controller instance:
+```shell
+$ ./bin/controller-manager -master=${KUBERNETES_MASTER#http://*}
+```
+
+You can increase logging for both the framework and the controller by including, for example, `-v=2`.
 This can be very helpful while debugging.
 
 ###Launch a Pod
 
-Assuming your framework is running on `${servicehost}:8888`, then:
+Assuming your framework is running on `${KUBERNETES_MASTER}`, then:
 
 ```shell
-$ curl -L http://${servicehost}:8888/api/v1beta1/pods -XPOST -d @examples/pod-nginx.json
+$ bin/kubecfg -c examples/pod-nginx.json create pods
+# -- or --
+$ curl -L ${KUBERNETES_MASTER}/api/v1beta1/pods -XPOST -d @examples/pod-nginx.json
 ```
 
-After the pod get launched, you can check it's status via `curl` or your web browser:
+After the pod get launched, you can check it's status via `kubecfg`, `curl` or your web browser:
 ```shell
-$ curl -L http://${servicehost}:8888/api/v1beta1/pods
-```
+$ bin/kubecfg list pods
+ID                  Image(s)            Host                            Labels                 Status
+----------          ----------          ----------                      ----------             ----------
+nginx-id-01         dockerfile/nginx    10.132.189.242/10.132.189.242   name=foo               Running
 
+# -- or --
+$ curl -L ${KUBERNETES_MASTER}/api/v1beta1/pods
+```
 ```json
 {
     "kind": "PodList",
@@ -235,27 +247,35 @@ $ curl -L http://${servicehost}:8888/api/v1beta1/pods
 }
 ```
 
-Or, you can run `docker ps -a` to verify that the example container is running:
+Or, you can run `docker ps` on the appropriate Mesos slave to verify that the example container is running:
 
 ```shell
-CONTAINER ID        IMAGE                     COMMAND                CREATED             STATUS              PORTS                   NAMES
-02d2d7c91d4f        dockerfile/nginx:latest   nginx                  24 seconds ago      Up 24 seconds                               k8s--nginx_-_01.249c7d76--nginx_-_id_-_01.etcd--ba48b2b2_-_55a7_-_11e4_-_8ec3_-_08002766f5aa--4d088f48
-6c4dd34a8d21        kubernetes/pause:latest   /pause                 5 minutes ago       Up 5 minutes        0.0.0.0:31000->80/tcp   k8s--net.fa4b7d08--nginx_-_id_-_01.etcd--ba48b2b2_-_55a7_-_11e4_-_8ec3_-_08002766f5aa--9acb0442
+$ docker ps
+CONTAINER ID        IMAGE                     COMMAND             CREATED             STATUS              PORTS                   NAMES
+ca87f2981e6d        dockerfile/nginx:latest   "nginx"             30 seconds ago      Up 30 seconds                               k8s--nginx_-_01.e7078cc4--nginx_-_id_-_01.mesos--ab87fcc4_-_668e_-_11e4_-_bd1f_-_04012f416701--83e4f98d
+78e9f83ed4a9        kubernetes/pause:go       "/pause"            5 minutes ago       Up 5 minutes        0.0.0.0:31000->80/tcp   k8s--net.fa4b7d08--nginx_-_id_-_01.mesos--ab87fcc4_-_668e_-_11e4_-_bd1f_-_04012f416701--aa209b8e
 ```
 
 ###Launch a Replication Controller
 
-Assuming your framework is running on `${servicehost}:8888` and that you have multiple mesos slaves in your cluster, then:
+Assuming your framework is running on `${KUBERNETES_MASTER}` and that you have multiple mesos slaves in your cluster, then:
 
 ```shell
-$ curl -L http://${servicehost}:8888/api/v1beta1/replicationControllers -XPOST -d@examples/controller-nginx.json
+$ bin/kubecfg -c examples/controller-nginx.json create replicationControllers
+# -- or --
+$ curl -L ${KUBERNETES_MASTER}/api/v1beta1/replicationControllers -XPOST -d@examples/controller-nginx.json
 ```
 
-After the pod get launched, you can check it's status via `curl` or your web browser:
+After the pod get launched, you can check it's status via `kubecfg`, `curl` or your web browser:
 ```shell
-$ curl -L http://${servicehost}:8888/api/v1beta1/replicationControllers
-```
+$ bin/kubecfg list replicationControllers
+ID                  Image(s)            Selector            Replicas
+----------          ----------          ----------          ----------
+nginxController     dockerfile/nginx    name=nginx          2
 
+# -- or --
+$ curl -L ${KUBERNETES_MASTER}/api/v1beta1/replicationControllers
+```
 ```json
 {
     "kind": "ReplicationControllerList",
