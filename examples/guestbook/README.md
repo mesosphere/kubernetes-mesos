@@ -6,7 +6,7 @@ The example combines a web frontend, a redis master for storage and a replicated
 ### Step Zero: Prerequisites
 
 This example assumes that you have forked the repository and [turned up a Kubernetes-Mesos cluster](https://github.com/mesosphere/kubernetes-mesos#build).
-It also assumes that `${KUBERNETES_MASTER}` is the HTTP URI of the host running the Kubernetes-Mesos framework, which currently hosts the Kubernetes API server (e.g. http://10.2.3.4:8888).
+It also assumes that `${KUBERNETES_MASTER}` is the HTTP URI of the host running the Kubernetes-Mesos framework, which currently hosts the Kubernetes API server (e.g. ht<span>tp://</span>10.2.3.4:8888).
 
 ### Step One: Turn up the redis master.
 
