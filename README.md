@@ -78,6 +78,11 @@ To enable replication control, start a kubernetes controller instance:
 $ ./bin/controller-manager -master=${servicehost}:8080
 ```
 
+For simpler execution of `kubecfg`:
+```shell
+$ export KUBERNETES_MASTER=http://${servicehost}:8080
+```
+
 You can increase logging by including, for example `-v=2`.
 This can be very helpful while debugging.
 

@@ -6,8 +6,14 @@ mkfile_path	:= $(abspath $(lastword $(MAKEFILE_LIST)))
 current_dir	:= $(patsubst %/,%,$(dir $(mkfile_path)))
 fail		:= ${MAKE} --no-print-directory --quiet -f $(current_dir)/Makefile error
 
-PROXY_SRC	:= github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
-CONTROLLER_SRC	:= github.com/GoogleCloudPlatform/kubernetes/cmd/controller-manager
+K8S_CMD		:= \
+                   github.com/GoogleCloudPlatform/kubernetes/cmd/controller-manager	\
+                   github.com/GoogleCloudPlatform/kubernetes/cmd/kubecfg		\
+                   github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
+FRAMEWORK_CMD	:= \
+                   github.com/mesosphere/kubernetes-mesos/kubernetes-mesos		\
+                   github.com/mesosphere/kubernetes-mesos/kubernetes-executor
+
 
 # TODO: make this something more reasonable
 DESTDIR		?= /target
@@ -47,15 +53,12 @@ require-gopath:
 	@test -n "$(GOPATH)" || ${fail} MSG="GOPATH undefined, aborting"
 
 proxy: require-godep
-	go install $(PROXY_SRC)
-	go install $(CONTROLLER_SRC)
+	go install $(K8S_CMD)
 
 require-vendor:
 
 framework: require-godep
-	env $(WITH_MESOS_CGO_FLAGS) go install $${WITH_RACE:+-race} \
-	  github.com/mesosphere/kubernetes-mesos/kubernetes-mesos \
-	  github.com/mesosphere/kubernetes-mesos/kubernetes-executor
+	env $(WITH_MESOS_CGO_FLAGS) go install $${WITH_RACE:+-race} $(FRAMEWORK_CMD)
 
 format: require-gopath
 	go fmt	github.com/mesosphere/kubernetes-mesos/kubernetes-mesos \
@@ -66,7 +69,7 @@ format: require-gopath
 
 install: all
 	mkdir -p $(DESTDIR)
-	(pkg="$(GOPATH)"; pkg="$${pkg%%:*}"; for x in proxy controller-manager kubernetes-mesos kubernetes-executor; do \
+	(pkg="$(GOPATH)"; pkg="$${pkg%%:*}"; for x in $(notdir $(K8S_CMD) $(FRAMEWORK_CMD)); do \
 	 /bin/cp -vpf -t $(DESTDIR) "$${pkg}"/bin/$$x; done)
 
 info:
