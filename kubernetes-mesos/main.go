@@ -251,9 +251,10 @@ func (m *kubernetesMaster) run(myAddress, apiPrefix string, codec runtime.Codec)
 	return s.ListenAndServe()
 }
 
-func (m *kubernetesMaster) createEndpointController() {
-	if useHostPortEndpoints {
+func (m *kubernetesMaster) createEndpointController() kmendpoint.EndpointController {
+	if *useHostPortEndpoints {
 		return kmendpoint.NewEndpointController(m.serviceRegistry, m.client)
 	}
-	return kendpoint.NewEndpointController(m.serviceRegistry, m.client)
+	stockEndpointController := kendpoint.NewEndpointController(m.serviceRegistry, m.client)
+	return stockEndpointController
 }
