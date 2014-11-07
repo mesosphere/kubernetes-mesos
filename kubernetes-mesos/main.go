@@ -52,7 +52,7 @@ import (
 )
 
 var (
-	port                        = flag.Uint("port", 8080, "The port to listen on.  Default 8080.")
+	port                        = flag.Uint("port", 8888, "The port to listen on.  Default 8888.")
 	address                     = flag.String("address", "127.0.0.1", "The address on the local server to listen to. Default 127.0.0.1")
 	apiPrefix                   = flag.String("api_prefix", "/api/v1beta1", "The prefix for API requests on the server. Default '/api/v1beta1'")
 	mesosMaster                 = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master")
