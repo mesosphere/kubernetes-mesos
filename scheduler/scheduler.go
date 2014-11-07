@@ -604,14 +604,17 @@ func (k *KubernetesScheduler) yield() *api.Pod {
 }
 
 // implementation of scheduling plugin's Error func; see plugin/pkg/scheduler
-func (k *KubernetesScheduler) handleSchedulingError(pod *api.Pod, err error) {
+func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *api.Pod, err error) {
 	log.Errorf("Error scheduling %v: %v; retrying", pod.ID, err)
+	backoff.gc()
 
 	// Retry asynchronously.
 	// Note that this is extremely rudimentary and we need a more real error handling path.
 	go func() {
 		defer util.HandleCrash()
 		podId := pod.ID
+		backoff.wait(podId)
+
 		// Get the pod again; it may have changed/been scheduled already.
 		pod = &api.Pod{}
 		err := k.client.Get().Path("pods").Path(podId).Do().Into(pod)
@@ -912,6 +915,10 @@ func containsTask(finishedTasks *ring.Ring, taskId string) bool {
 // Create creates a scheduler and all support functions.
 func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
 
+	podBackoff := podBackoff{
+		perPodBackoff: map[string]*backoffEntry{},
+		clock:         realClock{},
+	}
 	return &plugin.Config{
 		MinionLister: nil,
 		Algorithm:    k,
@@ -920,7 +927,7 @@ func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
 			return k.yield()
 		},
 		Error: func(pod *api.Pod, err error) {
-			k.handleSchedulingError(pod, err)
+			k.handleSchedulingError(&podBackoff, pod, err)
 		},
 	}
 }
