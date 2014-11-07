@@ -49,3 +49,9 @@ Alternatively, it can be used to generate binaries from a branch:
 ```shell
 $ docker run -rm -v /tmp/target:/target -e GIT_BRANCH=default_port k8s-mesos-builder
 ```
+
+Want a quick-and-dirty development environment to start hacking?
+```shell
+$ docker run -ti -v /tmp/target:/target k8s-mesos-builder bash
+root@5883c3a460a6$ make bootstrap all
+```
