@@ -75,7 +75,7 @@ $ ./bin/kubernetes-mesos \
 
 To enable replication control, start a kubernetes controller instance:
 ```shell
-$ ./bin/controller-manager -master=${servicehost}:8080
+$ ./bin/controller-manager -master=${servicehost}:8888
 ```
 
 For simpler execution of `kubecfg`:
@@ -88,15 +88,15 @@ This can be very helpful while debugging.
 
 ###Launch a Pod
 
-Assuming your framework is running on `${servicehost}:8080`, then:
+Assuming your framework is running on `${servicehost}:8888`, then:
 
 ```shell
-$ curl -L http://${servicehost}:8080/api/v1beta1/pods -XPOST -d @examples/pod-nginx.json
+$ curl -L http://${servicehost}:8888/api/v1beta1/pods -XPOST -d @examples/pod-nginx.json
 ```
 
 After the pod get launched, you can check it's status via `curl` or your web browser:
 ```shell
-$ curl -L http://${servicehost}:8080/api/v1beta1/pods
+$ curl -L http://${servicehost}:8888/api/v1beta1/pods
 ```
 
 ```json
@@ -250,15 +250,15 @@ CONTAINER ID        IMAGE                     COMMAND                CREATED    
 
 ###Launch a Replication Controller
 
-Assuming your framework is running on `${servicehost}:8080` and that you have multiple mesos slaves in your cluster, then:
+Assuming your framework is running on `${servicehost}:8888` and that you have multiple mesos slaves in your cluster, then:
 
 ```shell
-$ curl -L http://${servicehost}:8080/api/v1beta1/replicationControllers -XPOST -d@examples/controller-nginx.json
+$ curl -L http://${servicehost}:8888/api/v1beta1/replicationControllers -XPOST -d@examples/controller-nginx.json
 ```
 
 After the pod get launched, you can check it's status via `curl` or your web browser:
 ```shell
-$ curl -L http://${servicehost}:8080/api/v1beta1/replicationControllers
+$ curl -L http://${servicehost}:8888/api/v1beta1/replicationControllers
 ```
 
 ```json
