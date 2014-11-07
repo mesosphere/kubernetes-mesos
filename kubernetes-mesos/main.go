@@ -39,8 +39,8 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/pod"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/service"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
-
 	kscheduler "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
+	kendpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
@@ -48,7 +48,7 @@ import (
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	kmscheduler "github.com/mesosphere/kubernetes-mesos/scheduler"
-	endpoint "github.com/mesosphere/kubernetes-mesos/service"
+	kmendpoint "github.com/mesosphere/kubernetes-mesos/service"
 )
 
 var (
@@ -59,6 +59,7 @@ var (
 	executorPath                = flag.String("executor_path", "", "Location of the kubernetes executor executable")
 	proxyPath                   = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
 	minionPort                  = flag.Uint("minion_port", 10250, "The port at which kubelet will be listening on the minions.")
+	useHostPortEndpoints        = flag.Bool("host_port_endpoints", true, "Map service endpoints to hostIP:hostPort instead of podIP:containerPort. Default true.")
 	etcdServerList, machineList util.StringList
 )
 
@@ -236,7 +237,7 @@ func (m *kubernetesMaster) init(scheduler kscheduler.Scheduler, cloud cloudprovi
 
 // Run begins serving the Kubernetes API. It never returns.
 func (m *kubernetesMaster) run(myAddress, apiPrefix string, codec runtime.Codec) error {
-	endpoints := endpoint.NewEndpointController(m.serviceRegistry, m.client)
+	endpoints := m.createEndpointController()
 	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, syncPeriod)
 	plugin.New(m.scheduler.NewPluginConfig()).Run()
 
@@ -248,4 +249,11 @@ func (m *kubernetesMaster) run(myAddress, apiPrefix string, codec runtime.Codec)
 		MaxHeaderBytes: 1 << 20,
 	}
 	return s.ListenAndServe()
+}
+
+func (m *kubernetesMaster) createEndpointController() {
+	if useHostPortEndpoints {
+		return kmendpoint.NewEndpointController(m.serviceRegistry, m.client)
+	}
+	return kendpoint.NewEndpointController(m.serviceRegistry, m.client)
 }
