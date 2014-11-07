@@ -95,7 +95,7 @@ Create a file named `redis-master-service.json` that contains:
 }
 ```
 
-This will cause all pods to see the redis master apparently running on localhost:10000.
+This will cause all pods to see the redis master apparently running on `localhost:10000`.
 
 Once you have that service description, you can create the service with the REST API:
 
@@ -321,7 +321,7 @@ if (isset($_GET['cmd']) === true) {
 
 To play with the service itself, find the IP address of a Mesos slave that is running a frontend pod and visit `http://<host-ip>:31030`.
 ```shell
-# You'll actually want to interact with this app via a browser but you can test its availability using `curl`:
+# You'll actually want to interact with this app via a browser but you can test its access using curl:
 $ curl http://10.132.189.243:31030
 <html ng-app="redis">
   <head>
