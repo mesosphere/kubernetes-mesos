@@ -771,6 +771,9 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 		return fmt.Errorf("Pod Task does not exist %v\n", taskId)
 	}
 
+	// TODO(jdef): ensure that the task hasAcceptedOffer(), it's possible that between
+	// Schedule() and now that the offer for this task was rescinded or invalidated
+
 	// TODO(k8s): move this to a watch/rectification loop.
 	manifest, err := k.makeManifest(binding.Host, *task.Pod)
 	if err != nil {
