@@ -292,6 +292,10 @@ func (k *KubernetesScheduler) Disconnected(driver mesos.SchedulerDriver) {
         for offerId := range k.offers {
 		k.deleteOffer(offerId)
         }
+
+	// TODO(jdef): it's possible that a task is pending, in between Schedule() and
+	// Bind(), such that it's offer is now invalid. We should check for that and
+	// reschedule the pod (clearing the offer from the task) to avoid TASK_LOST
 }
 
 // ResourceOffers is called when the scheduler receives some offers from the master.
