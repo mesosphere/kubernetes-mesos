@@ -276,7 +276,7 @@ func (k *KubernetesScheduler) Registered(driver mesos.SchedulerDriver,
 // Reregistered is called when the scheduler re-registered with the master successfully.
 // This happends when the master fails over.
 func (k *KubernetesScheduler) Reregistered(driver mesos.SchedulerDriver, masterInfo *mesos.MasterInfo) {
-	log.Infof("Scheduler reregistered with the master: %v with frameworkId: %v\n", masterInfo)
+	log.Infof("Scheduler reregistered with the master: %v\n", masterInfo)
 	k.registered = true
 }
 
@@ -284,6 +284,14 @@ func (k *KubernetesScheduler) Reregistered(driver mesos.SchedulerDriver, masterI
 func (k *KubernetesScheduler) Disconnected(driver mesos.SchedulerDriver) {
 	log.Infof("Master disconnected!\n")
 	k.registered = false
+
+        k.Lock()
+        defer k.Unlock()
+
+        // discard all cached offers to avoid unnecessary TASK_LOST updates
+        for offerId := range k.offers {
+		k.deleteOffer(offerId)
+        }
 }
 
 // ResourceOffers is called when the scheduler receives some offers from the master.
