@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
-	"time"
 
 	"code.google.com/p/go-uuid/uuid"
 	"code.google.com/p/goprotobuf/proto"
@@ -25,31 +24,28 @@ import (
 	"gopkg.in/v1/yaml"
 )
 
-var errSchedulerTimeout = fmt.Errorf("Schedule time out")
-
 const (
 	containerCpus            = 0.25
 	containerMem             = 64
 	defaultFinishedTasksSize = 1024
 )
 
-// PodScheduleFunc implements how to schedule
-// pods among slaves. We can have different implementation
-// for different scheduling policy.
+// PodScheduleFunc implements how to schedule pods among slaves.
+// We can have different implementation for different scheduling policy.
 //
-// The Schedule function takes a group of slaves (each contains offers
-// from that slave), and a group of pods.
+// The Schedule function accepts a group of slaves (each contains offers from
+// that slave) and a single pod, which aligns well with the k8s scheduling
+// algorithm. It returns an offerId that is acceptable for the pod, otherwise
+// nil. The caller is responsible for filling in task state w/ relevant offer
+// details.
 //
-// After deciding which slave to schedule the pod, it fills the task info and the
-//'SelectedMachine' channel  with the host name of the slave.
 // See the FIFOScheduleFunc for example.
-type PodScheduleFunc func(k *KubernetesScheduler, slaves map[string]*Slave, tasks map[string]*PodTask) []*PodTask
+type PodScheduleFunc func(k *KubernetesScheduler, slaves map[string]*Slave, task *PodTask) (string, error)
 
 // A struct that describes a pod task.
 type PodTask struct {
 	ID              string
 	Pod             *api.Pod
-	SelectedMachine chan string
 	TaskInfo        *mesos.TaskInfo
 	OfferIds        []string
 	Launched        bool
@@ -80,7 +76,8 @@ func (t *PodTask) hasAcceptedOffer() bool {
 	return t.TaskInfo.TaskId != nil
 }
 
-// Fill the TaskInfo in the PodTask, should be called in PodScheduleFunc.
+// Fill the TaskInfo in the PodTask, should be called during k8s scheduling,
+// before binding.
 func (t *PodTask) FillTaskInfo(slaveId string, offer *mesos.Offer) {
 	t.OfferIds = append(t.OfferIds, offer.GetId().GetValue())
 
@@ -175,7 +172,6 @@ func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
 	task := &PodTask{
 		ID:              taskId, // pod.JSONBase.ID,
 		Pod:             pod,
-		SelectedMachine: make(chan string, 1),
 		TaskInfo:        new(mesos.TaskInfo),
 		Launched:        false,
 	}
@@ -299,6 +295,8 @@ func (k *KubernetesScheduler) ResourceOffers(driver mesos.SchedulerDriver, offer
 	defer k.Unlock()
 
 	// Record the offers in the global offer map as well as each slave's offer map.
+	// TODO(jdef): we probably don't want to hold onto these offers forever because that's greedy
+
 	for _, offer := range offers {
 		offerId := offer.GetId().GetValue()
 		slaveId := offer.GetSlaveId().GetValue()
@@ -312,7 +310,6 @@ func (k *KubernetesScheduler) ResourceOffers(driver mesos.SchedulerDriver, offer
 		k.offers[offerId] = offer
 		k.slaveIDs[slave.HostName] = slaveId
 	}
-	k.doSchedule()
 }
 
 // requires the caller to have locked the offers and slaves state
@@ -570,28 +567,33 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionListe
 		if task, found := k.pendingTasks[taskID]; !found {
 			return "", fmt.Errorf("Task %s is not pending, nothing to schedule", taskID)
 		} else {
-			k.doSchedule()
-			select {
-			case machine := <-task.SelectedMachine:
-				return machine, nil
-			case <-time.After(time.Second * 10):
-				// TODO(jdef) don't hard code this, use something configurable
-				return "", errSchedulerTimeout
-			}
+			return k.doSchedule(task)
 		}
 	}
 }
 
-// Call ScheduleFunc and subtract some resources.
-func (k *KubernetesScheduler) doSchedule() {
-	if tasks := k.scheduleFunc(k, k.slaves, k.pendingTasks); tasks != nil {
-		// Subtract offers.
-		for _, task := range tasks {
-			for _, offerId := range task.OfferIds {
-				k.deleteOffer(offerId)
-			}
-		}
+// Call ScheduleFunc and subtract some resources, returning the name of the machine the task is scheduled on
+func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
+	offerId, err := k.scheduleFunc(k, k.slaves, task)
+	if err != nil {
+		return "", err
 	}
+	offer, ok := k.offers[offerId]
+	if !ok {
+		return "", fmt.Errorf("Offer disappeared (%v) while scheduling task %v", offerId, task.ID)
+	}
+	slaveId := offer.GetSlaveId().GetValue()
+	slave, ok := k.slaves[slaveId]
+	if !ok {
+		return "", fmt.Errorf("Slave disappeared (%v) while scheduling task %v", slaveId, task.ID)
+	}
+	task.FillTaskInfo(slaveId, offer)
+
+	// Subtract offers.
+	for _, offerId := range task.OfferIds {
+		k.deleteOffer(offerId)
+	}
+	return slave.HostName, nil
 }
 
 // implementation of scheduling plugin's NextPod func; see plugin/pkg/scheduler
@@ -860,43 +862,25 @@ func (k *KubernetesScheduler) WatchPods(resourceVersion uint64, filter func(*api
 }
 
 // A FCFS scheduler.
-func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, tasks map[string]*PodTask) []*PodTask {
-	for _, task := range tasks {
-		if task.hasAcceptedOffer() {
-			// skip tasks that have already made it through FillTaskInfo
-			continue
-		}
-		for slaveId, slave := range slaves {
-			for _, offer := range slave.Offers {
-				if !task.AcceptOffer(slaveId, offer) {
-					log.V(2).Infof("Declining offer %v", offer)
-					if err := k.Driver.DeclineOffer(offer.Id, nil); err != nil {
-						log.Warningf("Failed to decline offer %v", offer.Id)
-					}
-					k.deleteOffer(offer.Id.GetValue())
-					continue
+func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, task *PodTask) (string, error) {
+	if task.hasAcceptedOffer() {
+		// skip tasks that have already made it through FillTaskInfo
+		return "", fmt.Errorf("already accepted an offer for pod: %v", task.Pod.ID)
+	}
+	for slaveId, slave := range slaves {
+		for _, offer := range slave.Offers {
+			if !task.AcceptOffer(slaveId, offer) {
+				log.V(2).Infof("Declining offer %v", offer)
+				if err := k.Driver.DeclineOffer(offer.Id, nil); err != nil {
+					log.Warningf("Failed to decline offer %v: %v", offer.Id, err)
 				}
-
-				// Fill the task info.
-				task.FillTaskInfo(slaveId, offer)
-				task.SelectedMachine <- slave.HostName
-
-				// TODO(nnielsen): Schedule multiple pods.
-				// Just schedule one task for now.
-				return []*PodTask{task}
+				k.deleteOffer(offer.Id.GetValue())
+				continue
 			}
+			return offer.Id.GetValue(), nil
 		}
 	}
-	return nil
-}
-
-func containsHostName(machines []string, machine string) bool {
-	for _, m := range machines {
-		if m == machine {
-			return true
-		}
-	}
-	return false
+	return "", fmt.Errorf("failed to find a fit for pod: %v", task.Pod.ID)
 }
 
 func containsTask(finishedTasks *ring.Ring, taskId string) bool {
