@@ -22,5 +22,8 @@ ENV GOPATH /pkg
 VOLUME /target
 CMD [ ]
 
+# optional: if $SNAP is host-volume-mounted into the container at run-time then
+# use that as the project source code repo instead of github
+ENV SNAP /snapshot
 ADD run.sh /
 ENTRYPOINT [ "/run.sh" ]
