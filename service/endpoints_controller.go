@@ -30,22 +30,26 @@ import (
 	"github.com/golang/glog"
 )
 
+type EndpointController interface {
+	SyncServiceEndpoints() error
+}
+
 // EndpointController manages service endpoints.
-type EndpointController struct {
+type endpointController struct {
 	client          *client.Client
 	serviceRegistry service.Registry
 }
 
 // NewEndpointController returns a new *EndpointController.
-func NewEndpointController(serviceRegistry service.Registry, client *client.Client) *EndpointController {
-	return &EndpointController{
+func NewEndpointController(serviceRegistry service.Registry, client *client.Client) EndpointController {
+	return &endpointController{
 		serviceRegistry: serviceRegistry,
 		client:          client,
 	}
 }
 
 // SyncServiceEndpoints syncs service endpoints.
-func (e *EndpointController) SyncServiceEndpoints() error {
+func (e *endpointController) SyncServiceEndpoints() error {
 	services, err := e.client.ListServices(labels.Everything())
 	if err != nil {
 		glog.Errorf("Failed to list services: %v", err)
