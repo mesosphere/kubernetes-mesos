@@ -44,11 +44,11 @@ type PodScheduleFunc func(k *KubernetesScheduler, slaves map[string]*Slave, task
 
 // A struct that describes a pod task.
 type PodTask struct {
-	ID              string
-	Pod             *api.Pod
-	TaskInfo        *mesos.TaskInfo
-	OfferIds        []string
-	Launched        bool
+	ID       string
+	Pod      *api.Pod
+	TaskInfo *mesos.TaskInfo
+	OfferIds []string
+	Launched bool
 }
 
 func rangeResource(name string, ports []uint64) *mesos.Resource {
@@ -170,10 +170,10 @@ func (t *PodTask) AcceptOffer(slaveId string, offer *mesos.Offer) bool {
 func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
 	taskId := uuid.NewUUID().String()
 	task := &PodTask{
-		ID:              taskId, // pod.JSONBase.ID,
-		Pod:             pod,
-		TaskInfo:        new(mesos.TaskInfo),
-		Launched:        false,
+		ID:       taskId, // pod.JSONBase.ID,
+		Pod:      pod,
+		TaskInfo: new(mesos.TaskInfo),
+		Launched: false,
 	}
 	task.TaskInfo.Name = proto.String("PodTask")
 	task.TaskInfo.Executor = executor
@@ -285,13 +285,13 @@ func (k *KubernetesScheduler) Disconnected(driver mesos.SchedulerDriver) {
 	log.Infof("Master disconnected!\n")
 	k.registered = false
 
-        k.Lock()
-        defer k.Unlock()
+	k.Lock()
+	defer k.Unlock()
 
-        // discard all cached offers to avoid unnecessary TASK_LOST updates
-        for offerId := range k.offers {
+	// discard all cached offers to avoid unnecessary TASK_LOST updates
+	for offerId := range k.offers {
 		k.deleteOffer(offerId)
-        }
+	}
 
 	// TODO(jdef): it's possible that a task is pending, in between Schedule() and
 	// Bind(), such that it's offer is now invalid. We should check for that and
