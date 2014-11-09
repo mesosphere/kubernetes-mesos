@@ -24,7 +24,7 @@ test -d $SNAP && {
 } || {
   mkdir -pv /pkg/src/${GOPKG}
   cd /pkg/src/${GOPKG}
-  git clone https://${GOPKG}.git .
+  git clone ${GIT_REPO:-https://${GOPKG}.git} .
   test "x${GIT_BRANCH}" = "x" || git checkout "${GIT_BRANCH}"
 }
 
