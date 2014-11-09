@@ -51,6 +51,10 @@ func (p *podBackoff) getEntry(podID string) *backoffEntry {
 	return entry
 }
 
+// TODO(jdef): allow for pluggable backoff sequences, strategies here. For
+// example we may want to use a fibonacci backoff sequence for certain cluster
+// sizes. Or, perhaps we'll allow per-pod backoff factors at some point (ala
+// marathon).
 func (p *podBackoff) getBackoff(podID string) time.Duration {
 	entry := p.getEntry(podID)
 	duration := entry.backoff
