@@ -75,7 +75,6 @@ Assuming your mesos cluster is started, and that the mesos-master and etcd are r
 ```shell
 $ ./bin/kubernetes-mesos \
   -address=${servicehost} \
-  -machines=${servicehost} \
   -mesos_master=${servicehost}:5050 \
   -etcd_servers=http://${servicehost}:4001 \
   -executor_path=$(pwd)/bin/kubernetes-executor \
