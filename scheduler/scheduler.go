@@ -101,6 +101,16 @@ func (t *PodTask) FillTaskInfo(slaveId string, offer *mesos.Offer) {
 	}
 }
 
+// Clear offer-related details from the task, should be called if/when an offer
+// has already been assigned to a task but for some reason is no longer valid.
+func (t *PodTask) ClearTaskInfo() {
+	t.OfferIds = nil
+	t.TaskInfo.TaskId = nil
+	t.TaskInfo.SlaveId = nil
+	t.TaskInfo.Resources = nil
+	t.TaskInfo.Data = nil
+}
+
 func (t *PodTask) Ports() []uint64 {
 	ports := make([]uint64, 0)
 	for _, container := range t.Pod.DesiredState.Manifest.Containers {
@@ -592,11 +602,14 @@ func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
 	}
 	offer, ok := k.offers[offerId]
 	if !ok {
+		task.ClearTaskInfo()
 		return "", fmt.Errorf("Offer disappeared (%v) while scheduling task %v", offerId, task.ID)
 	}
 	slaveId := offer.GetSlaveId().GetValue()
 	slave, ok := k.slaves[slaveId]
 	if !ok {
+		//TODO(jdef): reject offer?
+		task.ClearTaskInfo()
 		return "", fmt.Errorf("Slave disappeared (%v) while scheduling task %v", slaveId, task.ID)
 	}
 	task.FillTaskInfo(slaveId, offer)
@@ -777,6 +790,7 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	// TODO(k8s): move this to a watch/rectification loop.
 	manifest, err := k.makeManifest(binding.Host, *task.Pod)
 	if err != nil {
+		log.Warningf("Failed to generate an updated manifest")
 		return err
 	}
 
@@ -795,7 +809,8 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	log.V(2).Infof("Launching task : %v", task)
 	offerId := &mesos.OfferID{Value: proto.String(task.OfferIds[0])}
 	if err := k.Driver.LaunchTasks(offerId, []*mesos.TaskInfo{task.TaskInfo}, nil); err != nil {
-		// TODO(jdefelice): should we attempt to reschedule the pod here?
+		task.ClearTaskInfo()
+		// TODO(jdef): reject the offer too?
 		return fmt.Errorf("Failed to launch task for pod %s: %v", podId, err)
 	}
 	task.Pod.DesiredState.Host = binding.Host
@@ -879,8 +894,13 @@ func (k *KubernetesScheduler) WatchPods(resourceVersion uint64, filter func(*api
 // A FCFS scheduler.
 func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, task *PodTask) (string, error) {
 	if task.hasAcceptedOffer() {
-		// skip tasks that have already made it through FillTaskInfo
-		return "", fmt.Errorf("already accepted an offer for pod: %v", task.Pod.ID)
+		// verify that the offer is still on the table
+		offerId := task.OfferIds[0]
+		if _, ok := k.offers[offerId]; ok {
+			// skip tasks that have already have assigned offers
+			return offerId, nil
+		}
+		task.ClearTaskInfo()
 	}
 	for slaveId, slave := range slaves {
 		for _, offer := range slave.Offers {
