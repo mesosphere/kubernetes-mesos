@@ -4,7 +4,6 @@ import (
 	"container/ring"
 	"encoding/json"
 	"fmt"
-	"runtime/debug"
 	"sync"
 
 	"code.google.com/p/go-uuid/uuid"
@@ -710,8 +709,6 @@ func (k *KubernetesScheduler) ListPods(selector labels.Selector) (*api.PodList, 
 // Get a specific pod.
 func (k *KubernetesScheduler) GetPod(podId string) (*api.Pod, error) {
 	log.V(2).Infof("Get pod '%s'\n", podId)
-
-	debug.PrintStack()
 
 	k.RLock()
 	defer k.RUnlock()
