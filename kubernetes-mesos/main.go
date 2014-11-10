@@ -52,15 +52,15 @@ import (
 )
 
 var (
-	port                        = flag.Uint("port", 8888, "The port to listen on.  Default 8888.")
-	address                     = flag.String("address", "127.0.0.1", "The address on the local server to listen to. Default 127.0.0.1")
-	apiPrefix                   = flag.String("api_prefix", "/api/v1beta1", "The prefix for API requests on the server. Default '/api/v1beta1'")
-	mesosMaster                 = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master")
-	executorPath                = flag.String("executor_path", "", "Location of the kubernetes executor executable")
-	proxyPath                   = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
-	minionPort                  = flag.Uint("minion_port", 10250, "The port at which kubelet will be listening on the minions.")
-	useHostPortEndpoints        = flag.Bool("host_port_endpoints", true, "Map service endpoints to hostIP:hostPort instead of podIP:containerPort. Default true.")
-	etcdServerList, machineList util.StringList
+	port                 = flag.Uint("port", 8888, "The port to listen on.  Default 8888.")
+	address              = flag.String("address", "127.0.0.1", "The address on the local server to listen to. Default 127.0.0.1")
+	apiPrefix            = flag.String("api_prefix", "/api/v1beta1", "The prefix for API requests on the server. Default '/api/v1beta1'")
+	mesosMaster          = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master")
+	executorPath         = flag.String("executor_path", "", "Location of the kubernetes executor executable")
+	proxyPath            = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
+	minionPort           = flag.Uint("minion_port", 10250, "The port at which kubelet will be listening on the minions.")
+	useHostPortEndpoints = flag.Bool("host_port_endpoints", true, "Map service endpoints to hostIP:hostPort instead of podIP:containerPort. Default true.")
+	etcdServerList       util.StringList
 )
 
 const (
@@ -73,7 +73,6 @@ const (
 
 func init() {
 	flag.Var(&etcdServerList, "etcd_servers", "Servers for the etcd (http://ip:port), comma separated")
-	flag.Var(&machineList, "machines", "List of machines to schedule onto, comma separated.")
 }
 
 type kubernetesMaster struct {
@@ -92,10 +91,6 @@ func main() {
 	flag.Parse()
 	util.InitLogs()
 	defer util.FlushLogs()
-
-	if len(machineList) == 0 {
-		log.Fatal("No machines specified!")
-	}
 
 	if len(etcdServerList) <= 0 {
 		log.Fatal("No etcd severs specified!")
@@ -190,8 +185,8 @@ func main() {
 
 	m := newKubernetesMaster(mesosPodScheduler, &master.Config{
 		Client:        client,
-		Cloud:         mesosPodScheduler,
-		Minions:       machineList,
+		Cloud:         &kmscheduler.MesosCloud{mesosPodScheduler},
+		Minions:       nil,
 		PodInfoGetter: podInfoGetter,
 		EtcdServers:   etcdServerList,
 	}, etcdClient, serviceRegistry)
@@ -201,7 +196,7 @@ func main() {
 func newKubernetesMaster(scheduler *kmscheduler.KubernetesScheduler, c *master.Config, etcdClient tools.EtcdClient, sr service.Registry) *kubernetesMaster {
 	var m *kubernetesMaster
 
-	minionRegistry := minion.NewRegistry(c.Minions) // TODO(adam): Mimic minionRegistryMaker(c)?
+	minionRegistry := kmscheduler.NewCloudRegistry(c.Cloud)
 
 	m = &kubernetesMaster{
 		podRegistry:        scheduler,

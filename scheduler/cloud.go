@@ -9,27 +9,31 @@ var (
 	noHostNameSpecified = errors.New("No hostname specified")
 )
 
+type MesosCloud struct {
+	*KubernetesScheduler
+}
+
 // implementation of cloud.Interface; Mesos natively provides minimal cloud-type resources.
 // More robust cloud support requires a combination of Mesos and cloud-specific knowledge,
 // which will likely never be present in this vanilla implementation.
-func (k *KubernetesScheduler) Instances() (cloud.Instances, bool) {
-	return k, true
+func (c *MesosCloud) Instances() (cloud.Instances, bool) {
+	return c, true
 }
 
 // implementation of cloud.Interface; Mesos does not provide any type of native load
 // balancing by default, so this implementation always returns (nil,false).
-func (k *KubernetesScheduler) TCPLoadBalancer() (cloud.TCPLoadBalancer, bool) {
+func (c *MesosCloud) TCPLoadBalancer() (cloud.TCPLoadBalancer, bool) {
 	return nil, false
 }
 
 // implementation of cloud.Interface; Mesos does not provide any type of native region
 // or zone awareness, so this implementation always returns (nil,false).
-func (k *KubernetesScheduler) Zones() (cloud.Zones, bool) {
+func (c *MesosCloud) Zones() (cloud.Zones, bool) {
 	return nil, false
 }
 
 // implementation of cloud.Instances
-func (k *KubernetesScheduler) IPAddress(name string) (net.IP, error) {
+func (c *MesosCloud) IPAddress(name string) (net.IP, error) {
 	if name == "" {
 		return nil, noHostNameSpecified
 	}
@@ -44,13 +48,13 @@ func (k *KubernetesScheduler) IPAddress(name string) (net.IP, error) {
 	}
 }
 
-// implementation of cloud.Instances
-func (k *KubernetesScheduler) List(filter string) ([]string, error) {
-	k.RLock()
-	defer k.RUnlock()
+// implementation of cloud.Instances; does not implement any filtering
+func (c *MesosCloud) List(filter string) ([]string, error) {
+	c.RLock()
+	defer c.RUnlock()
 
 	var slaveHosts []string
-	for _, slave := range k.slaves {
+	for _, slave := range c.slaves {
 		slaveHosts = append(slaveHosts, slave.HostName)
 	}
 	return slaveHosts, nil
