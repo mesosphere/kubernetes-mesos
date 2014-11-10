@@ -41,7 +41,8 @@ $ docker run -rm -v $(pwd)/bin:/target jdef/kubernetes-mesos:dockerbuild
 
 Instructions to build and install from source are as follows:
 
-**NOTE:** Building Kubernetes for Mesos requires Go 1.2+, protobuf 2.5.0, and Mesos 0.19+. Building the project is grealy simplified by using godep.
+**NOTE:** Building Kubernetes for Mesos requires Go 1.2+, protobuf 2.5.0, and Mesos 0.19+.
+Building the project is greatly simplified by using godep.
 
 * To install Mesos, see [mesosphere.io/downloads](http://mesosphere.io/downloads)
 * To install godep, see [github.com/tools/godep](https://github.com/tools/godep)
