@@ -608,7 +608,7 @@ func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
 	slaveId := offer.GetSlaveId().GetValue()
 	slave, ok := k.slaves[slaveId]
 	if !ok {
-		//TODO(jdef): reject offer?
+		//TODO(jdef): decline offer?
 		task.ClearTaskInfo()
 		return "", fmt.Errorf("Slave disappeared (%v) while scheduling task %v", slaveId, task.ID)
 	}
@@ -810,7 +810,7 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	offerId := &mesos.OfferID{Value: proto.String(task.OfferIds[0])}
 	if err := k.Driver.LaunchTasks(offerId, []*mesos.TaskInfo{task.TaskInfo}, nil); err != nil {
 		task.ClearTaskInfo()
-		// TODO(jdef): reject the offer too?
+		// TODO(jdef): decline the offer too?
 		return fmt.Errorf("Failed to launch task for pod %s: %v", podId, err)
 	}
 	task.Pod.DesiredState.Host = binding.Host
@@ -900,6 +900,7 @@ func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, task *Po
 			// skip tasks that have already have assigned offers
 			return offerId, nil
 		}
+		// TODO(jdef): decline offer?
 		task.ClearTaskInfo()
 	}
 	for slaveId, slave := range slaves {
