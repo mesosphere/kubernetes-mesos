@@ -1,8 +1,13 @@
 package scheduler
 
+import "errors"
 import "net"
 import log "github.com/golang/glog"
 import cloud "github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
+
+var (
+	noHostNameSpecified = errors.New("No hostname specified")
+)
 
 // implementation of cloud.Interface; Mesos natively provides minimal cloud-type resources.
 // More robust cloud support requires a combination of Mesos and cloud-specific knowledge,
@@ -25,6 +30,9 @@ func (k *KubernetesScheduler) Zones() (cloud.Zones, bool) {
 
 // implementation of cloud.Instances
 func (k *KubernetesScheduler) IPAddress(name string) (net.IP, error) {
+	if name == "" {
+		return nil, noHostNameSpecified
+	}
 	// TODO(jdef): validate that name actually points to a slave that we know
 	if iplist, err := net.LookupIP(name); err != nil {
 		log.Warningf("Failed to resolve IP from host name '%v': %v", name, err)
