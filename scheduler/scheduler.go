@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"code.google.com/p/go-uuid/uuid"
 	"code.google.com/p/goprotobuf/proto"
@@ -27,6 +28,8 @@ const (
 	containerCpus            = 0.25
 	containerMem             = 64
 	defaultFinishedTasksSize = 1024
+	defaultOfferTTL          = 5
+	defaultOfferLingerTTL    = 120
 )
 
 // PodScheduleFunc implements how to schedule pods among slaves.
@@ -190,17 +193,16 @@ func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
 }
 
 // A struct that describes the slave.
+type empty struct{}
 type Slave struct {
 	HostName string
-	Offers   map[string]*mesos.Offer
-	tasks    map[string]*PodTask
+	Offers   map[string]empty
 }
 
 func newSlave(hostName string) *Slave {
 	return &Slave{
 		HostName: hostName,
-		Offers:   make(map[string]*mesos.Offer),
-		tasks:    make(map[string]*PodTask),
+		Offers:   make(map[string]empty),
 	}
 }
 
@@ -224,8 +226,7 @@ type KubernetesScheduler struct {
 	masterInfo  *mesos.MasterInfo
 	registered  bool
 
-	// OfferID => offer.
-	offers map[string]*mesos.Offer
+	offers OfferRegistry
 
 	// SlaveID => slave.
 	slaves map[string]*Slave
@@ -251,7 +252,8 @@ type KubernetesScheduler struct {
 
 // New create a new KubernetesScheduler
 func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client, helper tools.EtcdHelper, sr service.Registry) *KubernetesScheduler {
-	return &KubernetesScheduler{
+	var k *KubernetesScheduler
+	k = &KubernetesScheduler{
 		new(sync.RWMutex),
 		helper,
 		executor,
@@ -259,7 +261,14 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 		nil,
 		nil,
 		false,
-		make(map[string]*mesos.Offer),
+		CreateOfferRegistry(OfferRegistryConfig{
+			declineOffer: func(id string) error {
+				offerId := &mesos.OfferID{Value: proto.String(id)}
+				return k.Driver.DeclineOffer(offerId, nil)
+			},
+			ttl:       defaultOfferTTL * time.Second,
+			lingerTtl: defaultOfferLingerTTL * time.Second, // remember expired offers so that we can tell if a previously scheduler offer relies on one
+		}),
 		make(map[string]*Slave),
 		make(map[string]string),
 		make(map[string]*PodTask),
@@ -271,6 +280,7 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 		cache.NewFIFO(),
 		sr,
 	}
+	return k
 }
 
 // Registered is called when the scheduler registered with the master successfully.
@@ -298,13 +308,7 @@ func (k *KubernetesScheduler) Disconnected(driver mesos.SchedulerDriver) {
 	defer k.Unlock()
 
 	// discard all cached offers to avoid unnecessary TASK_LOST updates
-	for offerId := range k.offers {
-		k.deleteOffer(offerId)
-	}
-
-	// TODO(jdef): it's possible that a task is pending, in between Schedule() and
-	// Bind(), such that it's offer is now invalid. We should check for that and
-	// clearing the offer from the task (along with a related check in Bind())
+	k.offers.Invalidate()
 }
 
 // ResourceOffers is called when the scheduler receives some offers from the master.
@@ -318,6 +322,7 @@ func (k *KubernetesScheduler) ResourceOffers(driver mesos.SchedulerDriver, offer
 	// Record the offers in the global offer map as well as each slave's offer map.
 	// TODO(jdef): we probably don't want to hold onto these offers forever because that's greedy
 
+	k.offers.Add(offers)
 	for _, offer := range offers {
 		offerId := offer.GetId().GetValue()
 		slaveId := offer.GetSlaveId().GetValue()
@@ -327,21 +332,24 @@ func (k *KubernetesScheduler) ResourceOffers(driver mesos.SchedulerDriver, offer
 			k.slaves[slaveId] = newSlave(offer.GetHostname())
 			slave = k.slaves[slaveId]
 		}
-		slave.Offers[offerId] = offer
-		k.offers[offerId] = offer
+		slave.Offers[offerId] = empty{}
 		k.slaveIDs[slave.HostName] = slaveId
 	}
 }
 
 // requires the caller to have locked the offers and slaves state
 func (k *KubernetesScheduler) deleteOffer(oid string) {
-	slaveId := k.offers[oid].GetSlaveId().GetValue()
-	delete(k.offers, oid)
+	if offer, ok := k.offers.Get(oid); ok {
+		k.offers.Delete(oid)
+		if details := offer.details(); details != nil {
+			slaveId := details.GetSlaveId().GetValue()
 
-	if slave, found := k.slaves[slaveId]; !found {
-		log.Warningf("No slave for id %s associated with offer id %s", slaveId, oid)
-	} else {
-		delete(slave.Offers, oid)
+			if slave, found := k.slaves[slaveId]; !found {
+				log.Warningf("No slave for id %s associated with offer id %s", slaveId, oid)
+			} else {
+				delete(slave.Offers, oid)
+			}
+		} // else, offer already expired / lingering
 	}
 }
 
@@ -390,8 +398,7 @@ func (k *KubernetesScheduler) handleTaskStarting(taskStatus *mesos.TaskStatus) {
 
 func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 	taskId, slaveId := taskStatus.GetTaskId().GetValue(), taskStatus.GetSlaveId().GetValue()
-	slave, exists := k.slaves[slaveId]
-	if !exists {
+	if _, exists := k.slaves[slaveId]; !exists {
 		log.Warningf("Ignore status TASK_RUNNING because the slave does not exist\n")
 		return
 	}
@@ -439,14 +446,12 @@ func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 	}
 
 	k.runningTasks[taskId] = task
-	slave.tasks[taskId] = task
 	delete(k.pendingTasks, taskId)
 }
 
 func (k *KubernetesScheduler) handleTaskFinished(taskStatus *mesos.TaskStatus) {
 	taskId, slaveId := taskStatus.GetTaskId().GetValue(), taskStatus.GetSlaveId().GetValue()
-	slave, exists := k.slaves[slaveId]
-	if !exists {
+	if _, exists := k.slaves[slaveId]; !exists {
 		log.Warningf("Ignore status TASK_FINISHED because the slave does not exist\n")
 		return
 	}
@@ -463,14 +468,10 @@ func (k *KubernetesScheduler) handleTaskFinished(taskStatus *mesos.TaskStatus) {
 	}
 
 	task := k.runningTasks[taskId]
-	_, exists = k.podToTask[task.ID]
-	if exists {
-		delete(k.podToTask, task.ID)
-	}
+	delete(k.podToTask, task.ID)
 
 	k.finishedTasks.Next().Value = taskId
 	delete(k.runningTasks, taskId)
-	delete(slave.tasks, taskId)
 }
 
 func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
@@ -559,7 +560,19 @@ func (k *KubernetesScheduler) FrameworkMessage(driver mesos.SchedulerDriver,
 // SlaveLost is called when some slave is lost.
 func (k *KubernetesScheduler) SlaveLost(driver mesos.SchedulerDriver, slaveId *mesos.SlaveID) {
 	log.Infof("Slave %v is lost\n", slaveId)
-	// TODO(yifan): Restart any unfinished tasks on that slave.
+
+	k.Lock()
+	defer k.Unlock()
+
+	// invalidate all offers mapped to that slave
+	if slave, ok := k.slaves[slaveId.GetValue()]; ok {
+		for offerId := range slave.Offers {
+			k.offers.InvalidateOne(offerId)
+		}
+	}
+
+	// unfinished tasks/pods will be dropped. use a replication controller if you want pods to
+	// be restarted when slaves die.
 }
 
 // ExecutorLost is called when some executor is lost.
@@ -599,19 +612,21 @@ func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	offer, ok := k.offers[offerId]
-	if !ok {
+	offer, ok := k.offers.Get(offerId)
+	if !ok || offer.hasExpired() {
+		// not much sense in release()ing the offer here since it vanished
 		task.ClearTaskInfo()
-		return "", fmt.Errorf("Offer disappeared (%v) while scheduling task %v", offerId, task.ID)
+		return "", fmt.Errorf("Offer disappeared or expired (%v) while scheduling task %v", offerId, task.ID)
 	}
-	slaveId := offer.GetSlaveId().GetValue()
+	slaveId := offer.details().GetSlaveId().GetValue()
 	slave, ok := k.slaves[slaveId]
 	if !ok {
-		//TODO(jdef): decline offer?
+		// not much sense in release()ing the offer here since its owner died
+		k.offers.Delete(offerId)
 		task.ClearTaskInfo()
 		return "", fmt.Errorf("Slave disappeared (%v) while scheduling task %v", slaveId, task.ID)
 	}
-	task.FillTaskInfo(slaveId, offer)
+	task.FillTaskInfo(slaveId, offer.details())
 
 	// Subtract offers.
 	for _, offerId := range task.OfferIds {
@@ -623,15 +638,13 @@ func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
 // implementation of scheduling plugin's NextPod func; see plugin/pkg/scheduler
 func (k *KubernetesScheduler) yield() *api.Pod {
 	pod := k.podQueue.Pop().(*api.Pod)
-	// TODO: Remove or reduce verbosity by sep 6th, 2014. Leave until then to
-	// make it easy to find scheduling problems.
-	log.Infof("About to try and schedule pod %v\n", pod.ID)
+	log.V(2).Infof("About to try and schedule pod %v\n", pod.ID)
 	return pod
 }
 
 // implementation of scheduling plugin's Error func; see plugin/pkg/scheduler
 func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *api.Pod, err error) {
-	log.Errorf("Error scheduling %v: %v; retrying", pod.ID, err)
+	log.Infof("Error scheduling %v: %v; retrying", pod.ID, err)
 	backoff.gc()
 
 	// Retry asynchronously.
@@ -781,8 +794,12 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 		return fmt.Errorf("Pod Task does not exist %v\n", taskId)
 	}
 
-	// TODO(jdef): ensure that the task hasAcceptedOffer(), it's possible that between
-	// Schedule() and now that the offer for this task was rescinded or invalidated
+	// sanity check: ensure that the task hasAcceptedOffer(), it's possible that between
+	// Schedule() and now that the offer for this task was rescinded or invalidated.
+	// ((we should never see this here))
+	if !task.hasAcceptedOffer() {
+		return fmt.Errorf("task has not accepted a valid offer, pod %v", podId)
+	}
 
 	// TODO(k8s): move this to a watch/rectification loop.
 	manifest, err := k.makeManifest(binding.Host, *task.Pod)
@@ -803,11 +820,14 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	}
 
 	// TODO(yifan): By this time, there is a chance that the slave is disconnected.
+	offer, ok := k.offers.Get(task.OfferIds[0])
+	if !ok || offer.hasExpired() {
+		return fmt.Errorf("failed prior to launchTask due to expired offer, pod %v", podId)
+	}
 	log.V(2).Infof("Launching task : %v", task)
-	offerId := &mesos.OfferID{Value: proto.String(task.OfferIds[0])}
-	if err := k.Driver.LaunchTasks(offerId, []*mesos.TaskInfo{task.TaskInfo}, nil); err != nil {
+	if err := k.Driver.LaunchTasks(offer.details().Id, []*mesos.TaskInfo{task.TaskInfo}, nil); err != nil {
+		offer.release()
 		task.ClearTaskInfo()
-		// TODO(jdef): decline the offer too?
 		return fmt.Errorf("Failed to launch task for pod %s: %v", podId, err)
 	}
 	task.Pod.DesiredState.Host = binding.Host
@@ -893,25 +913,30 @@ func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, task *Po
 	if task.hasAcceptedOffer() {
 		// verify that the offer is still on the table
 		offerId := task.OfferIds[0]
-		if _, ok := k.offers[offerId]; ok {
+		if offer, ok := k.offers.Get(offerId); ok && !offer.hasExpired() {
 			// skip tasks that have already have assigned offers
 			return offerId, nil
 		}
-		// TODO(jdef): decline offer?
 		task.ClearTaskInfo()
 	}
-	for slaveId, slave := range slaves {
-		for _, offer := range slave.Offers {
-			if !task.AcceptOffer(slaveId, offer) {
-				log.V(2).Infof("Declining offer %v", offer)
-				if err := k.Driver.DeclineOffer(offer.Id, nil); err != nil {
-					log.Warningf("Failed to decline offer %v: %v", offer.Id, err)
-				}
-				k.deleteOffer(offer.Id.GetValue())
-				continue
-			}
-			return offer.Id.GetValue(), nil
+
+	var acceptedOfferId string
+	k.offers.Walk(func(p perishableOffer) (bool, error) {
+		offer := p.details()
+		if offer == nil {
+			return false, fmt.Errorf("nil offer while scheduling task %v", task.ID)
 		}
+		slaveId := offer.GetSlaveId().GetValue()
+		if task.AcceptOffer(slaveId, offer) {
+			if p.acquire() {
+				acceptedOfferId = offer.Id.GetValue()
+				return true, nil // stop, we found an offer
+			}
+		}
+		return false, nil // continue
+	})
+	if acceptedOfferId != "" {
+		return acceptedOfferId, nil
 	}
 	return "", fmt.Errorf("failed to find a fit for pod: %v", task.Pod.ID)
 }
