@@ -3,6 +3,7 @@ package scheduler
 import (
 	"container/ring"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -28,6 +29,10 @@ const (
 	defaultOfferTTL          = 5    // seconds that an offer is viable, prior to being expired
 	defaultOfferLingerTTL    = 120  // seconds that an expired offer lingers in history
 	defaultWalkDelay         = 1    // number of seconds between "walks" that check for expired offers
+)
+
+var (
+	noSuitableOffersErr = errors.New("No suitable offers for pod/task")
 )
 
 // PodScheduleFunc implements how to schedule pods among slaves.
@@ -502,9 +507,25 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 	go func() {
 		defer util.HandleCrash()
 		podId := pod.ID
-		// TODO(jdef): did we error out because if non-matching offers? if so, register
-		// an offer listener to be notified if/when a matching offer comes in
-		backoff.wait(podId, nil)
+		// did we error out because if non-matching offers? if so, register an offer
+		// listener to be notified if/when a matching offer comes in.
+		var offersAvailable <-chan empty
+		if err == noSuitableOffersErr {
+			offersAvailable = k.offers.AwaitNew(podId, func(offer *mesos.Offer)(bool){
+				k.RLock()
+				defer k.RUnlock()
+				taskId, ok := k.podToTask[podId]
+				if !ok {
+					return false
+				}
+				task, ok := k.pendingTasks[taskId]
+				if !ok {
+					return false
+				}
+				return task.AcceptOffer(offer)
+			})
+		}
+		backoff.wait(podId, offersAvailable)
 
 		// Get the pod again; it may have changed/been scheduled already.
 		pod = &api.Pod{}
@@ -797,7 +818,8 @@ func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, task *Po
 	if acceptedOfferId != "" {
 		return acceptedOfferId, nil
 	}
-	return "", fmt.Errorf("failed to find a fit for pod: %v", task.Pod.ID)
+	log.Infof("failed to find a fit for pod: %v", task.Pod.ID)
+	return "", noSuitableOffersErr
 }
 
 func containsTask(finishedTasks *ring.Ring, taskId string) bool {

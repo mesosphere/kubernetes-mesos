@@ -66,10 +66,11 @@ func (p *podBackoff) getBackoff(podID string) time.Duration {
 	return duration
 }
 
-func (p *podBackoff) wait(podID string, done <-chan struct{}) {
+func (p *podBackoff) wait(podID string, done <-chan empty) {
 	select {
 	case <-time.After(p.getBackoff(podID)):
 	case <-done:
+		log.V(3).Infof("Leaving backoff early for pod %s", podID)
 	}
 }
 

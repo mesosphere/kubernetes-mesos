@@ -212,6 +212,7 @@ func (s *offerStorage) AwaitNew(id string, f OfferFilter) <-chan empty {
 		notify: ch,
 		age:    0,
 	}
+	log.V(3).Infof("Registering offer listener %s", listen.id)
 	s.listeners.Add(id, listen)
 	return ch
 }
@@ -251,6 +252,7 @@ func (s *offerStorage) Init() {
 			// can register between the Get() and Update(), but the consequences aren't
 			// very dire - the listener merely has to wait their full backoff period.
 			if _, ok := s.listeners.Get(listen.id); !ok {
+				log.V(3).Infof("Re-registering offer listener %s", listen.id)
 				s.listeners.Update(listen.id, listen)
 			}
 		} // else, you're gc'd
