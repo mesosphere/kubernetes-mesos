@@ -31,6 +31,15 @@ const (
 	defaultWalkDelay         = 1    // number of seconds between "walks" that check for expired offers
 )
 
+type stateType int
+
+const (
+	statePending = iota
+	stateRunning
+	stateFinished
+	stateUnknown
+)
+
 var (
 	noSuitableOffersErr = errors.New("No suitable offers for pod/task")
 )
@@ -136,6 +145,20 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 		sr,
 	}
 	return k
+}
+
+// assume that the caller has already locked around access to task state
+func (k *KubernetesScheduler) getTask(taskId string) (*PodTask, stateType) {
+	if task, found := k.runningTasks[taskId]; found {
+		return task, stateRunning
+	}
+	if task, found := k.pendingTasks[taskId]; found {
+		return task, statePending
+	}
+	if containsTask(k.finishedTasks, taskId) {
+		return nil, stateFinished
+	}
+	return nil, stateUnknown
 }
 
 func (k *KubernetesScheduler) Init() {
@@ -265,22 +288,22 @@ func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 		log.Warningf("Ignore status TASK_RUNNING because the slave does not exist\n")
 		return
 	}
-	task, exists := k.pendingTasks[taskId]
-	if !exists {
-		log.Warningf("Ignore status TASK_RUNNING (%s) because the the task is discarded: '%v'", taskId, k.pendingTasks)
-		return
-	}
-	if _, exists = k.runningTasks[taskId]; exists {
+	switch task, state := k.getTask(taskId); state {
+	case statePending:
+		log.Infof("Received running status for pending task: '%v'", taskStatus)
+		k.fillRunningPodInfo(task, taskStatus)
+		k.runningTasks[taskId] = task
+		delete(k.pendingTasks, taskId)
+	case stateRunning:
 		log.Warningf("Ignore status TASK_RUNNING because the the task is already running")
-		return
-	}
-	if containsTask(k.finishedTasks, taskId) {
+	case stateFinished:
 		log.Warningf("Ignore status TASK_RUNNING because the the task is already finished")
-		return
+	default:
+		log.Warningf("Ignore status TASK_RUNNING (%s) because the the task is discarded", taskId)
 	}
+}
 
-	log.Infof("Received running status: '%v'", taskStatus)
-
+func (k *KubernetesScheduler) fillRunningPodInfo(task *PodTask, taskStatus *mesos.TaskStatus) {
 	task.Pod.CurrentState.Status = task.Pod.DesiredState.Status
 	task.Pod.CurrentState.Manifest = task.Pod.DesiredState.Manifest
 	task.Pod.CurrentState.Host = task.Pod.DesiredState.Host
@@ -303,13 +326,12 @@ func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 			} else {
 				log.Warningf("Couldn't find network container for %s in %v", task.Pod.ID, target)
 			}
+		} else {
+			log.Errorf("Invalid TaskStatus.Data for task '%v': %v", task.ID, err)
 		}
 	} else {
-		log.Warningf("Missing Data for task '%v'", taskId)
+		log.Errorf("Missing TaskStatus.Data for task '%v'", task.ID)
 	}
-
-	k.runningTasks[taskId] = task
-	delete(k.pendingTasks, taskId)
 }
 
 func (k *KubernetesScheduler) handleTaskFinished(taskStatus *mesos.TaskStatus) {
@@ -318,47 +340,34 @@ func (k *KubernetesScheduler) handleTaskFinished(taskStatus *mesos.TaskStatus) {
 		log.Warningf("Ignore status TASK_FINISHED because the slave does not exist\n")
 		return
 	}
-	if _, exists := k.pendingTasks[taskId]; exists {
+	switch task, state := k.getTask(taskId); state {
+	case statePending:
 		panic("Pending task finished, this couldn't happen")
-	}
-	if _, exists := k.runningTasks[taskId]; exists {
-		log.Warningf("Ignore status TASK_FINISHED because the the task is not running")
-		return
-	}
-	if containsTask(k.finishedTasks, taskId) {
+	case stateRunning:
+		log.V(2).Infof(
+			"Received finished status for running task: '%v', running/pod task queue length = %d/%d",
+			taskStatus, len(k.runningTasks), len(k.podToTask))
+		delete(k.podToTask, task.Pod.ID)
+		k.finishedTasks.Next().Value = taskId
+		delete(k.runningTasks, taskId)
+	case stateFinished:
 		log.Warningf("Ignore status TASK_FINISHED because the the task is already finished")
-		return
+	default:
+		log.Warningf("Ignore status TASK_FINISHED because the the task is not running")
 	}
-
-	task := k.runningTasks[taskId]
-	delete(k.podToTask, task.ID)
-
-	k.finishedTasks.Next().Value = taskId
-	delete(k.runningTasks, taskId)
 }
 
 func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 	log.Errorf("Task failed: '%v'", taskStatus)
-
 	taskId := taskStatus.GetTaskId().GetValue()
 
-	podId := ""
-	if _, exists := k.pendingTasks[taskId]; exists {
-		task := k.pendingTasks[taskId]
-		podId = task.Pod.ID
+	switch task, state := k.getTask(taskId); state {
+	case statePending:
 		delete(k.pendingTasks, taskId)
-	}
-	if _, exists := k.runningTasks[taskId]; exists {
-		task := k.runningTasks[taskId]
-		podId = task.Pod.ID
+		delete(k.podToTask, task.Pod.ID)
+	case stateRunning:
 		delete(k.runningTasks, taskId)
-	}
-
-	if podId != "" {
-		_, exists := k.podToTask[podId]
-		if exists {
-			delete(k.podToTask, podId)
-		}
+		delete(k.podToTask, task.Pod.ID)
 	}
 }
 
@@ -366,24 +375,13 @@ func (k *KubernetesScheduler) handleTaskKilled(taskStatus *mesos.TaskStatus) {
 	log.Errorf("Task killed: '%v'", taskStatus)
 	taskId := taskStatus.GetTaskId().GetValue()
 
-	podId := ""
-	if _, exists := k.pendingTasks[taskId]; exists {
-		task := k.pendingTasks[taskId]
-		podId = task.Pod.ID
+	switch task, state := k.getTask(taskId); state {
+	case statePending:
 		delete(k.pendingTasks, taskId)
-	}
-	if _, exists := k.runningTasks[taskId]; exists {
-		task := k.runningTasks[taskId]
-		podId = task.Pod.ID
+		delete(k.podToTask, task.Pod.ID)
+	case stateRunning:
 		delete(k.runningTasks, taskId)
-	}
-
-	if podId != "" {
-		log.V(2).Infof("Deleting pod-task mapping: %s", podId)
-		_, exists := k.podToTask[podId]
-		if exists {
-			delete(k.podToTask, podId)
-		}
+		delete(k.podToTask, task.Pod.ID)
 	}
 }
 
@@ -391,23 +389,13 @@ func (k *KubernetesScheduler) handleTaskLost(taskStatus *mesos.TaskStatus) {
 	log.Errorf("Task lost: '%v'", taskStatus)
 	taskId := taskStatus.GetTaskId().GetValue()
 
-	podId := ""
-	if _, exists := k.pendingTasks[taskId]; exists {
-		task := k.pendingTasks[taskId]
-		podId = task.Pod.ID
+	switch task, state := k.getTask(taskId); state {
+	case statePending:
 		delete(k.pendingTasks, taskId)
-	}
-	if _, exists := k.runningTasks[taskId]; exists {
-		task := k.runningTasks[taskId]
-		podId = task.Pod.ID
+		delete(k.podToTask, task.Pod.ID)
+	case stateRunning:
 		delete(k.runningTasks, taskId)
-	}
-
-	if podId != "" {
-		_, exists := k.podToTask[podId]
-		if exists {
-			delete(k.podToTask, podId)
-		}
+		delete(k.podToTask, task.Pod.ID)
 	}
 }
 
@@ -430,6 +418,8 @@ func (k *KubernetesScheduler) SlaveLost(driver mesos.SchedulerDriver, slaveId *m
 			k.offers.InvalidateOne(offerId)
 		}
 	}
+
+	// TODO(jdef): delete slave from our internal list?
 
 	// unfinished tasks/pods will be dropped. use a replication controller if you want pods to
 	// be restarted when slaves die.
@@ -511,7 +501,7 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 		// listener to be notified if/when a matching offer comes in.
 		var offersAvailable <-chan empty
 		if err == noSuitableOffersErr {
-			offersAvailable = k.offers.AwaitNew(podId, func(offer *mesos.Offer)(bool){
+			offersAvailable = k.offers.AwaitNew(podId, func(offer *mesos.Offer) bool {
 				k.RLock()
 				defer k.RUnlock()
 				taskId, ok := k.podToTask[podId]
@@ -573,8 +563,6 @@ func (k *KubernetesScheduler) ListPods(selector labels.Selector) (*api.PodList, 
 			result = append(result, *pod)
 		}
 	}
-
-	// TODO(nnielsen): Refactor tasks append for the three lists.
 	for _, task := range k.pendingTasks {
 		pod := task.Pod
 
@@ -592,7 +580,8 @@ func (k *KubernetesScheduler) ListPods(selector labels.Selector) (*api.PodList, 
 	return matches, nil
 }
 
-// Get a specific pod.
+// Get a specific pod. It's *very* important to return a clone of the Pod that
+// we've saved because our caller will likely modify it.
 func (k *KubernetesScheduler) GetPod(podId string) (*api.Pod, error) {
 	log.V(2).Infof("Get pod '%s'\n", podId)
 
@@ -604,21 +593,22 @@ func (k *KubernetesScheduler) GetPod(podId string) (*api.Pod, error) {
 		return nil, fmt.Errorf("Could not resolve pod '%s' to task id", podId)
 	}
 
-	if task, exists := k.pendingTasks[taskId]; exists {
-		// return nil, fmt.Errorf("Pod '%s' is still pending", podId)
+	switch task, state := k.getTask(taskId); state {
+	case statePending:
 		log.V(2).Infof("Pending Pod '%s': %v", podId, task.Pod)
 		podCopy := *task.Pod
 		return &podCopy, nil
-	}
-	if containsTask(k.finishedTasks, taskId) {
-		return nil, fmt.Errorf("Pod '%s' is finished", podId)
-	}
-	if task, exists := k.runningTasks[taskId]; exists {
+	case stateRunning:
 		log.V(2).Infof("Running Pod '%s': %v", podId, task.Pod)
 		podCopy := *task.Pod
 		return &podCopy, nil
+	case stateFinished:
+		return nil, fmt.Errorf("Pod '%s' is finished", podId)
+	case stateUnknown:
+		return nil, fmt.Errorf("Unknown Pod %v", podId)
+	default:
+		return nil, fmt.Errorf("Unexpected task state %v for task %v", state, taskId)
 	}
-	return nil, fmt.Errorf("Unknown Pod %v", podId)
 }
 
 // Create a pod based on a specification; DOES NOT schedule it onto a specific machine,
@@ -748,15 +738,10 @@ func (k *KubernetesScheduler) DeletePod(podId string) error {
 	k.Lock()
 	defer k.Unlock()
 
-	// TODO(jdef): set pod.DesiredState.Host=""
-	// The k8s DeletePod() implementation does this, and the k8s REST implementation
-	// uses this state to determine what level of pod detail should be returned to the
-	// end user. Need to think more about the impact of setting this to "" before doing
-	// the same.
-
 	// prevent the scheduler from attempting to pop this; it's also possible that
 	// it's concurrently being scheduled (somewhere between pod scheduling and
-	// binding)
+	// binding) - if so, then we'll end up removing it from pendingTasks which
+	// will abort Bind()ing
 	k.podQueue.Delete(podId)
 
 	taskId, exists := k.podToTask[podId]
@@ -766,23 +751,25 @@ func (k *KubernetesScheduler) DeletePod(podId string) error {
 
 	// determine if the task has already been launched to mesos, if not then
 	// cleanup is easier (podToTask,pendingTasks) since there's no state to sync
+	var killTaskId *mesos.TaskID
+	task, state := k.getTask(taskId)
 
-	if task, exists := k.runningTasks[taskId]; exists {
-		taskId := &mesos.TaskID{Value: proto.String(task.ID)}
-		return k.Driver.KillTask(taskId)
-	}
-
-	if task, exists := k.pendingTasks[taskId]; exists {
+	switch state {
+	case stateRunning:
+		killTaskId = &mesos.TaskID{Value: proto.String(task.ID)}
+	case statePending:
 		if !task.Launched {
 			delete(k.podToTask, podId)
 			delete(k.pendingTasks, taskId)
 			return nil
 		}
-		taskId := &mesos.TaskID{Value: proto.String(task.ID)}
-		return k.Driver.KillTask(taskId)
+		killTaskId = &mesos.TaskID{Value: proto.String(task.ID)}
+	default:
+		return fmt.Errorf("Cannot kill pod '%s': pod not found", podId)
 	}
-
-	return fmt.Errorf("Cannot kill pod '%s': pod not found", podId)
+	// signal to watchers that the related pod is going down
+	task.Pod.DesiredState.Host = ""
+	return k.Driver.KillTask(killTaskId)
 }
 
 func (k *KubernetesScheduler) WatchPods(resourceVersion uint64, filter func(*api.Pod) bool) (watch.Interface, error) {
