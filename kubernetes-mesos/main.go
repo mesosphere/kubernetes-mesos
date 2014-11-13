@@ -175,6 +175,8 @@ func main() {
 
 	driver.Init()
 	defer driver.Destroy()
+
+	mesosPodScheduler.Init()
 	go driver.Start()
 
 	log.V(2).Info("Serving executor artifacts...")

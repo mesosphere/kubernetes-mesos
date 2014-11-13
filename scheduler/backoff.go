@@ -66,8 +66,11 @@ func (p *podBackoff) getBackoff(podID string) time.Duration {
 	return duration
 }
 
-func (p *podBackoff) wait(podID string) {
-	time.Sleep(p.getBackoff(podID))
+func (p *podBackoff) wait(podID string, done <-chan struct{}) {
+	select {
+	case <-time.After(p.getBackoff(podID)):
+	case <-done:
+	}
 }
 
 func (p *podBackoff) gc() {

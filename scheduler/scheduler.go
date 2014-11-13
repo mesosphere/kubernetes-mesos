@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"code.google.com/p/go-uuid/uuid"
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
@@ -25,11 +24,10 @@ import (
 )
 
 const (
-	containerCpus            = 0.25
-	containerMem             = 64
-	defaultFinishedTasksSize = 1024
-	defaultOfferTTL          = 5
-	defaultOfferLingerTTL    = 120
+	defaultFinishedTasksSize = 1024 // size of the finished task history buffer
+	defaultOfferTTL          = 5    // seconds that an offer is viable, prior to being expired
+	defaultOfferLingerTTL    = 120  // seconds that an expired offer lingers in history
+	defaultWalkDelay         = 1    // number of seconds between "walks" that check for expired offers
 )
 
 // PodScheduleFunc implements how to schedule pods among slaves.
@@ -43,154 +41,6 @@ const (
 //
 // See the FIFOScheduleFunc for example.
 type PodScheduleFunc func(k *KubernetesScheduler, slaves map[string]*Slave, task *PodTask) (string, error)
-
-// A struct that describes a pod task.
-type PodTask struct {
-	ID       string
-	Pod      *api.Pod
-	TaskInfo *mesos.TaskInfo
-	OfferIds []string
-	Launched bool
-}
-
-func rangeResource(name string, ports []uint64) *mesos.Resource {
-	if len(ports) == 0 {
-		// pod may consist of a container that doesn't expose any ports on the host
-		return nil
-	}
-	return &mesos.Resource{
-		Name:   proto.String(name),
-		Type:   mesos.Value_RANGES.Enum(),
-		Ranges: NewRanges(ports),
-	}
-}
-
-// func NewRange(begin uint64, end uint64) *mesos.Value_Ranges {
-func NewRanges(ports []uint64) *mesos.Value_Ranges {
-	r := make([]*mesos.Value_Range, 0)
-	for _, port := range ports {
-		r = append(r, &mesos.Value_Range{Begin: &port, End: &port})
-	}
-	return &mesos.Value_Ranges{Range: r}
-}
-
-func (t *PodTask) hasAcceptedOffer() bool {
-	return t.TaskInfo.TaskId != nil
-}
-
-// Fill the TaskInfo in the PodTask, should be called during k8s scheduling,
-// before binding.
-func (t *PodTask) FillTaskInfo(slaveId string, offer *mesos.Offer) {
-	t.OfferIds = append(t.OfferIds, offer.GetId().GetValue())
-
-	var err error
-
-	// TODO(nnielsen): We only launch one pod per offer. We should be able to launch multiple.
-
-	// TODO(nnielsen): Assign/aquire pod port.
-	t.TaskInfo.TaskId = &mesos.TaskID{Value: proto.String(t.ID)}
-	t.TaskInfo.SlaveId = &mesos.SlaveID{Value: proto.String(slaveId)}
-	t.TaskInfo.Resources = []*mesos.Resource{
-		mesos.ScalarResource("cpus", containerCpus),
-		mesos.ScalarResource("mem", containerMem),
-	}
-	if ports := rangeResource("ports", t.Ports()); ports != nil {
-		t.TaskInfo.Resources = append(t.TaskInfo.Resources, ports)
-	}
-	t.TaskInfo.Data, err = yaml.Marshal(&t.Pod.DesiredState.Manifest)
-	if err != nil {
-		log.Warningf("Failed to marshal the manifest")
-	}
-}
-
-// Clear offer-related details from the task, should be called if/when an offer
-// has already been assigned to a task but for some reason is no longer valid.
-func (t *PodTask) ClearTaskInfo() {
-	t.OfferIds = nil
-	t.TaskInfo.TaskId = nil
-	t.TaskInfo.SlaveId = nil
-	t.TaskInfo.Resources = nil
-	t.TaskInfo.Data = nil
-}
-
-func (t *PodTask) Ports() []uint64 {
-	ports := make([]uint64, 0)
-	for _, container := range t.Pod.DesiredState.Manifest.Containers {
-		// strip all port==0 from this array; k8s already knows what to do with zero-
-		// ports (it does not create 'port bindings' on the minion-host); we need to
-		// remove the wildcards from this array since they don't consume host resources
-		for _, port := range container.Ports {
-			// HostPort is int, not uint64.
-			if port.HostPort != 0 {
-				ports = append(ports, uint64(port.HostPort))
-			}
-		}
-	}
-
-	return ports
-}
-
-func (t *PodTask) AcceptOffer(slaveId string, offer *mesos.Offer) bool {
-	var cpus float64 = 0
-	var mem float64 = 0
-
-	// Mimic set type
-	requiredPorts := make(map[uint64]struct{})
-	for _, port := range t.Ports() {
-		requiredPorts[port] = struct{}{}
-	}
-
-	for _, resource := range offer.Resources {
-		if resource.GetName() == "cpus" {
-			cpus = *resource.GetScalar().Value
-		}
-
-		if resource.GetName() == "mem" {
-			mem = *resource.GetScalar().Value
-		}
-
-		if resource.GetName() == "ports" {
-			for _, r := range (*resource).GetRanges().Range {
-				bp := r.GetBegin()
-				ep := r.GetEnd()
-
-				for port, _ := range requiredPorts {
-					log.V(2).Infof("Evaluating port range {%d:%d} %d", bp, ep, port)
-
-					if (bp <= port) && (port <= ep) {
-						delete(requiredPorts, port)
-					}
-				}
-			}
-		}
-	}
-
-	unsatisfiedPorts := len(requiredPorts)
-	if unsatisfiedPorts > 0 {
-		log.V(2).Infof("Could not schedule pod %s: %d ports could not be allocated on slave %s", t.Pod.ID, unsatisfiedPorts, slaveId)
-		return false
-	}
-
-	if (cpus < containerCpus) || (mem < containerMem) {
-		log.V(2).Infof("Not enough resources: cpus: %f mem: %f", cpus, mem)
-		return false
-	}
-
-	return true
-}
-
-func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
-	taskId := uuid.NewUUID().String()
-	task := &PodTask{
-		ID:       taskId, // pod.JSONBase.ID,
-		Pod:      pod,
-		TaskInfo: new(mesos.TaskInfo),
-		Launched: false,
-	}
-	task.TaskInfo.Name = proto.String("PodTask")
-	task.TaskInfo.Executor = executor
-	return task, nil
-}
 
 // A struct that describes the slave.
 type empty struct{}
@@ -283,6 +133,16 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 	return k
 }
 
+func (k *KubernetesScheduler) Init() {
+	k.offers.Init()
+	go util.Forever(func() {
+		k.offers.Walk(func(PerishableOffer) (bool, error) {
+			// noop; simply walking will expire offers past their TTL
+			return false, nil
+		})
+	}, defaultWalkDelay*time.Second)
+}
+
 // Registered is called when the scheduler registered with the master successfully.
 func (k *KubernetesScheduler) Registered(driver mesos.SchedulerDriver,
 	frameworkId *mesos.FrameworkID, masterInfo *mesos.MasterInfo) {
@@ -320,8 +180,6 @@ func (k *KubernetesScheduler) ResourceOffers(driver mesos.SchedulerDriver, offer
 	defer k.Unlock()
 
 	// Record the offers in the global offer map as well as each slave's offer map.
-	// TODO(jdef): we probably don't want to hold onto these offers forever because that's greedy
-
 	k.offers.Add(offers)
 	for _, offer := range offers {
 		offerId := offer.GetId().GetValue()
@@ -497,7 +355,6 @@ func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 			delete(k.podToTask, podId)
 		}
 	}
-	// TODO (jdefelice) delete from slave.tasks?
 }
 
 func (k *KubernetesScheduler) handleTaskKilled(taskStatus *mesos.TaskStatus) {
@@ -523,7 +380,6 @@ func (k *KubernetesScheduler) handleTaskKilled(taskStatus *mesos.TaskStatus) {
 			delete(k.podToTask, podId)
 		}
 	}
-	// TODO (jdefelice) delete from slave.tasks?
 }
 
 func (k *KubernetesScheduler) handleTaskLost(taskStatus *mesos.TaskStatus) {
@@ -548,7 +404,6 @@ func (k *KubernetesScheduler) handleTaskLost(taskStatus *mesos.TaskStatus) {
 			delete(k.podToTask, podId)
 		}
 	}
-	// TODO (jdefelice) delete from slave.tasks?
 }
 
 // FrameworkMessage is called when the scheduler receives a message from the executor.
@@ -627,11 +482,6 @@ func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
 		return "", fmt.Errorf("Slave disappeared (%v) while scheduling task %v", slaveId, task.ID)
 	}
 	task.FillTaskInfo(slaveId, offer.details())
-
-	// Subtract offers.
-	for _, offerId := range task.OfferIds {
-		k.deleteOffer(offerId)
-	}
 	return slave.HostName, nil
 }
 
@@ -652,7 +502,9 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 	go func() {
 		defer util.HandleCrash()
 		podId := pod.ID
-		backoff.wait(podId)
+		// TODO(jdef): did we error out because if non-matching offers? if so, register
+		// an offer listener to be notified if/when a matching offer comes in
+		backoff.wait(podId, nil)
 
 		// Get the pod again; it may have changed/been scheduled already.
 		pod = &api.Pod{}
@@ -734,14 +586,16 @@ func (k *KubernetesScheduler) GetPod(podId string) (*api.Pod, error) {
 	if task, exists := k.pendingTasks[taskId]; exists {
 		// return nil, fmt.Errorf("Pod '%s' is still pending", podId)
 		log.V(2).Infof("Pending Pod '%s': %v", podId, task.Pod)
-		return task.Pod, nil
+		podCopy := *task.Pod
+		return &podCopy, nil
 	}
 	if containsTask(k.finishedTasks, taskId) {
 		return nil, fmt.Errorf("Pod '%s' is finished", podId)
 	}
 	if task, exists := k.runningTasks[taskId]; exists {
 		log.V(2).Infof("Running Pod '%s': %v", podId, task.Pod)
-		return task.Pod, nil
+		podCopy := *task.Pod
+		return &podCopy, nil
 	}
 	return nil, fmt.Errorf("Unknown Pod %v", podId)
 }
@@ -801,10 +655,19 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 		return fmt.Errorf("task has not accepted a valid offer, pod %v", podId)
 	}
 
+	// By this time, there is a chance that the slave is disconnected.
+	offer, ok := k.offers.Get(task.OfferIds[0])
+	if !ok || offer.hasExpired() {
+		task.ClearTaskInfo()
+		return fmt.Errorf("failed prior to launchTask due to expired offer, pod %v", podId)
+	}
+
 	// TODO(k8s): move this to a watch/rectification loop.
 	manifest, err := k.makeManifest(binding.Host, *task.Pod)
 	if err != nil {
 		log.Warningf("Failed to generate an updated manifest")
+		offer.release()
+		task.ClearTaskInfo()
 		return err
 	}
 
@@ -816,14 +679,11 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	task.TaskInfo.Data, err = yaml.Marshal(&manifest)
 	if err != nil {
 		log.Warningf("Failed to marshal the updated manifest")
+		offer.release()
+		task.ClearTaskInfo()
 		return err
 	}
 
-	// TODO(yifan): By this time, there is a chance that the slave is disconnected.
-	offer, ok := k.offers.Get(task.OfferIds[0])
-	if !ok || offer.hasExpired() {
-		return fmt.Errorf("failed prior to launchTask due to expired offer, pod %v", podId)
-	}
 	log.V(2).Infof("Launching task : %v", task)
 	if err := k.Driver.LaunchTasks(offer.details().Id, []*mesos.TaskInfo{task.TaskInfo}, nil); err != nil {
 		offer.release()
@@ -921,13 +781,12 @@ func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, task *Po
 	}
 
 	var acceptedOfferId string
-	k.offers.Walk(func(p perishableOffer) (bool, error) {
+	k.offers.Walk(func(p PerishableOffer) (bool, error) {
 		offer := p.details()
 		if offer == nil {
 			return false, fmt.Errorf("nil offer while scheduling task %v", task.ID)
 		}
-		slaveId := offer.GetSlaveId().GetValue()
-		if task.AcceptOffer(slaveId, offer) {
+		if task.AcceptOffer(offer) {
 			if p.acquire() {
 				acceptedOfferId = offer.Id.GetValue()
 				return true, nil // stop, we found an offer
