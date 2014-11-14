@@ -165,7 +165,8 @@ func (s *offerStorage) Walk(w Walker) error {
 			// offer disappeared...
 			continue
 		}
-		if offer.hasExpired() {
+		// delete any non-lingering offers that have expired
+		if offer.hasExpired() && offer.details() != nil {
 			s.Delete(offerId)
 			continue
 		}
