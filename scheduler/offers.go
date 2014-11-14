@@ -105,6 +105,7 @@ func (s *offerStorage) Add(offers []*mesos.Offer) {
 	now := time.Now()
 	for _, offer := range offers {
 		offerId := offer.Id.GetValue()
+		log.V(3).Infof("Receiving offer %v", offerId)
 		s.offers.Add(offerId, &timedOffer{offer, now.Add(s.ttl), 0})
 	}
 }
@@ -112,11 +113,13 @@ func (s *offerStorage) Add(offers []*mesos.Offer) {
 // delete an offer from storage, meaning that we expire it
 func (s *offerStorage) Delete(offerId string) {
 	if offer, ok := s.Get(offerId); ok {
+		log.V(3).Infof("Deleting offer %v", offerId)
 		// attempt to block others from consuming the offer. if it's already been
 		// claimed and is not yet lingering then don't decline it - just mark it as
 		// expired in the history: allow a prior claimant to attempt to launch with it
 		myoffer := offer.acquire()
 		if offer.details() != nil && myoffer {
+			log.V(3).Infof("Declining offer %v", offerId)
 			if err := s.declineOffer(offerId); err != nil {
 				log.Warningf("Failed to decline offer %v: %v", offerId, err)
 			}
@@ -181,15 +184,17 @@ func (s *offerStorage) expireOffer(offer PerishableOffer) {
 	if details := offer.details(); details != nil {
 		// recently expired, should linger
 		offerId := details.Id.GetValue()
+		log.V(3).Infof("Expiring offer %v", offerId)
 		if s.lingerTtl > 0 {
-			log.V(2).Infof("offer will linger: %v", offerId)
+			log.V(3).Infof("offer will linger: %v", offerId)
 			s.offers.Update(offerId, &expiredOffer{})
 			go func() {
 				time.Sleep(s.lingerTtl)
-				log.V(2).Infof("offer will linger: %v", offerId)
+				log.V(3).Infof("Delete lingering offer: %v", offerId)
 				s.offers.Delete(offerId)
 			}()
 		} else {
+			log.V(3).Infof("Permanently deleting offer %v", offerId)
 			s.offers.Delete(offerId)
 		}
 	} // else, it's still lingering...
@@ -259,6 +264,7 @@ func (s *offerStorage) makeOfferListenerFunc() func() {
 				continue
 			}
 			if listen.filter(offer.details()) {
+				log.V(3).Infof("Notifying offer listener %s", listen.id)
 				listen.notify <- empty{}
 				return
 			}
