@@ -29,6 +29,7 @@ const (
 	defaultOfferTTL          = 5    // seconds that an offer is viable, prior to being expired
 	defaultOfferLingerTTL    = 120  // seconds that an expired offer lingers in history
 	defaultWalkDelay         = 1    // number of seconds between "walks" that check for expired offers
+	defaultListenerDelay     = 1    // number of seconds between offer listener notifications
 )
 
 type stateType int
@@ -130,8 +131,10 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 				offerId := &mesos.OfferID{Value: proto.String(id)}
 				return k.Driver.DeclineOffer(offerId, nil)
 			},
-			ttl:       defaultOfferTTL * time.Second,
-			lingerTtl: defaultOfferLingerTTL * time.Second, // remember expired offers so that we can tell if a previously scheduler offer relies on one
+			ttl:           defaultOfferTTL * time.Second,
+			lingerTtl:     defaultOfferLingerTTL * time.Second, // remember expired offers so that we can tell if a previously scheduler offer relies on one
+			walkDelay:     defaultWalkDelay * time.Second,
+			listenerDelay: defaultListenerDelay * time.Second,
 		}),
 		make(map[string]*Slave),
 		make(map[string]string),
@@ -163,12 +166,6 @@ func (k *KubernetesScheduler) getTask(taskId string) (*PodTask, stateType) {
 
 func (k *KubernetesScheduler) Init() {
 	k.offers.Init()
-	go util.Forever(func() {
-		k.offers.Walk(func(PerishableOffer) (bool, error) {
-			// noop; simply walking will expire offers past their TTL
-			return false, nil
-		})
-	}, defaultWalkDelay*time.Second)
 }
 
 // Registered is called when the scheduler registered with the master successfully.
@@ -196,7 +193,7 @@ func (k *KubernetesScheduler) Disconnected(driver mesos.SchedulerDriver) {
 	defer k.Unlock()
 
 	// discard all cached offers to avoid unnecessary TASK_LOST updates
-	k.offers.Invalidate()
+	k.offers.Invalidate("")
 }
 
 // ResourceOffers is called when the scheduler receives some offers from the master.
@@ -415,7 +412,7 @@ func (k *KubernetesScheduler) SlaveLost(driver mesos.SchedulerDriver, slaveId *m
 	// invalidate all offers mapped to that slave
 	if slave, ok := k.slaves[slaveId.GetValue()]; ok {
 		for offerId := range slave.Offers {
-			k.offers.InvalidateOne(offerId)
+			k.offers.Invalidate(offerId)
 		}
 	}
 
@@ -472,7 +469,7 @@ func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
 	slave, ok := k.slaves[slaveId]
 	if !ok {
 		// not much sense in release()ing the offer here since its owner died
-		k.offers.Delete(offerId)
+		k.offers.Invalidate(offerId)
 		task.ClearTaskInfo()
 		return "", fmt.Errorf("Slave disappeared (%v) while scheduling task %v", slaveId, task.ID)
 	}

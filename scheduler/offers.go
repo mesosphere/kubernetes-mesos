@@ -13,19 +13,21 @@ import (
 type OfferFilter func(*mesos.Offer) bool
 
 type OfferRegistry interface {
+	// Initialize the instance, spawning necessary housekeeping go routines.
 	Init()
 	Add([]*mesos.Offer)
 	AwaitNew(id string, f OfferFilter) <-chan empty
 
-	// invoked when offers are rescinded, expired, or otherwise rejected
+	// invoked when offers are rescinded or expired
 	Delete(string)
 
 	Get(offerId string) (PerishableOffer, bool)
 
 	Walk(Walker) error
 
-	Invalidate()
-	InvalidateOne(string)
+	// invalidate one or all (when offerId="") offers; offers are not declined,
+	// but are simply flagged as expired in the offer history
+	Invalidate(offerId string)
 }
 
 // callback that is invoked during a walk through a series of active offers,
@@ -33,9 +35,11 @@ type OfferRegistry interface {
 type Walker func(offer PerishableOffer) (stop bool, err error)
 
 type OfferRegistryConfig struct {
-	declineOffer func(offerId string) error
-	ttl          time.Duration // determines a perishable offer's expiration deadline: now+ttl
-	lingerTtl    time.Duration // if zero, offers will not linger in the FIFO past their expiration deadline
+	declineOffer  func(offerId string) error
+	ttl           time.Duration // determines a perishable offer's expiration deadline: now+ttl
+	lingerTtl     time.Duration // if zero, offers will not linger in the FIFO past their expiration deadline
+	walkDelay     time.Duration // specifies the sleep time between expired offer harvests
+	listenerDelay time.Duration // specifies the sleep time between offer listener notifications
 }
 
 type offerStorage struct {
@@ -53,9 +57,13 @@ type timedOffer struct {
 type expiredOffer struct{}
 
 type PerishableOffer interface {
+	// returns true if this offer has expired
 	hasExpired() bool
+	// if not yet expired, return mesos offer details; otherwise nil
 	details() *mesos.Offer
+	// mark this offer as acquired, returning true if it was previously unacquired. thread-safe.
 	acquire() bool
+	// mark this offer as un-acquired. thread-safe.
 	release()
 }
 
@@ -71,8 +79,7 @@ func (e *expiredOffer) acquire() bool {
 	return false
 }
 
-func (e *expiredOffer) release() {
-}
+func (e *expiredOffer) release() {}
 
 func (to *timedOffer) hasExpired() bool {
 	return time.Now().After(to.expiration)
@@ -83,7 +90,7 @@ func (to *timedOffer) details() *mesos.Offer {
 }
 
 func (to *timedOffer) acquire() bool {
-	return atomic.CompareAndSwapInt32(&to.acquired, 0, 1)
+	return atomic.CompareAndSwapInt32(&to.acquired, 0, 1) && !to.hasExpired()
 }
 
 func (to *timedOffer) release() {
@@ -105,18 +112,25 @@ func (s *offerStorage) Add(offers []*mesos.Offer) {
 // delete an offer from storage, meaning that we expire it
 func (s *offerStorage) Delete(offerId string) {
 	if offer, ok := s.Get(offerId); ok {
-		offer.acquire() // attempt to block others from using it
-		if !offer.hasExpired() {
+		// attempt to block others from consuming the offer. if it's already been
+		// claimed and is not yet lingering then don't decline it - just mark it as
+		// expired in the history: allow a prior claimant to attempt to launch with it
+		myoffer := offer.acquire()
+		if offer.details() != nil && myoffer {
 			if err := s.declineOffer(offerId); err != nil {
 				log.Warningf("Failed to decline offer %v: %v", offerId, err)
 			}
 		}
 		s.expireOffer(offer)
-	}
+	} // else, ignore offers not in the history
 }
 
 // expire all known, live offers
-func (s *offerStorage) Invalidate() {
+func (s *offerStorage) Invalidate(offerId string) {
+	if offerId != "" {
+		s.invalidateOne(offerId)
+		return
+	}
 	obj := s.offers.List()
 	for _, o := range obj {
 		offer, ok := o.(PerishableOffer)
@@ -130,7 +144,7 @@ func (s *offerStorage) Invalidate() {
 	}
 }
 
-func (s *offerStorage) InvalidateOne(offerId string) {
+func (s *offerStorage) invalidateOne(offerId string) {
 	if offer, ok := s.Get(offerId); ok {
 		offer.acquire() // attempt to block others from using it
 		s.expireOffer(offer)
@@ -217,12 +231,17 @@ func (s *offerStorage) AwaitNew(id string, f OfferFilter) <-chan empty {
 	return ch
 }
 
-func (s *offerStorage) Init() {
-	// periodically gc the listeners FIFO.
-	// to avoid a rush on offers, we add a short delay between each registered
-	// listener, so as to allow the most recently notified listener a bit of time
-	// to act on the offer.
-	go util.Forever(func() {
+func (s *offerStorage) makeOfferHarvestFunc() func() {
+	return func() {
+		s.Walk(func(PerishableOffer) (bool, error) {
+			// noop; simply walking will expire offers past their TTL
+			return false, nil
+		})
+	}
+}
+
+func (s *offerStorage) makeOfferListenerFunc() func() {
+	return func() {
 		var listen *offerListener
 		var ok bool
 		// get the next offer listener
@@ -256,5 +275,15 @@ func (s *offerStorage) Init() {
 				s.listeners.Update(listen.id, listen)
 			}
 		} // else, you're gc'd
-	}, 1*time.Second)
+	}
+}
+
+func (s *offerStorage) Init() {
+	go util.Forever(s.makeOfferHarvestFunc(), s.walkDelay)
+
+	// periodically gc the listeners FIFO.
+	// to avoid a rush on offers, we add a short delay between each registered
+	// listener, so as to allow the most recently notified listener a bit of time
+	// to act on the offer.
+	go util.Forever(s.makeOfferListenerFunc(), s.listenerDelay)
 }
