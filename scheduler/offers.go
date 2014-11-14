@@ -90,7 +90,7 @@ func (to *timedOffer) details() *mesos.Offer {
 }
 
 func (to *timedOffer) acquire() bool {
-	return atomic.CompareAndSwapInt32(&to.acquired, 0, 1) && !to.hasExpired()
+	return atomic.CompareAndSwapInt32(&to.acquired, 0, 1)
 }
 
 func (to *timedOffer) release() {
