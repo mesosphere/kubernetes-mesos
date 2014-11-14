@@ -788,8 +788,8 @@ func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, task *Po
 		task.ClearTaskInfo()
 	}
 
-	var acceptedOfferId string
-	k.offers.Walk(func(p PerishableOffer) (bool, error) {
+	acceptedOfferId := ""
+	err := k.offers.Walk(func(p PerishableOffer) (bool, error) {
 		offer := p.details()
 		if offer == nil {
 			return false, fmt.Errorf("nil offer while scheduling task %v", task.ID)
@@ -804,9 +804,16 @@ func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, task *Po
 		return false, nil // continue
 	})
 	if acceptedOfferId != "" {
+		if err != nil {
+			log.Warningf("problems walking the offer registry: %v, attempting to continue", err)
+		}
 		return acceptedOfferId, nil
 	}
-	log.Infof("failed to find a fit for pod: %v", task.Pod.ID)
+	if err != nil {
+		log.V(2).Infof("failed to find a fit for pod: %v, err = %v", task.Pod.ID, err)
+		return "", err
+	}
+	log.V(2).Infof("failed to find a fit for pod: %v", task.Pod.ID)
 	return "", noSuitableOffersErr
 }
 
