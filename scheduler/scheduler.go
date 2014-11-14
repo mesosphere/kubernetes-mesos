@@ -797,6 +797,7 @@ func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, task *Po
 		if task.AcceptOffer(offer) {
 			if p.acquire() {
 				acceptedOfferId = offer.Id.GetValue()
+				log.V(3).Infof("Pod %v accepted offer %v", task.Pod.ID, offer.Id.GetValue())
 				return true, nil // stop, we found an offer
 			}
 		}

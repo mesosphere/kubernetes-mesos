@@ -52,6 +52,7 @@ func (t *PodTask) hasAcceptedOffer() bool {
 // before binding.
 func (t *PodTask) FillTaskInfo(slaveId string, offer *mesos.Offer) error {
 	t.OfferIds = append(t.OfferIds, offer.GetId().GetValue())
+	log.V(3).Infof("Recording offer(s) %v against pod %v", t.OfferIds, t.Pod.ID)
 
 	t.TaskInfo.TaskId = &mesos.TaskID{Value: proto.String(t.ID)}
 	t.TaskInfo.SlaveId = &mesos.SlaveID{Value: proto.String(slaveId)}
@@ -72,6 +73,7 @@ func (t *PodTask) FillTaskInfo(slaveId string, offer *mesos.Offer) error {
 // Clear offer-related details from the task, should be called if/when an offer
 // has already been assigned to a task but for some reason is no longer valid.
 func (t *PodTask) ClearTaskInfo() {
+	log.V(3).Infof("Clearing offer(s) %v from pod %v", t.OfferIds, t.Pod.ID)
 	t.OfferIds = nil
 	t.TaskInfo.TaskId = nil
 	t.TaskInfo.SlaveId = nil
