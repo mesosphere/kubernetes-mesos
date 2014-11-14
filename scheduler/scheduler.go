@@ -55,7 +55,7 @@ var (
 // details.
 //
 // See the FIFOScheduleFunc for example.
-type PodScheduleFunc func(k *KubernetesScheduler, slaves map[string]*Slave, task *PodTask) (string, error)
+type PodScheduleFunc func(r OfferRegistry, slaves map[string]*Slave, task *PodTask) (string, error)
 
 // A struct that describes the slave.
 type empty struct{}
@@ -455,7 +455,7 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionListe
 
 // Call ScheduleFunc and subtract some resources, returning the name of the machine the task is scheduled on
 func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
-	offerId, err := k.scheduleFunc(k, k.slaves, task)
+	offerId, err := k.scheduleFunc(k.offers, k.slaves, task)
 	if err != nil {
 		return "", err
 	}
@@ -777,11 +777,11 @@ func (k *KubernetesScheduler) WatchPods(resourceVersion uint64, filter func(*api
 }
 
 // A FCFS scheduler.
-func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, task *PodTask) (string, error) {
+func FCFSScheduleFunc(r OfferRegistry, slaves map[string]*Slave, task *PodTask) (string, error) {
 	if task.hasAcceptedOffer() {
 		// verify that the offer is still on the table
 		offerId := task.OfferIds[0]
-		if offer, ok := k.offers.Get(offerId); ok && !offer.hasExpired() {
+		if offer, ok := r.Get(offerId); ok && !offer.hasExpired() {
 			// skip tasks that have already have assigned offers
 			return offerId, nil
 		}
@@ -789,7 +789,7 @@ func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, task *Po
 	}
 
 	acceptedOfferId := ""
-	err := k.offers.Walk(func(p PerishableOffer) (bool, error) {
+	err := r.Walk(func(p PerishableOffer) (bool, error) {
 		offer := p.details()
 		if offer == nil {
 			return false, fmt.Errorf("nil offer while scheduling task %v", task.ID)
