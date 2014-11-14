@@ -11,14 +11,17 @@ K8S_CMD		:= \
                    github.com/GoogleCloudPlatform/kubernetes/cmd/kubecfg		\
                    github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
 FRAMEWORK_CMD	:= \
-                   github.com/mesosphere/kubernetes-mesos/kubernetes-mesos		\
+                   github.com/mesosphere/kubernetes-mesos/kubernetes-mesos	\
                    github.com/mesosphere/kubernetes-mesos/kubernetes-executor
-
+FRAMEWORK_LIB	:= \
+		   github.com/mesosphere/kubernetes-mesos/scheduler	\
+		   github.com/mesosphere/kubernetes-mesos/service	\
+		   github.com/mesosphere/kubernetes-mesos/executor
 
 # TODO: make this something more reasonable
 DESTDIR		?= /target
 
-.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format
+.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test
 
 ifneq ($(WITH_MESOS_DIR),)
 
@@ -61,11 +64,10 @@ framework: require-godep
 	env $(WITH_MESOS_CGO_FLAGS) go install $${WITH_RACE:+-race} $(FRAMEWORK_CMD)
 
 format: require-gopath
-	go fmt	github.com/mesosphere/kubernetes-mesos/kubernetes-mesos \
-		github.com/mesosphere/kubernetes-mesos/kubernetes-executor \
-		github.com/mesosphere/kubernetes-mesos/scheduler \
-		github.com/mesosphere/kubernetes-mesos/service \
-		github.com/mesosphere/kubernetes-mesos/executor
+	go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
+
+test: require-gopath
+	go test $(FRAMEWORK_LIB)
 
 install: all
 	mkdir -p $(DESTDIR)
