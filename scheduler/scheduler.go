@@ -569,10 +569,13 @@ func (k *KubernetesScheduler) ListPods(selector labels.Selector) (*api.PodList, 
 		}
 	}
 
-	// TODO(nnielsen): Wire up check in finished tasks
+	// TODO(nnielsen): Wire up check in finished tasks. (jdef) not sure how many
+	// finished tasks are really appropriate to return here. finished tasks do not
+	// have a TTL in the finishedTasks ring and I don't think we want to return
+	// hundreds of finished tasks here.
 
 	matches := &api.PodList{Items: result}
-	log.V(2).Infof("Returning pods: '%v'\n", matches)
+	log.V(5).Infof("Returning pods: '%v'\n", matches)
 
 	return matches, nil
 }
@@ -592,11 +595,11 @@ func (k *KubernetesScheduler) GetPod(podId string) (*api.Pod, error) {
 
 	switch task, state := k.getTask(taskId); state {
 	case statePending:
-		log.V(2).Infof("Pending Pod '%s': %v", podId, task.Pod)
+		log.V(5).Infof("Pending Pod '%s': %v", podId, task.Pod)
 		podCopy := *task.Pod
 		return &podCopy, nil
 	case stateRunning:
-		log.V(2).Infof("Running Pod '%s': %v", podId, task.Pod)
+		log.V(5).Infof("Running Pod '%s': %v", podId, task.Pod)
 		podCopy := *task.Pod
 		return &podCopy, nil
 	case stateFinished:
