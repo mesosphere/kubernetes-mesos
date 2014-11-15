@@ -18,10 +18,13 @@ FRAMEWORK_LIB	:= \
 		   github.com/mesosphere/kubernetes-mesos/service	\
 		   github.com/mesosphere/kubernetes-mesos/executor
 
+# a list of upstream projects for which we test the availability of patches
+PATCH_SCRIPT	:= $(current_dir)/hack/patches/apply.sh
+
 # TODO: make this something more reasonable
 DESTDIR		?= /target
 
-.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test
+.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test patch
 
 ifneq ($(WITH_MESOS_DIR),)
 
@@ -43,7 +46,7 @@ WITH_MESOS_CGO_FLAGS :=  \
 
 endif
 
-all: proxy framework
+all: patch proxy framework
 
 error:
 	echo -E "$@: ${MSG}" >&2
@@ -84,3 +87,9 @@ info:
 
 bootstrap: require-godep
 	godep restore
+
+patch: $(PATCH_SCRIPT)
+	$(PATCH_SCRIPT)
+
+$(PATCH_SCRIPT):
+	chmod +x $@
