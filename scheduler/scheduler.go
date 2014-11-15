@@ -35,7 +35,7 @@ const (
 type stateType int
 
 const (
-	statePending = iota
+	statePending stateType = iota
 	stateRunning
 	stateFinished
 	stateUnknown
