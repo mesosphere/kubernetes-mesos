@@ -1,6 +1,8 @@
 package scheduler
 
 import (
+	"fmt"
+
 	"code.google.com/p/go-uuid/uuid"
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
@@ -19,8 +21,8 @@ type PodTask struct {
 	ID       string
 	Pod      *api.Pod
 	TaskInfo *mesos.TaskInfo
-	OfferIds []string
 	Launched bool
+	Offer    PerishableOffer
 }
 
 func rangeResource(name string, ports []uint64) *mesos.Resource {
@@ -48,14 +50,31 @@ func (t *PodTask) hasAcceptedOffer() bool {
 	return t.TaskInfo.TaskId != nil
 }
 
+func (t *PodTask) GetOfferId() string {
+	if t.Offer == nil {
+		return ""
+	}
+	return t.Offer.details().Id.GetValue()
+}
+
 // Fill the TaskInfo in the PodTask, should be called during k8s scheduling,
 // before binding.
-func (t *PodTask) FillTaskInfo(slaveId string, offer *mesos.Offer) error {
-	t.OfferIds = append(t.OfferIds, offer.GetId().GetValue())
-	log.V(3).Infof("Recording offer(s) %v against pod %v", t.OfferIds, t.Pod.ID)
+func (t *PodTask) FillTaskInfo(offer PerishableOffer) error {
+	if offer == nil || offer.details() == nil {
+		return fmt.Errorf("Nil offer for task %v", t)
+	}
+	details := offer.details()
+	if details == nil {
+		return fmt.Errorf("Illegal offer for task %v: %v", t, offer)
+	}
+	if t.Offer != nil && t.Offer != offer {
+		return fmt.Errorf("Offer assignment must be idempotent with task %v: %v", t, offer)
+	}
+	t.Offer = offer
+	log.V(3).Infof("Recording offer(s) %v against pod %v", details.Id, t.Pod.ID)
 
 	t.TaskInfo.TaskId = &mesos.TaskID{Value: proto.String(t.ID)}
-	t.TaskInfo.SlaveId = &mesos.SlaveID{Value: proto.String(slaveId)}
+	t.TaskInfo.SlaveId = details.GetSlaveId()
 	t.TaskInfo.Resources = []*mesos.Resource{
 		mesos.ScalarResource("cpus", containerCpus),
 		mesos.ScalarResource("mem", containerMem),
@@ -73,8 +92,8 @@ func (t *PodTask) FillTaskInfo(slaveId string, offer *mesos.Offer) error {
 // Clear offer-related details from the task, should be called if/when an offer
 // has already been assigned to a task but for some reason is no longer valid.
 func (t *PodTask) ClearTaskInfo() {
-	log.V(3).Infof("Clearing offer(s) %v from pod %v", t.OfferIds, t.Pod.ID)
-	t.OfferIds = nil
+	log.V(3).Infof("Clearing offer(s) from pod %v", t.Pod.ID)
+	t.Offer = nil
 	t.TaskInfo.TaskId = nil
 	t.TaskInfo.SlaveId = nil
 	t.TaskInfo.Resources = nil

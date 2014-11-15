@@ -118,10 +118,36 @@ func (s *offerStorage) Delete(offerId string) {
 		// claimed and is not yet lingering then don't decline it - just mark it as
 		// expired in the history: allow a prior claimant to attempt to launch with it
 		myoffer := offer.acquire()
-		if offer.details() != nil && myoffer {
-			log.V(3).Infof("Declining offer %v", offerId)
-			if err := s.declineOffer(offerId); err != nil {
-				log.Warningf("Failed to decline offer %v: %v", offerId, err)
+		if offer.details() != nil {
+			if myoffer {
+				log.V(3).Infof("Declining offer %v", offerId)
+				if err := s.declineOffer(offerId); err != nil {
+					log.Warningf("Failed to decline offer %v: %v", offerId, err)
+				}
+			} else {
+				// some pod has acquired this and may attempt to launch a task with it
+				// failed schedule/launch attempts are requried to release() any claims on the offer
+				go func() {
+					// TODO(jdef): not sure what a good value is here. the goal is to provide a
+					// launchTasks (driver) operation enough time to complete so that we don't end
+					// up delining an offer that we're actually attempting to use.
+					time.Sleep(2 * s.ttl)
+
+					// at this point the offer is in one of five states:
+					// a) permanently deleted: expired due to timeout
+					// b) permanently deleted: expired due to having been rescinded
+					// c) lingering: expired due to timeout
+					// d) lingering: expired due to having been rescinded
+					// e) claimed: task launched and it using resources from this offer
+					// we want to **avoid** delining an offer that's claimed: attempt to acquire
+					if offer.acquire() {
+						// previously claimed offer was released, perhaps due to a launch
+						// failure, so we should attempt to decline
+						if err := s.declineOffer(offerId); err != nil {
+							log.Warningf("Failed to decline (previously claimed) offer %v: %v", offerId, err)
+						}
+					}
+				}()
 			}
 		}
 		s.expireOffer(offer)

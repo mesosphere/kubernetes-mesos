@@ -55,7 +55,7 @@ var (
 // details.
 //
 // See the FIFOScheduleFunc for example.
-type PodScheduleFunc func(r OfferRegistry, slaves map[string]*Slave, task *PodTask) (string, error)
+type PodScheduleFunc func(r OfferRegistry, slaves map[string]*Slave, task *PodTask) (PerishableOffer, error)
 
 // A struct that describes the slave.
 type empty struct{}
@@ -455,26 +455,21 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionListe
 
 // Call ScheduleFunc and subtract some resources, returning the name of the machine the task is scheduled on
 func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
-	offerId, err := k.scheduleFunc(k.offers, k.slaves, task)
+	offer, err := k.scheduleFunc(k.offers, k.slaves, task)
 	if err != nil {
 		return "", err
 	}
-	offer, ok := k.offers.Get(offerId)
-	if !ok || offer.hasExpired() {
-		// not much sense in release()ing the offer here since it vanished
-		task.ClearTaskInfo()
-		return "", fmt.Errorf("Offer disappeared or expired (%v) while scheduling task %v", offerId, task.ID)
-	}
 	slaveId := offer.details().GetSlaveId().GetValue()
-	slave, ok := k.slaves[slaveId]
-	if !ok {
+	if slave, ok := k.slaves[slaveId]; !ok {
 		// not much sense in release()ing the offer here since its owner died
-		k.offers.Invalidate(offerId)
+		offer.release()
+		k.offers.Invalidate(offer.details().Id.GetValue())
 		task.ClearTaskInfo()
 		return "", fmt.Errorf("Slave disappeared (%v) while scheduling task %v", slaveId, task.ID)
+	} else {
+		task.FillTaskInfo(offer)
+		return slave.HostName, nil
 	}
-	task.FillTaskInfo(slaveId, offer.details())
-	return slave.HostName, nil
 }
 
 // implementation of scheduling plugin's NextPod func; see plugin/pkg/scheduler
@@ -518,7 +513,7 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 		pod = &api.Pod{}
 		err := k.client.Get().Path("pods").Path(podId).Do().Into(pod)
 		if err != nil {
-			log.Errorf("Error getting pod %v for retry: %v; abandoning", podId, err)
+			log.Infof("Failed to get pod %v for retry: %v; abandoning", podId, err)
 			return
 		}
 		if pod.DesiredState.Host == "" {
@@ -535,7 +530,7 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 					k.podQueue.Add(pod.ID, pod)
 				} else {
 					// this state shouldn't really be possible, so I'm warning if we ever see it
-					log.Warningf("Scheduler detected pod no longer pending: %v, will not re-queue", podId)
+					log.Errorf("Scheduler detected pod no longer pending: %v, will not re-queue; possible offer leak", podId)
 				}
 			} else {
 				log.Infof("Scheduler detected deleted pod: %v, will not re-queue", podId)
@@ -667,18 +662,37 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	}
 
 	// By this time, there is a chance that the slave is disconnected.
-	offer, ok := k.offers.Get(task.OfferIds[0])
-	if !ok || offer.hasExpired() {
+	offerId := task.GetOfferId()
+	if offer, ok := k.offers.Get(offerId); !ok || offer.hasExpired() {
+		// already rescinded or timed out or otherwise invalidated
+		task.Offer.release()
 		task.ClearTaskInfo()
 		return fmt.Errorf("failed prior to launchTask due to expired offer, pod %v", podId)
 	}
 
+	var err error
+	if err = k.prepareTaskForLaunch(binding.Host, task); err == nil {
+		log.V(2).Infof("Launching task : %v", task)
+		taskList := []*mesos.TaskInfo{task.TaskInfo}
+		if err = k.Driver.LaunchTasks(task.Offer.details().Id, taskList, nil); err == nil {
+			// we *intentionally* do not record our binding to etcd since we're not using bindings
+			// to manage pod lifecycle
+			task.Pod.DesiredState.Host = binding.Host
+			task.Launched = true
+			k.offers.Invalidate(offerId)
+			return nil
+		}
+	}
+	task.Offer.release()
+	task.ClearTaskInfo()
+	return fmt.Errorf("Failed to launch task for pod %s: %v", podId, err)
+}
+
+func (k *KubernetesScheduler) prepareTaskForLaunch(machine string, task *PodTask) error {
 	// TODO(k8s): move this to a watch/rectification loop.
-	manifest, err := k.makeManifest(binding.Host, *task.Pod)
+	manifest, err := k.makeManifest(machine, *task.Pod)
 	if err != nil {
-		log.Warningf("Failed to generate an updated manifest")
-		offer.release()
-		task.ClearTaskInfo()
+		log.V(2).Infof("Failed to generate an updated manifest")
 		return err
 	}
 
@@ -689,23 +703,9 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	task.Pod.DesiredState.Manifest = manifest
 	task.TaskInfo.Data, err = yaml.Marshal(&manifest)
 	if err != nil {
-		log.Warningf("Failed to marshal the updated manifest")
-		offer.release()
-		task.ClearTaskInfo()
+		log.V(2).Infof("Failed to marshal the updated manifest")
 		return err
 	}
-
-	log.V(2).Infof("Launching task : %v", task)
-	if err := k.Driver.LaunchTasks(offer.details().Id, []*mesos.TaskInfo{task.TaskInfo}, nil); err != nil {
-		offer.release()
-		task.ClearTaskInfo()
-		return fmt.Errorf("Failed to launch task for pod %s: %v", podId, err)
-	}
-	task.Pod.DesiredState.Host = binding.Host
-	task.Launched = true
-
-	// we *intentionally* do not record our binding to etcd since we're not using bindings
-	// to manage pod lifecycle
 	return nil
 }
 
@@ -759,6 +759,11 @@ func (k *KubernetesScheduler) DeletePod(podId string) error {
 		killTaskId = &mesos.TaskID{Value: proto.String(task.ID)}
 	case statePending:
 		if !task.Launched {
+			// we've been invoked in between Schedule() and Bind()
+			if task.hasAcceptedOffer() {
+				task.Offer.release()
+				task.ClearTaskInfo()
+			}
 			delete(k.podToTask, podId)
 			delete(k.pendingTasks, taskId)
 			return nil
@@ -777,18 +782,19 @@ func (k *KubernetesScheduler) WatchPods(resourceVersion uint64, filter func(*api
 }
 
 // A FCFS scheduler.
-func FCFSScheduleFunc(r OfferRegistry, slaves map[string]*Slave, task *PodTask) (string, error) {
+func FCFSScheduleFunc(r OfferRegistry, slaves map[string]*Slave, task *PodTask) (PerishableOffer, error) {
 	if task.hasAcceptedOffer() {
 		// verify that the offer is still on the table
-		offerId := task.OfferIds[0]
+		offerId := task.GetOfferId()
 		if offer, ok := r.Get(offerId); ok && !offer.hasExpired() {
 			// skip tasks that have already have assigned offers
-			return offerId, nil
+			return task.Offer, nil
 		}
+		task.Offer.release()
 		task.ClearTaskInfo()
 	}
 
-	acceptedOfferId := ""
+	var acceptedOffer PerishableOffer
 	err := r.Walk(func(p PerishableOffer) (bool, error) {
 		offer := p.details()
 		if offer == nil {
@@ -796,25 +802,25 @@ func FCFSScheduleFunc(r OfferRegistry, slaves map[string]*Slave, task *PodTask) 
 		}
 		if task.AcceptOffer(offer) {
 			if p.acquire() {
-				acceptedOfferId = offer.Id.GetValue()
+				acceptedOffer = p
 				log.V(3).Infof("Pod %v accepted offer %v", task.Pod.ID, offer.Id.GetValue())
 				return true, nil // stop, we found an offer
 			}
 		}
 		return false, nil // continue
 	})
-	if acceptedOfferId != "" {
+	if acceptedOffer != nil {
 		if err != nil {
 			log.Warningf("problems walking the offer registry: %v, attempting to continue", err)
 		}
-		return acceptedOfferId, nil
+		return acceptedOffer, nil
 	}
 	if err != nil {
 		log.V(2).Infof("failed to find a fit for pod: %v, err = %v", task.Pod.ID, err)
-		return "", err
+		return nil, err
 	}
 	log.V(2).Infof("failed to find a fit for pod: %v", task.Pod.ID)
-	return "", noSuitableOffersErr
+	return nil, noSuitableOffersErr
 }
 
 func containsTask(finishedTasks *ring.Ring, taskId string) bool {
