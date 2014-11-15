@@ -11,7 +11,8 @@ import (
 )
 
 const (
-	offerListenerMaxAge = 5 // max number of times we'll attempt to fit an offer to a listener before requireing them to re-register themselves
+	offerListenerMaxAge      = 5 // max number of times we'll attempt to fit an offer to a listener before requireing them to re-register themselves
+	deferredDeclineTtlFactor = 2 // this factor, multiplied by the offer ttl, determines how long to wait before attempting to decline previously claimed offers that were subsequently deleted, then released. see offerStorage.Delete
 )
 
 type OfferFilter func(*mesos.Offer) bool
@@ -135,7 +136,7 @@ func (s *offerStorage) Delete(offerId string) {
 					// TODO(jdef): not sure what a good value is here. the goal is to provide a
 					// launchTasks (driver) operation enough time to complete so that we don't end
 					// up delining an offer that we're actually attempting to use.
-					time.Sleep(2 * s.ttl)
+					time.Sleep(deferredDeclineTtlFactor * s.ttl)
 
 					// at this point the offer is in one of five states:
 					// a) permanently deleted: expired due to timeout
