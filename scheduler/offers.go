@@ -10,6 +10,10 @@ import (
 	"github.com/mesos/mesos-go/mesos"
 )
 
+const (
+	offerListenerMaxAge = 5 // max number of times we'll attempt to fit an offer to a listener before requireing them to re-register themselves
+)
+
 type OfferFilter func(*mesos.Offer) bool
 
 type OfferRegistry interface {
@@ -301,7 +305,7 @@ func (s *offerStorage) makeOfferListenerFunc() func() {
 		}
 		// no interesting offers found, re-queue the listener
 		listen.age++
-		if listen.age < 20 {
+		if listen.age < offerListenerMaxAge {
 			// if the same listener has re-registered in the meantime we don't want to
 			// destroy the newer listener channel. this is racy since a newer listener
 			// can register between the Get() and Update(), but the consequences aren't
