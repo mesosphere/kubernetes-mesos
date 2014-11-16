@@ -24,6 +24,9 @@ PATCH_SCRIPT	:= $(current_dir)/hack/patches/apply.sh
 # TODO: make this something more reasonable
 DESTDIR		?= /target
 
+# default build tags
+TAGS		?=
+
 .PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test patch
 
 ifneq ($(WITH_MESOS_DIR),)
@@ -64,7 +67,7 @@ proxy: require-godep
 require-vendor:
 
 framework: require-godep
-	env $(WITH_MESOS_CGO_FLAGS) go install $${WITH_RACE:+-race} $(FRAMEWORK_CMD)
+	env $(WITH_MESOS_CGO_FLAGS) go install -v -x -tags '$(TAGS)' $${WITH_RACE:+-race} $(FRAMEWORK_CMD)
 
 format: require-gopath
 	go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
@@ -84,6 +87,7 @@ info:
 	@echo CGO_CXXFLAGS="$(CGO_CXXFLAGS)"
 	@echo CGO_LDFLAGS="$(CGO_LDFLAGS)"
 	@echo RACE_FLAGS=$${WITH_RACE:+-race}
+	@echo TAGS=$(TAGS)
 
 bootstrap: require-godep
 	godep restore
