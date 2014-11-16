@@ -98,6 +98,7 @@ func (s *Server) error(w http.ResponseWriter, err error) {
 
 // handlePodInfo handles podInfo requests against the Kubelet.
 func (s *Server) handlePodInfo(w http.ResponseWriter, req *http.Request) {
+	req.Close = true
 	u, err := url.ParseRequestURI(req.RequestURI)
 	if err != nil {
 		s.error(w, err)
