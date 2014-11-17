@@ -36,6 +36,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
 	"github.com/golang/glog"
 	"github.com/google/cadvisor/info"
+	"github.com/mesosphere/kubernetes-mesos/profile"
 )
 
 // Server is a http.Handler which exposes kubelet functionality over HTTP.
@@ -85,6 +86,7 @@ func NewServer(host HostInterface, updates chan<- interface{}, ns string) Server
 // InstallDefaultHandlers registers the set of supported HTTP request patterns with the mux.
 func (s *Server) InstallDefaultHandlers() {
 	healthz.InstallHandler(s.mux)
+	profile.InstallHandler(s.mux)
 	s.mux.HandleFunc("/podInfo", s.handlePodInfo)
 	s.mux.HandleFunc("/stats/", s.handleStats)
 	s.mux.HandleFunc("/logs/", s.handleLogs)

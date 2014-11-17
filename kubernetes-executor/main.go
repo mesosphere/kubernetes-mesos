@@ -21,7 +21,6 @@ import (
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/executor"
-	_ "github.com/mesosphere/kubernetes-mesos/profile"
 )
 
 var (
