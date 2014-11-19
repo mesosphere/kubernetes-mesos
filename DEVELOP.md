@@ -1,8 +1,8 @@
 Development of Kubernetes-Mesos
 ==
 
-* [Prerequisites][#prerequisites]
-* [Build] the framework [README.md#build]
+* [Prerequisites](#prerequisites)
+* [Build](README.md#build) the framework
 
 ### Prerequisites
 To get started with development you'll need to install some prerequisites:
