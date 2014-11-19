@@ -47,5 +47,21 @@ $ mkdir -pv /opt && (export GOPATH=/opt; cd /opt &&
   ln -sv /opt/bin/godep /usr/local/bin/godep)
 ```
 
+#### CentOS 6
+```shell
+$ rpm -Uvh http://repos.mesosphere.io/el/6/noarch/RPMS/mesosphere-el-repo-6-2.noarch.rpm &&
+    rpm -Uvh http://mirrors.einstein.yu.edu/epel/6/i386/epel-release-6-8.noarch.rpm &&
+    yum -y update &&
+    yum -y install mesos git mercurial curl gcc gcc-c++ tar golang which
+
+$ curl -L https://protobuf.googlecode.com/files/protobuf-2.5.0.tar.gz |
+    tar xz && (cd protobuf-2.5.0/ && ./configure --prefix=/usr && make &&
+    make install)
+
+$ mkdir -pv /opt && (export GOPATH=/opt; cd /opt &&
+    go get github.com/tools/godep &&
+    ln -sv /opt/bin/godep /usr/local/bin/godep)
+```
+
 [1]: https://github.com/mesosphere/kubernetes-mesos#build
 [2]: https://github.com/tools/godep
