@@ -1,7 +1,7 @@
 kubernetes-mesos
 ================
 
-When [Google Kubernetes](https://github.com/GoogleCloudPlatform/kubernetes) meets [Apache Mesos](http://mesos.apache.org/)
+When [Google Kubernetes][2] meets [Apache Mesos][3]
 
 
 [![GoDoc] (https://godoc.org/github.com/mesosphere/kubernetes-mesos?status.png)](https://godoc.org/github.com/mesosphere/kubernetes-mesos)
@@ -44,12 +44,12 @@ Instructions to build and install from source are as follows:
 **NOTE:** Building Kubernetes for Mesos requires Go 1.2+, protobuf 2.5.0, and Mesos 0.19+.
 Building the project is greatly simplified by using godep.
 
-* To install Mesos, see [mesosphere.io/downloads](http://mesosphere.io/downloads)
-* To install godep, see [github.com/tools/godep](https://github.com/tools/godep)
+* To install Mesos, see [mesosphere.io/downloads][4]
+* To install godep, see [github.com/tools/godep][5]
+* See the [development][1] page for sample environment setup steps.
 
+Once the [prerequisites][7] have been installed you can build the project:
 ```shell
-$ sudo aptitude install golang libprotobuf-dev mercurial
-
 $ cd $GOPATH # If you don't have one, create directory and set GOPATH accordingly.
 
 $ mkdir -p src/github.com/mesosphere/kubernetes-mesos
@@ -61,7 +61,7 @@ $ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 
 ### Start the framework
 
-To run etcd, see [github.com/coreos/etcd](https://github.com/coreos/etcd/releases/), or run it via docker:
+To run etcd, see [github.com/coreos/etcd][6], or run it via docker:
 ```shell
 $ sudo docker run -d --net=host coreos/etcd go-wrapper run \
    -advertise-client-urls=http://${servicehost}:4001 \
@@ -358,3 +358,11 @@ Run test suite with:
 ```shell
 $ go test github.com/mesosphere/kubernetes-mesos/kubernetes-mesos -v
 ```
+
+[1]: DEVELOP.md
+[2]: https://github.com/GoogleCloudPlatform/kubernetes
+[3]: http://mesos.apache.org/
+[4]: http://mesosphere.io/downloads
+[5]: https://github.com/tools/godep
+[6]: https://github.com/coreos/etcd/releases/
+[7]: DEVELOP.md#prerequisites
