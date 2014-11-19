@@ -3,6 +3,7 @@ Development of Kubernetes-Mesos
 
 * [Prerequisites](#prerequisites)
 * [Build](README.md#build) the framework
+* [Testing](#testing)
 
 ### Prerequisites
 To get started with development you'll need to install some prerequisites:
@@ -64,6 +65,13 @@ $ curl -L https://protobuf.googlecode.com/files/protobuf-2.5.0.tar.gz |
 $ mkdir -pv /opt && (export GOPATH=/opt; cd /opt &&
     go get github.com/tools/godep &&
     ln -sv /opt/bin/godep /usr/local/bin/godep)
+```
+
+### Testing
+
+There is a Makefile target called `test` that will execute unit tests for packages that have them.
+```shell
+$ make test
 ```
 
 [1]: https://github.com/mesosphere/kubernetes-mesos#build
