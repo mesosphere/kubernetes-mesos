@@ -16,7 +16,8 @@ FRAMEWORK_CMD	:= \
 FRAMEWORK_LIB	:= \
 		   github.com/mesosphere/kubernetes-mesos/scheduler	\
 		   github.com/mesosphere/kubernetes-mesos/service	\
-		   github.com/mesosphere/kubernetes-mesos/executor
+		   github.com/mesosphere/kubernetes-mesos/executor	\
+		   github.com/mesosphere/kubernetes-mesos/queue
 
 # a list of upstream projects for which we test the availability of patches
 PATCH_SCRIPT	:= $(current_dir)/hack/patches/apply.sh
