@@ -66,7 +66,7 @@ First, ssh into your Mesos cluster and generate a set of project binaries with p
     $ docker run --rm -ti -e GIT_BRANCH=offer_storage -e TAGS=profile \
         -v $(pwd)/bin:/target jdef/kubernetes-mesos:dockerbuild
 
-Next, [start the framework](https://github.com/mesosphere/kubernetes-mesos/README.md#start-the-framework) and schedule some pods.
+Next, [start the framework](https://github.com/mesosphere/kubernetes-mesos/#start-the-framework) and schedule some pods.
 Once the framework and executors are up and running you can start capturing heaps:
 
     $ ts=$(date +'%Y%m%d%H%M%S')
