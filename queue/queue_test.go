@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	tolerance = 100 * time.Millisecond
+	tolerance = 100 * time.Millisecond // go time delays aren't perfect, this is our tolerance for errors WRT expected timeouts
 )
 
 func TestPQ(t *testing.T) {
@@ -83,7 +83,7 @@ func (j *testjob) GetDelay() time.Duration {
 	return j.d
 }
 
-func TestDQ1(t *testing.T) {
+func TestDQ_sanity_check(t *testing.T) {
 	t.Parallel()
 
 	dq := NewDelayQueue()
@@ -108,7 +108,7 @@ func TestDQ1(t *testing.T) {
 	}
 }
 
-func TestDQ2(t *testing.T) {
+func TestDQ_ordered_add_pop(t *testing.T) {
 	t.Parallel()
 
 	dq := NewDelayQueue()
@@ -156,7 +156,7 @@ func TestDQ2(t *testing.T) {
 	}
 }
 
-func TestDQ3(t *testing.T) {
+func TestDQ_always_pop_earliest_deadline(t *testing.T) {
 	t.Parallel()
 
 	// add a testjob with delay of 2s
@@ -194,4 +194,68 @@ func TestDQ3(t *testing.T) {
 	}
 }
 
-// TODO(jdef): test w/ negative delays
+func TestDQ_always_pop_earliest_deadline_multi(t *testing.T) {
+	t.Parallel()
+
+	dq := NewDelayQueue()
+	dq.Add(&testjob{d: 2 * time.Second})
+
+	ch := make(chan *testjob)
+	multi := 10
+	started := make(chan bool, multi)
+
+	go func() {
+		started <- true
+		for i := 0; i < multi; i++ {
+			x := dq.Pop()
+			job := x.(*testjob)
+			job.t = time.Now()
+			ch <- job
+		}
+	}()
+
+	<-started
+	time.Sleep(500 * time.Millisecond) // give plently of time for Pop() to enter
+	expected := 1 * time.Second
+
+	for i := 0; i < multi; i++ {
+		dq.Add(&testjob{d: expected})
+	}
+	for i := 0; i < multi; i++ {
+		job := <-ch
+		if expected != job.d {
+			t.Fatalf("Expected delay-prority of %v got instead got %v", expected, job.d)
+		}
+	}
+
+	job := dq.Pop().(*testjob)
+	expected = 2 * time.Second
+	if expected != job.d {
+		t.Fatalf("Expected delay-prority of %v got instead got %v", expected, job.d)
+	}
+}
+
+func TestDQ_negative_delay(t *testing.T) {
+	t.Parallel()
+
+	dq := NewDelayQueue()
+	delay := -2 * time.Second
+	dq.Add(&testjob{d: delay})
+
+	before := time.Now()
+	x := dq.Pop()
+
+	now := time.Now()
+	waitPeriod := now.Sub(before)
+
+	if waitPeriod > tolerance {
+		t.Fatalf("delay too long: %v, expected something less than: %v", waitPeriod, tolerance)
+	}
+	if x == nil {
+		t.Fatalf("x is nil")
+	}
+	item := x.(*testjob)
+	if item.d != delay {
+		t.Fatalf("d != delay")
+	}
+}
