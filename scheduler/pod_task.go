@@ -54,16 +54,16 @@ func (t *PodTask) GetOfferId() string {
 	if t.Offer == nil {
 		return ""
 	}
-	return t.Offer.details().Id.GetValue()
+	return t.Offer.Details().Id.GetValue()
 }
 
 // Fill the TaskInfo in the PodTask, should be called during k8s scheduling,
 // before binding.
 func (t *PodTask) FillTaskInfo(offer PerishableOffer) error {
-	if offer == nil || offer.details() == nil {
+	if offer == nil || offer.Details() == nil {
 		return fmt.Errorf("Nil offer for task %v", t)
 	}
-	details := offer.details()
+	details := offer.Details()
 	if details == nil {
 		return fmt.Errorf("Illegal offer for task %v: %v", t, offer)
 	}

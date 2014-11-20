@@ -11,34 +11,34 @@ func TestTimedOffer(t *testing.T) {
 
 	ttl := 2 * time.Second
 	now := time.Now()
-	o := &timedOffer{nil, now.Add(ttl), 0}
+	o := &liveOffer{nil, now.Add(ttl), 0}
 
-	if o.hasExpired() {
+	if o.HasExpired() {
 		t.Errorf("offer ttl was %v and should not have expired yet", ttl)
 	}
-	if !o.acquire() {
+	if !o.Acquire() {
 		t.Fatal("1st acquisition of offer failed")
 	}
-	o.release()
-	if !o.acquire() {
+	o.Release()
+	if !o.Acquire() {
 		t.Fatal("2nd acquisition of offer failed")
 	}
-	if o.acquire() {
+	if o.Acquire() {
 		t.Fatal("3rd acquisition of offer passed but prior claim was not released")
 	}
-	o.release()
-	if !o.acquire() {
+	o.Release()
+	if !o.Acquire() {
 		t.Fatal("4th acquisition of offer failed")
 	}
-	o.release()
+	o.Release()
 	time.Sleep(ttl)
-	if !o.hasExpired() {
+	if !o.HasExpired() {
 		t.Fatal("offer not expired after ttl passed")
 	}
-	if !o.acquire() {
+	if !o.Acquire() {
 		t.Fatal("5th acquisition of offer failed; should not be tied to expiration")
 	}
-	if o.acquire() {
+	if o.Acquire() {
 		t.Fatal("6th acquisition of offer succeeded; should already be acquired")
 	}
 } // TestTimedOffer
@@ -51,7 +51,6 @@ func TestWalk(t *testing.T) {
 		},
 		ttl:           0 * time.Second,
 		lingerTtl:     0 * time.Second,
-		walkDelay:     0 * time.Second,
 		listenerDelay: 0 * time.Second,
 	}
 	storage := CreateOfferRegistry(config)
@@ -59,7 +58,7 @@ func TestWalk(t *testing.T) {
 	walked := 0
 	walker1 := func(p PerishableOffer) (bool, error) {
 		walked++
-		if p.acquire() {
+		if p.Acquire() {
 			acceptedOfferId = "foo"
 			return true, nil
 		}
@@ -83,7 +82,7 @@ func TestWalk(t *testing.T) {
 	// single offer
 	ttl := 2 * time.Second
 	now := time.Now()
-	o := &timedOffer{nil, now.Add(ttl), 0}
+	o := &liveOffer{nil, now.Add(ttl), 0}
 
 	impl.offers.Add("x", o)
 	err = storage.Walk(walker1)
@@ -109,7 +108,7 @@ func TestWalk(t *testing.T) {
 		t.Fatalf("found offer %v", acceptedOfferId)
 	}
 
-	impl.offers.Add("y", o) // offer already acquire()d
+	impl.offers.Add("y", o) // offer already Acquire()d
 	err = storage.Walk(walker1)
 	if err != nil {
 		t.Fatalf("received impossible error %v", err)

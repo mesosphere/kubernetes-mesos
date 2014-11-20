@@ -28,7 +28,6 @@ const (
 	defaultFinishedTasksSize = 1024 // size of the finished task history buffer
 	defaultOfferTTL          = 5    // seconds that an offer is viable, prior to being expired
 	defaultOfferLingerTTL    = 120  // seconds that an expired offer lingers in history
-	defaultWalkDelay         = 1    // number of seconds between "walks" that check for expired offers
 	defaultListenerDelay     = 1    // number of seconds between offer listener notifications
 )
 
@@ -133,7 +132,6 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 			},
 			ttl:           defaultOfferTTL * time.Second,
 			lingerTtl:     defaultOfferLingerTTL * time.Second, // remember expired offers so that we can tell if a previously scheduler offer relies on one
-			walkDelay:     defaultWalkDelay * time.Second,
 			listenerDelay: defaultListenerDelay * time.Second,
 		}),
 		make(map[string]*Slave),
@@ -224,7 +222,7 @@ func (k *KubernetesScheduler) ResourceOffers(driver mesos.SchedulerDriver, offer
 func (k *KubernetesScheduler) deleteOffer(oid string) {
 	if offer, ok := k.offers.Get(oid); ok {
 		k.offers.Delete(oid)
-		if details := offer.details(); details != nil {
+		if details := offer.Details(); details != nil {
 			slaveId := details.GetSlaveId().GetValue()
 
 			if slave, found := k.slaves[slaveId]; !found {
@@ -459,11 +457,11 @@ func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	slaveId := offer.details().GetSlaveId().GetValue()
+	slaveId := offer.Details().GetSlaveId().GetValue()
 	if slave, ok := k.slaves[slaveId]; !ok {
-		// not much sense in release()ing the offer here since its owner died
-		offer.release()
-		k.offers.Invalidate(offer.details().Id.GetValue())
+		// not much sense in Release()ing the offer here since its owner died
+		offer.Release()
+		k.offers.Invalidate(offer.Details().Id.GetValue())
 		task.ClearTaskInfo()
 		return "", fmt.Errorf("Slave disappeared (%v) while scheduling task %v", slaveId, task.ID)
 	} else {
@@ -663,9 +661,9 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 
 	// By this time, there is a chance that the slave is disconnected.
 	offerId := task.GetOfferId()
-	if offer, ok := k.offers.Get(offerId); !ok || offer.hasExpired() {
+	if offer, ok := k.offers.Get(offerId); !ok || offer.HasExpired() {
 		// already rescinded or timed out or otherwise invalidated
-		task.Offer.release()
+		task.Offer.Release()
 		task.ClearTaskInfo()
 		return fmt.Errorf("failed prior to launchTask due to expired offer, pod %v", podId)
 	}
@@ -674,7 +672,7 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	if err = k.prepareTaskForLaunch(binding.Host, task); err == nil {
 		log.V(2).Infof("Launching task : %v", task)
 		taskList := []*mesos.TaskInfo{task.TaskInfo}
-		if err = k.Driver.LaunchTasks(task.Offer.details().Id, taskList, nil); err == nil {
+		if err = k.Driver.LaunchTasks(task.Offer.Details().Id, taskList, nil); err == nil {
 			// we *intentionally* do not record our binding to etcd since we're not using bindings
 			// to manage pod lifecycle
 			task.Pod.DesiredState.Host = binding.Host
@@ -683,7 +681,7 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 			return nil
 		}
 	}
-	task.Offer.release()
+	task.Offer.Release()
 	task.ClearTaskInfo()
 	return fmt.Errorf("Failed to launch task for pod %s: %v", podId, err)
 }
@@ -761,7 +759,7 @@ func (k *KubernetesScheduler) DeletePod(podId string) error {
 		if !task.Launched {
 			// we've been invoked in between Schedule() and Bind()
 			if task.hasAcceptedOffer() {
-				task.Offer.release()
+				task.Offer.Release()
 				task.ClearTaskInfo()
 			}
 			delete(k.podToTask, podId)
@@ -786,22 +784,22 @@ func FCFSScheduleFunc(r OfferRegistry, slaves map[string]*Slave, task *PodTask) 
 	if task.hasAcceptedOffer() {
 		// verify that the offer is still on the table
 		offerId := task.GetOfferId()
-		if offer, ok := r.Get(offerId); ok && !offer.hasExpired() {
+		if offer, ok := r.Get(offerId); ok && !offer.HasExpired() {
 			// skip tasks that have already have assigned offers
 			return task.Offer, nil
 		}
-		task.Offer.release()
+		task.Offer.Release()
 		task.ClearTaskInfo()
 	}
 
 	var acceptedOffer PerishableOffer
 	err := r.Walk(func(p PerishableOffer) (bool, error) {
-		offer := p.details()
+		offer := p.Details()
 		if offer == nil {
 			return false, fmt.Errorf("nil offer while scheduling task %v", task.ID)
 		}
 		if task.AcceptOffer(offer) {
-			if p.acquire() {
+			if p.Acquire() {
 				acceptedOffer = p
 				log.V(3).Infof("Pod %v accepted offer %v", task.Pod.ID, offer.Id.GetValue())
 				return true, nil // stop, we found an offer
