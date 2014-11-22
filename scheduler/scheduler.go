@@ -544,7 +544,7 @@ func (k *KubernetesScheduler) ListPods(selector labels.Selector) (*api.PodList, 
 	k.RLock()
 	defer k.RUnlock()
 
-	var result []api.Pod
+	result := []api.Pod{}
 	for _, task := range k.runningTasks {
 		pod := task.Pod
 
