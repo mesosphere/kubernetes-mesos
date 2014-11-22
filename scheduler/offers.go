@@ -66,8 +66,7 @@ type expiredOffer struct {
 }
 
 type PerishableOffer interface {
-	// Delayed interface: return the delay interval before age()ing
-	GetDelay() time.Duration
+	queue.Delayed
 	// returns true if this offer has expired
 	HasExpired() bool
 	// if not yet expired, return mesos offer details; otherwise nil
