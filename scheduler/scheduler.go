@@ -12,7 +12,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/service"
+	kpod "github.com/GoogleCloudPlatform/kubernetes/pkg/registry/pod"
 	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
@@ -219,7 +219,7 @@ type KubernetesScheduler struct {
 
 	// Mesos context.
 	executor    *mesos.ExecutorInfo
-	Driver      mesos.SchedulerDriver
+	driver      mesos.SchedulerDriver
 	frameworkId *mesos.FrameworkID
 	masterInfo  *mesos.MasterInfo
 	registered  bool
@@ -246,31 +246,31 @@ type KubernetesScheduler struct {
 	client   *client.Client
 	podQueue *cache.FIFO
 
-	serviceRegistry service.Registry
+	manifestFactory kpod.ManifestFactory
 }
 
 // New create a new KubernetesScheduler
-func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client, helper tools.EtcdHelper, sr service.Registry) *KubernetesScheduler {
+func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client, helper tools.EtcdHelper) *KubernetesScheduler {
 	return &KubernetesScheduler{
-		new(sync.RWMutex),
-		helper,
-		executor,
-		nil,
-		nil,
-		nil,
-		false,
-		make(map[string]*mesos.Offer),
-		make(map[string]*Slave),
-		make(map[string]string),
-		make(map[string]*PodTask),
-		make(map[string]*PodTask),
-		ring.New(defaultFinishedTasksSize),
-		make(map[string]string),
-		scheduleFunc,
-		client,
-		cache.NewFIFO(),
-		sr,
+		RWMutex:       new(sync.RWMutex),
+		EtcdHelper:    helper,
+		executor:      executor,
+		offers:        make(map[string]*mesos.Offer),
+		slaves:        make(map[string]*Slave),
+		slaveIDs:      make(map[string]string),
+		pendingTasks:  make(map[string]*PodTask),
+		runningTasks:  make(map[string]*PodTask),
+		finishedTasks: ring.New(defaultFinishedTasksSize),
+		podToTask:     make(map[string]string),
+		scheduleFunc:  scheduleFunc,
+		client:        client,
+		podQueue:      cache.NewFIFO(),
 	}
+}
+
+func (k *KubernetesScheduler) Init(d mesos.SchedulerDriver, f kpod.ManifestFactory) {
+	k.driver = d
+	k.manifestFactory = f
 }
 
 // Registered is called when the scheduler registered with the master successfully.
@@ -425,8 +425,8 @@ func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 			/// k8s-mesos cluster. For now, I've duplicated logic from k8s fillPodInfo
 			netContainerInfo, ok := target["net"] // docker.Container
 			if ok {
-				if netContainerInfo.NetworkSettings != nil {
-					task.Pod.CurrentState.PodIP = netContainerInfo.NetworkSettings.IPAddress
+				if netContainerInfo.PodIP != "" {
+					task.Pod.CurrentState.PodIP = netContainerInfo.PodIP
 				} else {
 					log.Warningf("No network settings: %#v", netContainerInfo)
 				}
@@ -672,18 +672,29 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 }
 
 // ListPods obtains a list of pods that match selector.
-func (k *KubernetesScheduler) ListPods(selector labels.Selector) (*api.PodList, error) {
-	log.V(2).Infof("List pods for '%v'\n", selector)
-
+func (k *KubernetesScheduler) ListPodsPredicate(ctx api.Context, filter func(*api.Pod) bool) (*api.PodList, error) {
 	k.RLock()
 	defer k.RUnlock()
+	return k.listPods(filter)
+}
 
+// ListPods obtains a list of pods that match selector.
+func (k *KubernetesScheduler) ListPods(ctx api.Context, selector labels.Selector) (*api.PodList, error) {
+	log.V(2).Infof("List pods for '%v'\n", selector)
+	k.RLock()
+	defer k.RUnlock()
+	return k.listPods(func(pod *api.Pod) bool {
+		return selector.Matches(labels.Set(pod.Labels))
+	})
+}
+
+// assumes that caller has already locked around scheduler state
+func (k *KubernetesScheduler) listPods(filter func(*api.Pod) bool) (*api.PodList, error) {
 	var result []api.Pod
 	for _, task := range k.runningTasks {
 		pod := task.Pod
 
-		var l labels.Set = pod.Labels
-		if selector.Matches(l) || selector.Empty() {
+		if filter(pod) {
 			result = append(result, *pod)
 		}
 	}
@@ -692,8 +703,7 @@ func (k *KubernetesScheduler) ListPods(selector labels.Selector) (*api.PodList, 
 	for _, task := range k.pendingTasks {
 		pod := task.Pod
 
-		var l labels.Set = pod.Labels
-		if selector.Matches(l) || selector.Empty() {
+		if filter(pod) {
 			result = append(result, *pod)
 		}
 	}
@@ -707,7 +717,7 @@ func (k *KubernetesScheduler) ListPods(selector labels.Selector) (*api.PodList, 
 }
 
 // Get a specific pod.
-func (k *KubernetesScheduler) GetPod(podId string) (*api.Pod, error) {
+func (k *KubernetesScheduler) GetPod(ctx api.Context, podId string) (*api.Pod, error) {
 	log.V(2).Infof("Get pod '%s'\n", podId)
 
 	k.RLock()
@@ -735,7 +745,7 @@ func (k *KubernetesScheduler) GetPod(podId string) (*api.Pod, error) {
 
 // Create a pod based on a specification; DOES NOT schedule it onto a specific machine,
 // instead the pod is queued for scheduling.
-func (k *KubernetesScheduler) CreatePod(pod *api.Pod) error {
+func (k *KubernetesScheduler) CreatePod(ctx api.Context, pod *api.Pod) error {
 	log.V(2).Infof("Create pod: '%v'\n", pod)
 	// Set current status to "Waiting".
 	pod.CurrentState.Status = api.PodWaiting
@@ -755,11 +765,11 @@ func (k *KubernetesScheduler) CreatePod(pod *api.Pod) error {
 	defer k.Unlock()
 
 	if _, ok := k.podToTask[pod.ID]; ok {
-		return fmt.Errorf("Pod %s already launched. Please choose a unique pod name", pod.JSONBase.ID)
+		return fmt.Errorf("Pod %s already launched. Please choose a unique pod name", pod.ID)
 	}
 
 	k.podQueue.Add(pod.ID, pod)
-	k.podToTask[pod.JSONBase.ID] = task.ID
+	k.podToTask[pod.ID] = task.ID
 	k.pendingTasks[task.ID] = task
 
 	return nil
@@ -785,7 +795,7 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	// Schedule() and now that the offer for this task was rescinded or invalidated
 
 	// TODO(k8s): move this to a watch/rectification loop.
-	manifest, err := k.makeManifest(binding.Host, *task.Pod)
+	manifest, err := k.manifestFactory.MakeManifest(binding.Host, *task.Pod)
 	if err != nil {
 		log.Warningf("Failed to generate an updated manifest")
 		return err
@@ -805,7 +815,7 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	// TODO(yifan): By this time, there is a chance that the slave is disconnected.
 	log.V(2).Infof("Launching task : %v", task)
 	offerId := &mesos.OfferID{Value: proto.String(task.OfferIds[0])}
-	if err := k.Driver.LaunchTasks(offerId, []*mesos.TaskInfo{task.TaskInfo}, nil); err != nil {
+	if err := k.driver.LaunchTasks(offerId, []*mesos.TaskInfo{task.TaskInfo}, nil); err != nil {
 		task.ClearTaskInfo()
 		// TODO(jdef): decline the offer too?
 		return fmt.Errorf("Failed to launch task for pod %s: %v", podId, err)
@@ -818,30 +828,15 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	return nil
 }
 
-// TODO(jdef): hacked in from kubernetes/pkg/registry/etcd/manifest_factory.go. It would be
-// nice to have another way to get access to this default implementation, unfortunately the k8s
-// API doesn't allow for that. We should probably file a PR against k8s for such.
-func (k *KubernetesScheduler) makeManifest(machine string, pod api.Pod) (api.ContainerManifest, error) {
-	envVars, err := service.GetServiceEnvironmentVariables(k.serviceRegistry, machine)
-	if err != nil {
-		return api.ContainerManifest{}, err
-	}
-	for ix, container := range pod.DesiredState.Manifest.Containers {
-		pod.DesiredState.Manifest.ID = pod.ID
-		pod.DesiredState.Manifest.Containers[ix].Env = append(container.Env, envVars...)
-	}
-	return pod.DesiredState.Manifest, nil
-}
-
 // Update an existing pod.
-func (k *KubernetesScheduler) UpdatePod(pod *api.Pod) error {
+func (k *KubernetesScheduler) UpdatePod(ctx api.Context, pod *api.Pod) error {
 	// TODO(yifan): Need to send a special message to the slave/executor.
 	// TODO(nnielsen): Pod updates not yet supported by kubelet.
 	return fmt.Errorf("Not implemented: UpdatePod")
 }
 
 // Delete an existing pod.
-func (k *KubernetesScheduler) DeletePod(podId string) error {
+func (k *KubernetesScheduler) DeletePod(ctx api.Context, podId string) error {
 	log.V(2).Infof("Delete pod '%s'\n", podId)
 
 	k.Lock()
@@ -868,7 +863,7 @@ func (k *KubernetesScheduler) DeletePod(podId string) error {
 
 	if task, exists := k.runningTasks[taskId]; exists {
 		taskId := &mesos.TaskID{Value: proto.String(task.ID)}
-		return k.Driver.KillTask(taskId)
+		return k.driver.KillTask(taskId)
 	}
 
 	if task, exists := k.pendingTasks[taskId]; exists {
@@ -878,13 +873,13 @@ func (k *KubernetesScheduler) DeletePod(podId string) error {
 			return nil
 		}
 		taskId := &mesos.TaskID{Value: proto.String(task.ID)}
-		return k.Driver.KillTask(taskId)
+		return k.driver.KillTask(taskId)
 	}
 
 	return fmt.Errorf("Cannot kill pod '%s': pod not found", podId)
 }
 
-func (k *KubernetesScheduler) WatchPods(resourceVersion uint64, filter func(*api.Pod) bool) (watch.Interface, error) {
+func (k *KubernetesScheduler) WatchPods(ctx api.Context, resourceVersion string, filter func(*api.Pod) bool) (watch.Interface, error) {
 	return nil, nil
 }
 
@@ -904,7 +899,7 @@ func FCFSScheduleFunc(k *KubernetesScheduler, slaves map[string]*Slave, task *Po
 		for _, offer := range slave.Offers {
 			if !task.AcceptOffer(slaveId, offer) {
 				log.V(2).Infof("Declining offer %v", offer)
-				if err := k.Driver.DeclineOffer(offer.Id, nil); err != nil {
+				if err := k.driver.DeclineOffer(offer.Id, nil); err != nil {
 					log.Warningf("Failed to decline offer %v: %v", offer.Id, err)
 				}
 				k.deleteOffer(offer.Id.GetValue())

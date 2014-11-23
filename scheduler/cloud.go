@@ -3,6 +3,7 @@ package scheduler
 import "errors"
 import "net"
 import log "github.com/golang/glog"
+import "github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 import cloud "github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
 
 var (
@@ -32,7 +33,8 @@ func (c *MesosCloud) Zones() (cloud.Zones, bool) {
 	return nil, false
 }
 
-// implementation of cloud.Instances
+// implementation of cloud.Instances.
+// IPAddress returns an IP address of the specified instance.
 func (c *MesosCloud) IPAddress(name string) (net.IP, error) {
 	if name == "" {
 		return nil, noHostNameSpecified
@@ -48,7 +50,8 @@ func (c *MesosCloud) IPAddress(name string) (net.IP, error) {
 	}
 }
 
-// implementation of cloud.Instances; does not implement any filtering
+// implementation of cloud.Instances; does not implement any filtering.
+// List lists instances that match 'filter' which is a regular expression which must match the entire instance name (fqdn).
 func (c *MesosCloud) List(filter string) ([]string, error) {
 	c.RLock()
 	defer c.RUnlock()
@@ -58,4 +61,10 @@ func (c *MesosCloud) List(filter string) ([]string, error) {
 		slaveHosts = append(slaveHosts, slave.HostName)
 	}
 	return slaveHosts, nil
+}
+
+// implementation of cloud.Instances; always returns nil,nil.
+// GetNodeResources gets the resources for a particular node
+func (c *MesosCloud) GetNodeResources(name string) (*api.NodeResources, error) {
+	return nil, nil
 }

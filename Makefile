@@ -65,6 +65,7 @@ format: require-gopath
 		github.com/mesosphere/kubernetes-mesos/kubernetes-executor \
 		github.com/mesosphere/kubernetes-mesos/scheduler \
 		github.com/mesosphere/kubernetes-mesos/service \
+		github.com/mesosphere/kubernetes-mesos/master \
 		github.com/mesosphere/kubernetes-mesos/executor
 
 install: all

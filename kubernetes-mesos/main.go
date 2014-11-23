@@ -29,38 +29,44 @@ import (
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/apiserver"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/auth/authenticator/bearertoken"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/auth/authenticator/tokenfile"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/auth/handlers"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/capabilities"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/binding"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/controller"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/etcd"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/minion"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/pod"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/service"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
-	kscheduler "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
-	kendpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/ui"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
 	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
-	goetcd "github.com/coreos/go-etcd/etcd"
+	"github.com/coreos/go-etcd/etcd"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
+	kmmaster "github.com/mesosphere/kubernetes-mesos/master"
 	kmscheduler "github.com/mesosphere/kubernetes-mesos/scheduler"
-	kmendpoint "github.com/mesosphere/kubernetes-mesos/service"
 )
 
 var (
-	port                 = flag.Uint("port", 8888, "The port to listen on.  Default 8888.")
-	address              = flag.String("address", "127.0.0.1", "The address on the local server to listen to. Default 127.0.0.1")
-	apiPrefix            = flag.String("api_prefix", "/api/v1beta1", "The prefix for API requests on the server. Default '/api/v1beta1'")
-	mesosMaster          = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master")
-	executorPath         = flag.String("executor_path", "", "Location of the kubernetes executor executable")
-	proxyPath            = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
-	minionPort           = flag.Uint("minion_port", 10250, "The port at which kubelet will be listening on the minions.")
-	useHostPortEndpoints = flag.Bool("host_port_endpoints", true, "Map service endpoints to hostIP:hostPort instead of podIP:containerPort. Default true.")
-	etcdServerList       util.StringList
+	port                  = flag.Uint("port", 8888, "The port to listen on.  Default 8888.")
+	address               = util.IP(net.ParseIP("127.0.0.1"))
+	apiPrefix             = flag.String("api_prefix", "/api/v1beta1", "The prefix for API requests on the server. Default '/api/v1beta1'")
+	mesosMaster           = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master")
+	executorPath          = flag.String("executor_path", "", "Location of the kubernetes executor executable")
+	proxyPath             = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
+	minionPort            = flag.Uint("minion_port", 10250, "The port at which kubelet will be listening on the minions.")
+	useHostPortEndpoints  = flag.Bool("host_port_endpoints", true, "Map service endpoints to hostIP:hostPort instead of podIP:containerPort. Default true.")
+	storageVersion        = flag.String("storage_version", "", "The version to store resources with. Defaults to server preferred")
+	etcdServerList        util.StringList
+	corsAllowedOriginList util.StringList
+	etcdConfigFile        = flag.String("etcd_config", "", "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
+	allowPrivileged       = flag.Bool("allow_privileged", false, "If true, allow privileged containers.")
+	healthCheckMinions    = flag.Bool("health_check_minions", true, "If true, health check minions and filter unhealthy ones. Default true.")
+	minionCacheTTL        = flag.Duration("minion_cache_ttl", 30*time.Second, "Duration of time to cache minion information. Default 30 seconds.")
+	eventTTL              = flag.Duration("event_ttl", 48*time.Hour, "Amount of time to retain events. Default 2 days.")
+	tokenAuthFile         = flag.String("token_auth_file", "", "If set, the file that will be used to secure the API server via token authentication.")
+	enableLogsSupport     = flag.Bool("enable_logs_support", true, "Enables server endpoint for log collection")
 )
 
 const (
@@ -73,17 +79,44 @@ const (
 
 func init() {
 	flag.Var(&etcdServerList, "etcd_servers", "Servers for the etcd (http://ip:port), comma separated")
+	flag.Var(&corsAllowedOriginList, "cors_allowed_origins", "List of allowed origins for CORS, comma separated.  An allowed origin can be a regular expression to support subdomain matching.  If this list is empty CORS will not be enabled.")
 }
 
-type kubernetesMaster struct {
-	podRegistry        pod.Registry
-	controllerRegistry controller.Registry
-	serviceRegistry    service.Registry
-	minionRegistry     minion.Registry
-	bindingRegistry    binding.Registry
-	storage            map[string]apiserver.RESTStorage
-	client             *client.Client
-	scheduler          *kmscheduler.KubernetesScheduler
+func newEtcd(etcdConfigFile string, etcdServerList util.StringList) (helper tools.EtcdHelper, err error) {
+	var client tools.EtcdGetSet
+	if etcdConfigFile != "" {
+		client, err = etcd.NewClientFromFile(etcdConfigFile)
+		if err != nil {
+			return helper, err
+		}
+	} else {
+		client = etcd.NewClient(etcdServerList)
+	}
+
+	return master.NewEtcdHelper(client, *storageVersion)
+}
+
+func serveExecutorArtifact(path string) string {
+	serveFile := func(pattern string, filename string) {
+		http.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			http.ServeFile(w, r, filename)
+		})
+	}
+
+	// Create base path (http://foobar:5000/<base>)
+	pathSplit := strings.Split(path, "/")
+	var base string
+	if len(pathSplit) > 0 {
+		base = pathSplit[len(pathSplit)-1]
+	} else {
+		base = path
+	}
+	serveFile("/"+base, path)
+
+	hostURI := fmt.Sprintf("http://%s:%d/%s", address.String(), artifactPort, base)
+	log.V(2).Infof("Hosting artifact '%s' at '%s'", path, hostURI)
+
+	return hostURI
 }
 
 // Copied from cmd/apiserver.go
@@ -92,53 +125,48 @@ func main() {
 	util.InitLogs()
 	defer util.FlushLogs()
 
-	if len(etcdServerList) <= 0 {
-		log.Fatal("No etcd severs specified!")
+	verflag.PrintAndExitIfRequested()
+
+	if (*etcdConfigFile != "" && len(etcdServerList) != 0) || (*etcdConfigFile == "" && len(etcdServerList) == 0) {
+		log.Fatalf("specify either -etcd_servers or -etcd_config")
 	}
 
-	serveExecutorArtifact := func(path string) string {
-		serveFile := func(pattern string, filename string) {
-			http.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-				http.ServeFile(w, r, filename)
-			})
-		}
+	capabilities.Initialize(capabilities.Capabilities{
+		AllowPrivileged: *allowPrivileged,
+	})
 
-		// Create base path (http://foobar:5000/<base>)
-		pathSplit := strings.Split(path, "/")
-		var base string
-		if len(pathSplit) > 0 {
-			base = pathSplit[len(pathSplit)-1]
-		} else {
-			base = path
-		}
-		serveFile("/"+base, path)
-
-		hostURI := fmt.Sprintf("http://%s:%d/%s", *address, artifactPort, base)
-		log.V(2).Infof("Hosting artifact '%s' at '%s'", path, hostURI)
-
-		return hostURI
-	}
-
-	executorURI := serveExecutorArtifact(*executorPath)
-	proxyURI := serveExecutorArtifact(*proxyPath)
-
-	go http.ListenAndServe(fmt.Sprintf("%s:%d", *address, artifactPort), nil)
-
+	// TODO(nnielsen): Using default pod info getter until
+	// MesosPodInfoGetter supports network containers.
+	// podInfoGetter := MesosPodInfoGetter.New(mesosPodScheduler)
 	podInfoGetter := &client.HTTPPodInfoGetter{
 		Client: http.DefaultClient,
 		Port:   *minionPort,
 	}
 
-	client, err := client.New("http://"+net.JoinHostPort(*address, strconv.Itoa(int(*port))), nil)
+	// TODO(k8s): expose same flags as client.BindClientConfigFlags but for a server
+	clientConfig := &client.Config{
+		Host:    net.JoinHostPort(address.String(), strconv.Itoa(int(*port))),
+		Version: *storageVersion,
+	}
+	client, err := client.New(clientConfig)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Invalid server address: %v", err)
 	}
 
-	executorCommand := "./kubernetes-executor -v=2"
+	executorCommand := "./kubernetes-executor -v=2 -hostname_override=0.0.0.0"
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
-		executorCommand = "./kubernetes-executor -v=2 -hostname_override=0.0.0.0 -etcd_servers=" + etcdServerArguments
+		executorCommand = fmt.Sprintf("%s -etcd_servers=%s", executorCommand, etcdServerArguments)
+	} else {
+		executorCommand = fmt.Sprintf("%s -etcd_config=%s", executorCommand, *etcdConfigFile)
 	}
+
+	executorURI := serveExecutorArtifact(*executorPath)
+	proxyURI := serveExecutorArtifact(*proxyPath)
+	//TODO(jdef): include a URI that downloads the etcd config file
+
+	go http.ListenAndServe(fmt.Sprintf("%s:%d", address.String(), artifactPort), nil)
+	log.V(2).Info("Serving executor artifacts...")
 
 	// Create mesos scheduler driver.
 	executor := &mesos.ExecutorInfo{
@@ -154,15 +182,12 @@ func main() {
 		Source: proto.String("kubernetes"),
 	}
 
-	etcdClient := goetcd.NewClient(etcdServerList)
-	helper := tools.EtcdHelper{
-		etcdClient,
-		runtime.DefaultCodec,
-		runtime.DefaultResourceVersioner,
+	helper, err := newEtcd(*etcdConfigFile, etcdServerList)
+	if err != nil {
+		log.Fatalf("Invalid storage version or misconfigured etcd: %v", err)
 	}
 
-	serviceRegistry := etcd.NewRegistry(etcdClient)
-	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc, client, helper, serviceRegistry)
+	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc, client, helper)
 	driver := &mesos.MesosSchedulerDriver{
 		Master: *mesosMaster,
 		Framework: mesos.FrameworkInfo{
@@ -171,74 +196,69 @@ func main() {
 		},
 		Scheduler: mesosPodScheduler,
 	}
-	mesosPodScheduler.Driver = driver
+	m := kmmaster.New(&kmmaster.Config{
+		Client:             client,
+		Cloud:              &kmscheduler.MesosCloud{mesosPodScheduler},
+		EtcdHelper:         helper,
+		HealthCheckMinions: *healthCheckMinions,
+		MinionCacheTTL:     *minionCacheTTL,
+		EventTTL:           *eventTTL,
+		PodInfoGetter:      podInfoGetter,
+		PRFactory:          func() pod.Registry { return mesosPodScheduler },
+	})
+	mesosPodScheduler.Init(driver, m.GetManifestFactory())
 
 	driver.Init()
 	defer driver.Destroy()
 	go driver.Start()
 
-	log.V(2).Info("Serving executor artifacts...")
-	// TODO(nnielsen): Using default pod info getter until
-	// MesosPodInfoGetter supports network containers.
+	//TODO(jdef): upstream, this runs as a separate process... but not in this distro yet
+	plugin.New(mesosPodScheduler.NewPluginConfig()).Run()
 
-	// podInfoGetter := MesosPodInfoGetter.New(mesosPodScheduler)
-
-	m := newKubernetesMaster(mesosPodScheduler, &master.Config{
-		Client:        client,
-		Cloud:         &kmscheduler.MesosCloud{mesosPodScheduler},
-		Minions:       nil,
-		PodInfoGetter: podInfoGetter,
-		EtcdServers:   etcdServerList,
-	}, etcdClient, serviceRegistry)
-	log.Fatal(m.run(net.JoinHostPort(*address, strconv.Itoa(int(*port))), *apiPrefix, helper.Codec))
-}
-
-func newKubernetesMaster(scheduler *kmscheduler.KubernetesScheduler, c *master.Config, etcdClient tools.EtcdClient, sr service.Registry) *kubernetesMaster {
-	var m *kubernetesMaster
-
-	minionRegistry := kmscheduler.NewCloudRegistry(c.Cloud)
-
-	m = &kubernetesMaster{
-		podRegistry:        scheduler,
-		controllerRegistry: etcd.NewRegistry(etcdClient),
-		serviceRegistry:    sr,
-		minionRegistry:     minionRegistry,
-		bindingRegistry:    etcd.NewRegistry(etcdClient),
-		client:             c.Client,
-		scheduler:          scheduler,
-	}
-	m.init(scheduler, c.Cloud, c.PodInfoGetter)
-
-	return m
-}
-
-func (m *kubernetesMaster) init(scheduler kscheduler.Scheduler, cloud cloudprovider.Interface, podInfoGetter client.PodInfoGetter) {
-	podCache := master.NewPodCache(podInfoGetter, m.podRegistry)
-	go util.Forever(func() { podCache.UpdateAllContainers() }, cachePeriod)
-	m.storage = map[string]apiserver.RESTStorage{
-		"pods": pod.NewREST(&pod.RESTConfig{
-			CloudProvider: cloud,
-			PodCache:      podCache,
-			PodInfoGetter: podInfoGetter,
-			Registry:      m.podRegistry,
-		}),
-		"replicationControllers": controller.NewREST(m.controllerRegistry, m.podRegistry),
-		"services":               service.NewREST(m.serviceRegistry, cloud, m.minionRegistry),
-		"minions":                minion.NewREST(m.minionRegistry),
-		// TODO: should appear only in scheduler API group.
-		"bindings": binding.NewREST(m.bindingRegistry),
-	}
+	log.Fatal(run(m, net.JoinHostPort(address.String(), strconv.Itoa(int(*port)))))
 }
 
 // Run begins serving the Kubernetes API. It never returns.
-func (m *kubernetesMaster) run(myAddress, apiPrefix string, codec runtime.Codec) error {
-	endpoints := m.createEndpointController()
-	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, syncPeriod)
-	plugin.New(m.scheduler.NewPluginConfig()).Run()
+func run(m *kmmaster.Master, myAddress string) error {
+	/*
+		//TODO(jdef): XXX endpoint controller has been moved to controller-manager now
+		endpoints := m.createEndpointController()
+		go util.Forever(func() { endpoints.SyncServiceEndpoints() }, syncPeriod)
+	*/
+
+	mux := http.NewServeMux()
+	apiserver.NewAPIGroup(m.API_v1beta1()).InstallREST(mux, *apiPrefix+"/v1beta1")
+	apiserver.NewAPIGroup(m.API_v1beta2()).InstallREST(mux, *apiPrefix+"/v1beta2")
+	apiserver.InstallSupport(mux)
+	if *enableLogsSupport {
+		apiserver.InstallLogsSupport(mux)
+	}
+	ui.InstallSupport(mux)
+
+	handler := http.Handler(mux)
+
+	if len(corsAllowedOriginList) > 0 {
+		allowedOriginRegexps, err := util.CompileRegexps(corsAllowedOriginList)
+		if err != nil {
+			log.Fatalf("Invalid CORS allowed origin, --cors_allowed_origins flag was set to %v - %v", strings.Join(corsAllowedOriginList, ","), err)
+		}
+		handler = apiserver.CORS(handler, allowedOriginRegexps, nil, nil, "true")
+	}
+
+	if len(*tokenAuthFile) != 0 {
+		auth, err := tokenfile.New(*tokenAuthFile)
+		if err != nil {
+			log.Fatalf("Unable to load the token authentication file '%s': %v", *tokenAuthFile, err)
+		}
+		userContexts := handlers.NewUserRequestContext()
+		handler = handlers.NewRequestAuthenticator(userContexts, bearertoken.New(auth), handlers.Unauthorized, handler)
+	}
+
+	handler = apiserver.RecoverPanics(handler)
 
 	s := &http.Server{
 		Addr:           myAddress,
-		Handler:        apiserver.Handle(m.storage, codec, apiPrefix),
+		Handler:        handler,
 		ReadTimeout:    httpReadTimeout,
 		WriteTimeout:   httpWriteTimeout,
 		MaxHeaderBytes: 1 << 20,
@@ -246,6 +266,9 @@ func (m *kubernetesMaster) run(myAddress, apiPrefix string, codec runtime.Codec)
 	return s.ListenAndServe()
 }
 
+/* TODO(jdef): move to controller-manager
+	// kendpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
+	// kmendpoint "github.com/mesosphere/kubernetes-mesos/service"
 func (m *kubernetesMaster) createEndpointController() kmendpoint.EndpointController {
 	if *useHostPortEndpoints {
 		log.V(2).Infof("Creating hostIP:hostPort endpoint controller")
@@ -255,3 +278,4 @@ func (m *kubernetesMaster) createEndpointController() kmendpoint.EndpointControl
 	stockEndpointController := kendpoint.NewEndpointController(m.serviceRegistry, m.client)
 	return stockEndpointController
 }
+*/

@@ -22,9 +22,9 @@ import (
 	"strconv"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/service"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 
 	"github.com/golang/glog"
@@ -36,51 +36,76 @@ type EndpointController interface {
 
 // EndpointController manages service endpoints.
 type endpointController struct {
-	client          *client.Client
-	serviceRegistry service.Registry
+	client *client.Client
 }
 
 // NewEndpointController returns a new *EndpointController.
-func NewEndpointController(serviceRegistry service.Registry, client *client.Client) EndpointController {
+func NewEndpointController(client *client.Client) EndpointController {
 	return &endpointController{
-		serviceRegistry: serviceRegistry,
-		client:          client,
+		client: client,
 	}
 }
 
 // SyncServiceEndpoints syncs service endpoints.
 func (e *endpointController) SyncServiceEndpoints() error {
-	services, err := e.client.ListServices(labels.Everything())
+	ctx := api.NewContext()
+	services, err := e.client.ListServices(ctx, labels.Everything())
 	if err != nil {
 		glog.Errorf("Failed to list services: %v", err)
 		return err
 	}
 	var resultErr error
 	for _, service := range services.Items {
-		pods, err := e.client.ListPods(labels.Set(service.Selector).AsSelector())
+		nsCtx := api.WithNamespace(ctx, service.Namespace)
+		pods, err := e.client.ListPods(nsCtx, labels.Set(service.Selector).AsSelector())
 		if err != nil {
 			glog.Errorf("Error syncing service: %#v, skipping.", service)
 			resultErr = err
 			continue
 		}
-		endpoints := make([]string, len(pods.Items))
-		for ix, pod := range pods.Items {
+		endpoints := []string{}
+		for _, pod := range pods.Items {
 			port, err := findPort(&pod.DesiredState.Manifest, service.ContainerPort)
 			if err != nil {
 				glog.Errorf("Failed to find port for service: %v, %v", service, err)
 				continue
 			}
+			// HACK(jdef): use HostIP instead of pod.CurrentState.PodIP for generic mesos compat
 			if len(pod.CurrentState.HostIP) == 0 {
 				glog.Errorf("Failed to find a host IP for pod: %v", pod)
 				continue
 			}
-			endpoints[ix] = net.JoinHostPort(pod.CurrentState.HostIP, strconv.Itoa(port))
+			endpoints = append(endpoints, net.JoinHostPort(pod.CurrentState.HostIP, strconv.Itoa(port)))
 		}
-		// TODO(k8s): this is totally broken, we need to compute this and store inside an AtomicUpdate loop.
-		err = e.serviceRegistry.UpdateEndpoints(&api.Endpoints{
-			JSONBase:  api.JSONBase{ID: service.ID},
-			Endpoints: endpoints,
-		})
+		currentEndpoints, err := e.client.GetEndpoints(nsCtx, service.ID)
+		if err != nil {
+			// TODO(k8s) this is brittle as all get out, refactor the client libraries to return a structured error.
+			if errors.IsNotFound(err) {
+				currentEndpoints = &api.Endpoints{
+					TypeMeta: api.TypeMeta{
+						ID: service.ID,
+					},
+				}
+			} else {
+				glog.Errorf("Error getting endpoints: %#v", err)
+				continue
+			}
+		}
+		newEndpoints := &api.Endpoints{}
+		*newEndpoints = *currentEndpoints
+		newEndpoints.Endpoints = endpoints
+
+		if len(currentEndpoints.ResourceVersion) == 0 {
+			// No previous endpoints, create them
+			_, err = e.client.CreateEndpoints(nsCtx, newEndpoints)
+		} else {
+			// Pre-existing
+			if endpointsEqual(currentEndpoints, endpoints) {
+				glog.V(2).Infof("endpoints are equal for %s, skipping update", service.ID)
+				continue
+			}
+			_, err = e.client.UpdateEndpoints(nsCtx, newEndpoints)
+		}
 		if err != nil {
 			glog.Errorf("Error updating endpoints: %#v", err)
 			continue
@@ -89,7 +114,32 @@ func (e *endpointController) SyncServiceEndpoints() error {
 	return resultErr
 }
 
-// findPort locates the container port for the given manifest and portName.
+func containsEndpoint(endpoints *api.Endpoints, endpoint string) bool {
+	if endpoints == nil {
+		return false
+	}
+	for ix := range endpoints.Endpoints {
+		if endpoints.Endpoints[ix] == endpoint {
+			return true
+		}
+	}
+	return false
+}
+
+func endpointsEqual(e *api.Endpoints, endpoints []string) bool {
+	if len(e.Endpoints) != len(endpoints) {
+		return false
+	}
+	for _, endpoint := range endpoints {
+		if !containsEndpoint(e, endpoint) {
+			return false
+		}
+	}
+	return true
+}
+
+// findPort locates the Host port for the given manifest and portName.
+// HACK(jdef): return the HostPort instead of the ContainerPort for generic mesos compat.
 func findPort(manifest *api.ContainerManifest, portName util.IntOrString) (int, error) {
 	if ((portName.Kind == util.IntstrString && len(portName.StrVal) == 0) ||
 		(portName.Kind == util.IntstrInt && portName.IntVal == 0)) &&
