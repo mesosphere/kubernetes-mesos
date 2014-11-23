@@ -22,7 +22,11 @@ type OfferRegistry interface {
 	// Initialize the instance, spawning necessary housekeeping go routines.
 	Init()
 	Add([]*mesos.Offer)
-	AwaitNew(id string, f OfferFilter) <-chan empty
+
+	// Listen for arriving offers that are acceptable to the filter, sending
+	// a signal on (by closing) the returned channel. A listener will only
+	// ever be notified once, if at all.
+	Listen(id string, f OfferFilter) <-chan empty
 
 	// invoked when offers are rescinded or expired
 	Delete(string)
@@ -172,7 +176,7 @@ func (s *offerStorage) Delete(offerId string) {
 					// c) lingering: expired due to timeout
 					// d) lingering: expired due to having been rescinded
 					// e) claimed: task launched and it using resources from this offer
-					// we want to **avoid** delining an offer that's claimed: attempt to acquire
+					// we want to **avoid** declining an offer that's claimed: attempt to acquire
 					if offer.Acquire() {
 						// previously claimed offer was released, perhaps due to a launch
 						// failure, so we should attempt to decline
@@ -269,23 +273,24 @@ func (s *offerStorage) Get(id string) (PerishableOffer, bool) {
 }
 
 type offerListener struct {
-	id     string
-	filter OfferFilter
-	notify chan<- empty
-	age    int
+	id      string
+	accepts OfferFilter
+	notify  chan<- empty
+	age     int
 }
 
 // register a listener for new offers, whom we'll notify upon receiving such.
-func (s *offerStorage) AwaitNew(id string, f OfferFilter) <-chan empty {
+// notification is delivered in the form of closing the channel, nothing is ever sent.
+func (s *offerStorage) Listen(id string, f OfferFilter) <-chan empty {
 	if f == nil {
 		return nil
 	}
-	ch := make(chan empty, 1)
+	ch := make(chan empty)
 	listen := &offerListener{
-		id:     id,
-		filter: f,
-		notify: ch,
-		age:    0,
+		id:      id,
+		accepts: f,
+		notify:  ch,
+		age:     0,
 	}
 	log.V(3).Infof("Registering offer listener %s", listen.id)
 	s.listeners.Add(id, listen)
@@ -324,9 +329,9 @@ func (s *offerStorage) notifyListeners() {
 		if offer, ok = s.Get(id); !ok || offer.HasExpired() {
 			continue
 		}
-		if listen.filter(offer.Details()) {
+		if listen.accepts(offer.Details()) {
 			log.V(3).Infof("Notifying offer listener %s", listen.id)
-			listen.notify <- empty{}
+			close(listen.notify)
 			return
 		}
 	}

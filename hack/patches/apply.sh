@@ -21,7 +21,7 @@ pmap=(
   [k8s]=github.com/GoogleCloudPlatform/kubernetes
 )
 
-# TODO(jdef) at some point it we should be able to apply patches with
+# TODO(jdef) at some point we should be able to apply patches with
 # multiple hunks, ala:
 # http://unix.stackexchange.com/questions/65698/how-to-make-patch-ignore-already-applied-hunks
 

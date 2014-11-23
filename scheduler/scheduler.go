@@ -226,7 +226,7 @@ func (k *KubernetesScheduler) deleteOffer(oid string) {
 			slaveId := details.GetSlaveId().GetValue()
 
 			if slave, found := k.slaves[slaveId]; !found {
-				log.Warningf("No slave for id %s associated with offer id %s", slaveId, oid)
+				log.Infof("No slave for id %s associated with offer id %s", slaveId, oid)
 			} else {
 				delete(slave.Offers, oid)
 			}
@@ -491,18 +491,16 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 		// listener to be notified if/when a matching offer comes in.
 		var offersAvailable <-chan empty
 		if err == noSuitableOffersErr {
-			offersAvailable = k.offers.AwaitNew(podId, func(offer *mesos.Offer) bool {
+			offersAvailable = k.offers.Listen(podId, func(offer *mesos.Offer) bool {
 				k.RLock()
 				defer k.RUnlock()
-				taskId, ok := k.podToTask[podId]
-				if !ok {
-					return false
+				if taskId, ok := k.podToTask[podId]; ok {
+					switch task, state := k.getTask(taskId); state {
+					case statePending:
+						return task.AcceptOffer(offer)
+					}
 				}
-				task, ok := k.pendingTasks[taskId]
-				if !ok {
-					return false
-				}
-				return task.AcceptOffer(offer)
+				return false
 			})
 		}
 		backoff.wait(podId, offersAvailable)
