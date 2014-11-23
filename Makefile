@@ -7,10 +7,10 @@ current_dir	:= $(patsubst %/,%,$(dir $(mkfile_path)))
 fail		:= ${MAKE} --no-print-directory --quiet -f $(current_dir)/Makefile error
 
 K8S_CMD		:= \
-                   github.com/GoogleCloudPlatform/kubernetes/cmd/controller-manager	\
                    github.com/GoogleCloudPlatform/kubernetes/cmd/kubecfg		\
                    github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
 FRAMEWORK_CMD	:= \
+                   github.com/mesosphere/kubernetes-mesos/controller-manager		\
                    github.com/mesosphere/kubernetes-mesos/kubernetes-mesos		\
                    github.com/mesosphere/kubernetes-mesos/kubernetes-executor
 
@@ -62,6 +62,7 @@ framework: require-godep
 
 format: require-gopath
 	go fmt	github.com/mesosphere/kubernetes-mesos/kubernetes-mesos \
+		github.com/mesosphere/kubernetes-mesos/controller-manager \
 		github.com/mesosphere/kubernetes-mesos/kubernetes-executor \
 		github.com/mesosphere/kubernetes-mesos/scheduler \
 		github.com/mesosphere/kubernetes-mesos/service \
