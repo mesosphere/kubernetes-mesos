@@ -65,6 +65,7 @@ func (e *endpointController) SyncServiceEndpoints() error {
 		}
 		endpoints := []string{}
 		for _, pod := range pods.Items {
+			// HACK(jdef): looks up a HostPort in the container, either by port-name or matching HostPort
 			port, err := findPort(&pod.DesiredState.Manifest, service.ContainerPort)
 			if err != nil {
 				glog.Errorf("Failed to find port for service: %v, %v", service, err)
