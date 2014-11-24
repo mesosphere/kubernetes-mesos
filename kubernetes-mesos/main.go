@@ -69,11 +69,9 @@ var (
 )
 
 const (
-	artifactPort     = 9000
-	cachePeriod      = 10 * time.Second
-	syncPeriod       = 30 * time.Second
-	httpReadTimeout  = 10 * time.Second
-	httpWriteTimeout = 10 * time.Second
+	artifactPort     = 9000 // port of the service that services mesos artifacts (executor); TODO(jdef): make this configurable
+	httpReadTimeout  = 10 * time.Second // k8s api server config: maximum duration before timing out read of the request
+	httpWriteTimeout = 10 * time.Second // k8s api server config: maximum duration before timing out write of the response
 )
 
 func init() {
