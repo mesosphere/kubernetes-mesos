@@ -114,6 +114,7 @@ func main() {
 		log.Warningf("Error creating root directory: %v", err)
 	}
 
+	// source of all configuration
 	cfg := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
 
 	// k8sm: no other pod configuration sources supported in this hybrid kubelet-executor
@@ -208,12 +209,13 @@ func main() {
 	driver.Start()
 
 	// TODO(who?) Recover running containers from check pointed pod list.
+
+	// start the kubelet
 	go util.Forever(func() { kl.Run(cfg.Updates()) }, 0)
 
 	log.Infof("Starting kubelet server...")
 	go util.Forever(func() {
 		// TODO(nnielsen): Don't hardwire port, but use port from resource offer.
-		// TODO(jdef): XXX use address variable here
 		log.Error(executor.ListenAndServeKubeletServer(kl, net.IP(address), *port, *enableDebuggingHandlers, POD_NS))
 	}, 0)
 
