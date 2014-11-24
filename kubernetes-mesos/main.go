@@ -51,22 +51,21 @@ import (
 var (
 	port                  = flag.Uint("port", 8888, "The port to listen on.  Default 8888.")
 	address               = util.IP(net.ParseIP("127.0.0.1"))
-	apiPrefix             = flag.String("api_prefix", "/api/v1beta1", "The prefix for API requests on the server. Default '/api/v1beta1'")
-	mesosMaster           = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master")
-	executorPath          = flag.String("executor_path", "", "Location of the kubernetes executor executable")
-	proxyPath             = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
-	minionPort            = flag.Uint("minion_port", 10250, "The port at which kubelet will be listening on the minions.")
-	useHostPortEndpoints  = flag.Bool("host_port_endpoints", true, "Map service endpoints to hostIP:hostPort instead of podIP:containerPort. Default true.")
+	apiPrefix             = flag.String("api_prefix", "/api", "The prefix for API requests on the server. Default '/api'")
 	storageVersion        = flag.String("storage_version", "", "The version to store resources with. Defaults to server preferred")
-	etcdServerList        util.StringList
-	corsAllowedOriginList util.StringList
-	etcdConfigFile        = flag.String("etcd_config", "", "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
-	allowPrivileged       = flag.Bool("allow_privileged", false, "If true, allow privileged containers.")
+	minionPort            = flag.Uint("minion_port", 10250, "The port at which kubelet will be listening on the minions. Default 10250.")
 	healthCheckMinions    = flag.Bool("health_check_minions", true, "If true, health check minions and filter unhealthy ones. Default true.")
 	minionCacheTTL        = flag.Duration("minion_cache_ttl", 30*time.Second, "Duration of time to cache minion information. Default 30 seconds.")
 	eventTTL              = flag.Duration("event_ttl", 48*time.Hour, "Amount of time to retain events. Default 2 days.")
 	tokenAuthFile         = flag.String("token_auth_file", "", "If set, the file that will be used to secure the API server via token authentication.")
-	enableLogsSupport     = flag.Bool("enable_logs_support", true, "Enables server endpoint for log collection")
+	etcdServerList        util.StringList
+	etcdConfigFile        = flag.String("etcd_config", "", "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
+	corsAllowedOriginList util.StringList
+	allowPrivileged       = flag.Bool("allow_privileged", false, "If true, allow privileged containers. Default false.")
+	enableLogsSupport     = flag.Bool("enable_logs_support", true, "Enables server endpoint for log collection. Default true.")
+	mesosMaster           = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master. Default localhost:5050.")
+	executorPath          = flag.String("executor_path", "", "Location of the kubernetes executor executable")
+	proxyPath             = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
 )
 
 const (
@@ -78,6 +77,7 @@ const (
 )
 
 func init() {
+	flag.Var(&address, "address", "The IP address on to serve on (set to 0.0.0.0 for all interfaces). Default 127.0.0.1.")
 	flag.Var(&etcdServerList, "etcd_servers", "Servers for the etcd (http://ip:port), comma separated")
 	flag.Var(&corsAllowedOriginList, "cors_allowed_origins", "List of allowed origins for CORS, comma separated.  An allowed origin can be a regular expression to support subdomain matching.  If this list is empty CORS will not be enabled.")
 }
@@ -96,7 +96,7 @@ func newEtcd(etcdConfigFile string, etcdServerList util.StringList) (helper tool
 	return master.NewEtcdHelper(client, *storageVersion)
 }
 
-func serveExecutorArtifact(path string) string {
+func serveExecutorArtifact(path string) *string {
 	serveFile := func(pattern string, filename string) {
 		http.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			http.ServeFile(w, r, filename)
@@ -116,7 +116,37 @@ func serveExecutorArtifact(path string) string {
 	hostURI := fmt.Sprintf("http://%s:%d/%s", address.String(), artifactPort, base)
 	log.V(2).Infof("Hosting artifact '%s' at '%s'", path, hostURI)
 
-	return hostURI
+	return &hostURI
+}
+
+func prepareExecutorInfo() *mesos.ExecutorInfo {
+	executorUris := []*mesos.CommandInfo_URI{}
+	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: serveExecutorArtifact(*executorPath)})
+	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: serveExecutorArtifact(*proxyPath)})
+
+	executorCommand := "./kubernetes-executor -v=2 -hostname_override=0.0.0.0"
+	if len(etcdServerList) > 0 {
+		etcdServerArguments := strings.Join(etcdServerList, ",")
+		executorCommand = fmt.Sprintf("%s -etcd_servers=%s", executorCommand, etcdServerArguments)
+	} else {
+		executorCommand = fmt.Sprintf("%s -etcd_config=%s", executorCommand, *etcdConfigFile)
+		executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: serveExecutorArtifact(*etcdConfigFile)})
+	}
+
+
+	go http.ListenAndServe(fmt.Sprintf("%s:%d", address.String(), artifactPort), nil)
+	log.V(2).Info("Serving executor artifacts...")
+
+	// Create mesos scheduler driver.
+	return &mesos.ExecutorInfo{
+		ExecutorId: &mesos.ExecutorID{Value: proto.String("KubeleteExecutorID")},
+		Command: &mesos.CommandInfo{
+			Value: proto.String(executorCommand),
+			Uris: executorUris,
+		},
+		Name:   proto.String("Kubelet Executor"),
+		Source: proto.String("kubernetes"),
+	}
 }
 
 // Copied from cmd/apiserver.go
@@ -153,40 +183,13 @@ func main() {
 		log.Fatalf("Invalid server address: %v", err)
 	}
 
-	executorCommand := "./kubernetes-executor -v=2 -hostname_override=0.0.0.0"
-	if len(etcdServerList) > 0 {
-		etcdServerArguments := strings.Join(etcdServerList, ",")
-		executorCommand = fmt.Sprintf("%s -etcd_servers=%s", executorCommand, etcdServerArguments)
-	} else {
-		executorCommand = fmt.Sprintf("%s -etcd_config=%s", executorCommand, *etcdConfigFile)
-	}
-
-	executorURI := serveExecutorArtifact(*executorPath)
-	proxyURI := serveExecutorArtifact(*proxyPath)
-	//TODO(jdef): include a URI that downloads the etcd config file
-
-	go http.ListenAndServe(fmt.Sprintf("%s:%d", address.String(), artifactPort), nil)
-	log.V(2).Info("Serving executor artifacts...")
-
-	// Create mesos scheduler driver.
-	executor := &mesos.ExecutorInfo{
-		ExecutorId: &mesos.ExecutorID{Value: proto.String("KubeleteExecutorID")},
-		Command: &mesos.CommandInfo{
-			Value: proto.String(executorCommand),
-			Uris: []*mesos.CommandInfo_URI{
-				{Value: &executorURI},
-				{Value: &proxyURI},
-			},
-		},
-		Name:   proto.String("Kubelet Executor"),
-		Source: proto.String("kubernetes"),
-	}
-
 	helper, err := newEtcd(*etcdConfigFile, etcdServerList)
 	if err != nil {
 		log.Fatalf("Invalid storage version or misconfigured etcd: %v", err)
 	}
 
+	// Create mesos scheduler driver.
+	executor := prepareExecutorInfo()
 	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc, client, helper)
 	driver := &mesos.MesosSchedulerDriver{
 		Master: *mesosMaster,
@@ -220,12 +223,6 @@ func main() {
 
 // Run begins serving the Kubernetes API. It never returns.
 func run(m *kmmaster.Master, myAddress string) error {
-	/*
-		//TODO(jdef): XXX endpoint controller has been moved to controller-manager now
-		endpoints := m.createEndpointController()
-		go util.Forever(func() { endpoints.SyncServiceEndpoints() }, syncPeriod)
-	*/
-
 	mux := http.NewServeMux()
 	apiserver.NewAPIGroup(m.API_v1beta1()).InstallREST(mux, *apiPrefix+"/v1beta1")
 	apiserver.NewAPIGroup(m.API_v1beta2()).InstallREST(mux, *apiPrefix+"/v1beta2")
@@ -265,17 +262,3 @@ func run(m *kmmaster.Master, myAddress string) error {
 	}
 	return s.ListenAndServe()
 }
-
-/* TODO(jdef): move to controller-manager
-	// kendpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
-	// kmendpoint "github.com/mesosphere/kubernetes-mesos/service"
-func (m *kubernetesMaster) createEndpointController() kmendpoint.EndpointController {
-	if *useHostPortEndpoints {
-		log.V(2).Infof("Creating hostIP:hostPort endpoint controller")
-		return kmendpoint.NewEndpointController(m.serviceRegistry, m.client)
-	}
-	log.V(2).Infof("Creating podIP:containerPort endpoint controller")
-	stockEndpointController := kendpoint.NewEndpointController(m.serviceRegistry, m.client)
-	return stockEndpointController
-}
-*/
