@@ -69,7 +69,7 @@ var (
 )
 
 const (
-	artifactPort     = 9000 // port of the service that services mesos artifacts (executor); TODO(jdef): make this configurable
+	artifactPort     = 9000             // port of the service that services mesos artifacts (executor); TODO(jdef): make this configurable
 	httpReadTimeout  = 10 * time.Second // k8s api server config: maximum duration before timing out read of the request
 	httpWriteTimeout = 10 * time.Second // k8s api server config: maximum duration before timing out write of the response
 )
@@ -94,7 +94,8 @@ func newEtcd(etcdConfigFile string, etcdServerList util.StringList) (helper tool
 	return master.NewEtcdHelper(client, *storageVersion)
 }
 
-func serveExecutorArtifact(path string) *string {
+// returns (downloadURI, basename(path))
+func serveExecutorArtifact(path string) (*string, string) {
 	serveFile := func(pattern string, filename string) {
 		http.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			http.ServeFile(w, r, filename)
@@ -114,23 +115,27 @@ func serveExecutorArtifact(path string) *string {
 	hostURI := fmt.Sprintf("http://%s:%d/%s", address.String(), artifactPort, base)
 	log.V(2).Infof("Hosting artifact '%s' at '%s'", path, hostURI)
 
-	return &hostURI
+	return &hostURI, base
 }
 
 func prepareExecutorInfo() *mesos.ExecutorInfo {
 	executorUris := []*mesos.CommandInfo_URI{}
-	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: serveExecutorArtifact(*executorPath)})
-	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: serveExecutorArtifact(*proxyPath)})
+	uri, _ := serveExecutorArtifact(*proxyPath)
+	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri})
+	uri, executorCmd := serveExecutorArtifact(*executorPath)
+	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri})
 
-	executorCommand := "./kubernetes-executor -v=2 -hostname_override=0.0.0.0"
+	//TODO(jdef): provide some way (env var?) for user's to customize executor config
+	//TODO(jdef): set -hostname_override and -address to 127.0.0.1 if `address` is 127.0.0.1
+	executorCommand := fmt.Sprintf("./%s -v=2 -hostname_override=0.0.0.0", executorCmd)
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
 		executorCommand = fmt.Sprintf("%s -etcd_servers=%s", executorCommand, etcdServerArguments)
 	} else {
-		executorCommand = fmt.Sprintf("%s -etcd_config=%s", executorCommand, *etcdConfigFile)
-		executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: serveExecutorArtifact(*etcdConfigFile)})
+		uri, basename := serveExecutorArtifact(*etcdConfigFile)
+		executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri})
+		executorCommand = fmt.Sprintf("%s -etcd_config=./%s", executorCommand, basename)
 	}
-
 
 	go http.ListenAndServe(fmt.Sprintf("%s:%d", address.String(), artifactPort), nil)
 	log.V(2).Info("Serving executor artifacts...")
@@ -140,7 +145,7 @@ func prepareExecutorInfo() *mesos.ExecutorInfo {
 		ExecutorId: &mesos.ExecutorID{Value: proto.String("KubeleteExecutorID")},
 		Command: &mesos.CommandInfo{
 			Value: proto.String(executorCommand),
-			Uris: executorUris,
+			Uris:  executorUris,
 		},
 		Name:   proto.String("Kubelet Executor"),
 		Source: proto.String("kubernetes"),
