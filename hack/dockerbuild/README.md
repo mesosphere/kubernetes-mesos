@@ -21,7 +21,7 @@ This example copies the resulting binaries into the host-mounted volume `/tmp/ta
 
 To build and copy the binaries:
 
-    $ docker run -rm -v /tmp/target:/target k8s-mesos-builder
+    $ docker run --rm -v /tmp/target:/target k8s-mesos-builder
     ...
     git clone https://${GOPKG}.git .
     Cloning into '.'...
@@ -43,7 +43,7 @@ To build and copy the binaries:
 
 Alternatively, it can be used to generate binaries from a branch:
 
-    $ docker run -rm -v /tmp/target:/target -e GIT_BRANCH=default_port k8s-mesos-builder
+    $ docker run --rm -v /tmp/target:/target -e GIT_BRANCH=default_port k8s-mesos-builder
 
 Want a quick-and-dirty development environment to start hacking?
 
@@ -52,8 +52,34 @@ Want a quick-and-dirty development environment to start hacking?
 
 Need to build the project, but from a forked git repo?
 
-    $ docker run -rm -v /tmp/target:/target -e GIT_REPO=https://github.com/whoami/kubernetes-mesos k8s-mesos-builder
+    $ docker run --rm -v /tmp/target:/target -e GIT_REPO=https://github.com/whoami/kubernetes-mesos k8s-mesos-builder
 
 To hack in your currently checked out repo mount the root of the github repo to `/snapshot`:
 
     $ docker run -ti -v /tmp/target:/target -v /home/jdef/kubernetes-mesos:/snapshot k8s-mesos-builder bash
+
+## Profiling
+
+Profiling in the cloud with Kubernetes-Mesos is easy!
+First, ssh into your Mesos cluster and generate a set of project binaries with profiling enabled (the `TAGS` variable is important here):
+
+    $ docker run --rm -ti -e GIT_BRANCH=offer_storage -e TAGS=profile \
+        -v $(pwd)/bin:/target jdef/kubernetes-mesos:dockerbuild
+
+Next, [start the framework](https://github.com/mesosphere/kubernetes-mesos/#start-the-framework) and schedule some pods.
+Once the framework and executors are up and running you can start capturing heaps:
+
+    $ ts=$(date +'%Y%m%d%H%M%S')
+    $ curl http://${servicehost}:9000/debug/pprof/heap >framework.heap.$ts
+    $ for slave in 240 242 243; do
+          curl http://10.132.189.${slave}:10250/debug/pprof/heap >${slave}.heap.$ts;
+      done
+
+Once you have a few heaps, you can generate reports.
+Additional packages may be required to support the reporting format you desire.
+
+    $ apt-get install ghostscript graphviz
+    $ go tool pprof --base=./framework.heap.20141117175634 --inuse_objects --pdf \
+        ./bin/kubernetes-executor ./framework.heap.20141120162503 >framework-20141120a.pdf
+
+For more details regarding profiling read the [pprof](http://golang.org/pkg/net/http/pprof/) package documentation.

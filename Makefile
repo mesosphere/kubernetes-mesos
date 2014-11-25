@@ -11,14 +11,24 @@ K8S_CMD		:= \
                    github.com/GoogleCloudPlatform/kubernetes/cmd/kubecfg		\
                    github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
 FRAMEWORK_CMD	:= \
-                   github.com/mesosphere/kubernetes-mesos/kubernetes-mesos		\
+                   github.com/mesosphere/kubernetes-mesos/kubernetes-mesos	\
                    github.com/mesosphere/kubernetes-mesos/kubernetes-executor
+FRAMEWORK_LIB	:= \
+		   github.com/mesosphere/kubernetes-mesos/scheduler	\
+		   github.com/mesosphere/kubernetes-mesos/service	\
+		   github.com/mesosphere/kubernetes-mesos/executor	\
+		   github.com/mesosphere/kubernetes-mesos/queue
 
+# a list of upstream projects for which we test the availability of patches
+PATCH_SCRIPT	:= $(current_dir)/hack/patches/apply.sh
 
 # TODO: make this something more reasonable
 DESTDIR		?= /target
 
-.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format
+# default build tags
+TAGS		?=
+
+.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test patch
 
 ifneq ($(WITH_MESOS_DIR),)
 
@@ -40,7 +50,7 @@ WITH_MESOS_CGO_FLAGS :=  \
 
 endif
 
-all: proxy framework
+all: patch proxy framework
 
 error:
 	echo -E "$@: ${MSG}" >&2
@@ -58,14 +68,13 @@ proxy: require-godep
 require-vendor:
 
 framework: require-godep
-	env $(WITH_MESOS_CGO_FLAGS) go install $${WITH_RACE:+-race} $(FRAMEWORK_CMD)
+	env $(WITH_MESOS_CGO_FLAGS) go install -v -x -tags '$(TAGS)' $${WITH_RACE:+-race} $(FRAMEWORK_CMD)
 
 format: require-gopath
-	go fmt	github.com/mesosphere/kubernetes-mesos/kubernetes-mesos \
-		github.com/mesosphere/kubernetes-mesos/kubernetes-executor \
-		github.com/mesosphere/kubernetes-mesos/scheduler \
-		github.com/mesosphere/kubernetes-mesos/service \
-		github.com/mesosphere/kubernetes-mesos/executor
+	go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
+
+test: require-gopath
+	go test $(FRAMEWORK_LIB)
 
 install: all
 	mkdir -p $(DESTDIR)
@@ -79,6 +88,13 @@ info:
 	@echo CGO_CXXFLAGS="$(CGO_CXXFLAGS)"
 	@echo CGO_LDFLAGS="$(CGO_LDFLAGS)"
 	@echo RACE_FLAGS=$${WITH_RACE:+-race}
+	@echo TAGS=$(TAGS)
 
 bootstrap: require-godep
 	godep restore
+
+patch: $(PATCH_SCRIPT)
+	$(PATCH_SCRIPT)
+
+$(PATCH_SCRIPT):
+	test -x $@ || chmod +x $@

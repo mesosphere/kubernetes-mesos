@@ -187,30 +187,38 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 
 			return
 		}
-		// TODO(jdefelice) remove the task (and pod state) here?
-		k.sendStatusUpdate(taskInfo.GetTaskId(), mesos.TaskState_TASK_LOST, "Task lost: launch failed")
+
+		k.lock.Lock()
+		defer k.lock.Unlock()
+		k.reportLostTask(taskId, "Task lost: launch failed")
 	}()
 }
 
 // Intended to be executed as part of the pod monitoring loop, this fn (ultimately) checks with Docker
-// whether the pod is running and will return true if the pod becomes unkown. If there's still a task
-// record on file, but no pod in Docker, then we'll also send a TASK_LOST event.
+// whether the pod is running. It will only return false if the task is still registered and the pod is
+// registered in Docker. Otherwise it returns true. If there's still a task record on file, but no pod
+// in Docker, then we'll also send a TASK_LOST event.
 func (k *KubernetesExecutor) checkForLostPodTask(taskInfo *mesos.TaskInfo, isKnownPod func() bool) bool {
 	// TODO (jdefelice) don't send false alarms for deleted pods (KILLED tasks)
-	k.lock.RLock()
-	defer k.lock.RUnlock()
+	k.lock.Lock()
+	defer k.lock.Unlock()
 
-	if !isKnownPod() {
-		taskId := taskInfo.GetTaskId().GetValue()
-		if _, ok := k.tasks[taskId]; !ok {
-			log.Infof("Ignoring lost container: task not present")
+	// TODO(jdef) we should really consider k.pods here, along with what docker is reporting, since the kubelet
+	// may constantly attempt to instantiate a pod as long as it's in the pod state that we're handing to it.
+	// otherwise, we're probably reporting a TASK_LOST prematurely. Should probably consult RestartPolicy to
+	// determine appropriate behavior. Should probably also gracefully handle docker daemon restarts.
+	taskId := taskInfo.GetTaskId().GetValue()
+	if _, ok := k.tasks[taskId]; ok {
+		if isKnownPod() {
+			return false
 		} else {
-			// TODO(jdefelice) remove the task (and pod state) here?
-			k.sendStatusUpdate(taskInfo.GetTaskId(), mesos.TaskState_TASK_LOST, "Task lost: container disappeared")
+			log.Warningf("Detected lost pod, reporting lost task %v", taskId)
+			k.reportLostTask(taskId, "Task lost: container disappeared")
 		}
-		return true
+	} else {
+		log.V(2).Infof("Task %v no longer registered, stop monitoring for lost pods", taskId)
 	}
-	return false
+	return true
 }
 
 // KillTask is called when the executor receives a request to kill a task.
@@ -243,8 +251,9 @@ func (k *KubernetesExecutor) killPodForTask(tid, reason string) {
 	// to be deprecated.
 	pid := task.containerManifest.ID
 	if _, found := k.pods[pid]; !found {
-		log.Warningf("Cannot remove Unknown pod %v\n", pid)
+		log.Warningf("Cannot remove Unknown pod %v for task %v", pid, tid)
 	} else {
+		log.V(2).Infof("Deleting pod %v for task %v", pid, tid)
 		delete(k.pods, pid)
 
 		// Send the pod updates to the channel.
@@ -257,6 +266,37 @@ func (k *KubernetesExecutor) killPodForTask(tid, reason string) {
 	// TODO(yifan): Check the result of the kill event.
 
 	k.sendStatusUpdate(task.mesosTaskInfo.GetTaskId(), mesos.TaskState_TASK_KILLED, reason)
+}
+
+// Reports a lost task to the slave and updates internal task and pod tracking state.
+// Assumes that the caller is locking around pod and task state.
+func (k *KubernetesExecutor) reportLostTask(tid, reason string) {
+	task, ok := k.tasks[tid]
+	if !ok {
+		log.Infof("Failed to report lost task, unknown task %v\n", tid)
+		return
+	}
+	delete(k.tasks, tid)
+
+	// TODO(nnielsen): Verify this assumption. Manifest ID's has been marked
+	// to be deprecated.
+	pid := task.containerManifest.ID
+	if _, found := k.pods[pid]; !found {
+		log.Warningf("Cannot remove Unknown pod %v for lost task %v", pid, tid)
+	} else {
+		log.V(2).Infof("Deleting pod %v for lost task %v", pid, tid)
+		delete(k.pods, pid)
+
+		// Send the pod updates to the channel.
+		update := kubelet.PodUpdate{Op: kubelet.SET}
+		for _, p := range k.pods {
+			update.Pods = append(update.Pods, *p)
+		}
+		k.updateChan <- update
+	}
+	// TODO(yifan): Check the result of the kill event.
+
+	k.sendStatusUpdate(task.mesosTaskInfo.GetTaskId(), mesos.TaskState_TASK_LOST, reason)
 }
 
 // FrameworkMessage is called when the framework sends some message to the executor

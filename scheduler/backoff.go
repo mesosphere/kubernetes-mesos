@@ -66,8 +66,16 @@ func (p *podBackoff) getBackoff(podID string) time.Duration {
 	return duration
 }
 
-func (p *podBackoff) wait(podID string) {
-	time.Sleep(p.getBackoff(podID))
+// wait until some backoff period elapses, or else we receive a signal on the
+// done channel - whichever comes first. it is not necessary to receive data
+// over the channel, a closed channel will be the signal. the channel may be
+// nil, meaning that the entire backoff period must elapse before returning.
+func (p *podBackoff) wait(podID string, done <-chan empty) {
+	select {
+	case <-time.After(p.getBackoff(podID)):
+	case <-done:
+		log.V(3).Infof("Leaving backoff early for pod %s", podID)
+	}
 }
 
 func (p *podBackoff) gc() {

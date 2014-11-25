@@ -1,0 +1,14 @@
+diff --git a/pkg/kubelet/dockertools/docker.go b/pkg/kubelet/dockertools/docker.go
+index b42e2ce..b0f7808 100644
+--- a/pkg/kubelet/dockertools/docker.go
++++ b/pkg/kubelet/dockertools/docker.go
+@@ -215,6 +215,9 @@ func GetDockerPodInfo(client DockerInterface, podFullName, uuid string) (api.Pod
+ 	}
+ 
+ 	for _, value := range containers {
++		if len(value.Names) == 0 {
++			continue
++		}
+ 		dockerManifestID, dockerUUID, dockerContainerName, _ := ParseDockerName(value.Names[0])
+ 		if dockerManifestID != podFullName {
+ 			continue

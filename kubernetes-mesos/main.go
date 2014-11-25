@@ -47,6 +47,7 @@ import (
 	goetcd "github.com/coreos/go-etcd/etcd"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
+	_ "github.com/mesosphere/kubernetes-mesos/profile"
 	kmscheduler "github.com/mesosphere/kubernetes-mesos/scheduler"
 	kmendpoint "github.com/mesosphere/kubernetes-mesos/service"
 )
@@ -175,6 +176,8 @@ func main() {
 
 	driver.Init()
 	defer driver.Destroy()
+
+	mesosPodScheduler.Init()
 	go driver.Start()
 
 	log.V(2).Info("Serving executor artifacts...")
