@@ -219,19 +219,6 @@ func (k *KubernetesExecutor) checkForLostPodTask(taskInfo *mesos.TaskInfo, isKno
 		log.V(2).Infof("Task %v no longer registered, stop monitoring for lost pods", taskId)
 	}
 	return true
-	/*
-		if !isKnownPod() {
-			taskId := taskInfo.GetTaskId().GetValue()
-			if _, ok := k.tasks[taskId]; !ok {
-				log.Infof("Ignoring lost container: task not present")
-			} else {
-				// TODO(jdefelice) remove the task (and pod state) here?
-				k.sendStatusUpdate(taskInfo.GetTaskId(), mesos.TaskState_TASK_LOST, "Task lost: container disappeared")
-			}
-			return true
-		}
-		return false
-	*/
 }
 
 // KillTask is called when the executor receives a request to kill a task.
