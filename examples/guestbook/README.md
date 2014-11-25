@@ -135,7 +135,7 @@ Create a file named `redis-slave-controller.json` that contains:
            "id": "redisSlaveController",
            "containers": [{
              "name": "slave",
-             "image": "brendanburns/redis-slave",
+             "image": "jdef/redis-slave",
              "ports": [{"containerPort": 6379, "hostPort": 31020}]
            }]
          }
@@ -156,7 +156,7 @@ $ curl ${KUBERNETES_MASTER}/api/v1beta1/replicationControllers -XPOST -d@example
 ```
 Name                   Image(s)                   Selector            Replicas
 ----------             ----------                 ----------          ----------
-redisSlaveController   brendanburns/redis-slave   name=redisslave     2
+redisSlaveController   jdef/redis-slave           name=redisslave     2
 ```
 
 The redis slave configures itself by looking for the Kubernetes service environment variables in the container environment.
@@ -170,11 +170,11 @@ Once that's up you can list the pods in the cluster, to verify that the master a
 
 ```shell
 $ bin/kubecfg list pods
-ID                                     Image(s)                  Host                            Labels                                                       Status
-----------                             ----------                ----------                      ----------                                                   ----------
-redis-master-2                         dockerfile/redis          10.132.189.243/10.132.189.243   name=redis-master                                            Running
-439c1c7c-6694-11e4-bd1f-04012f416701   brendanburns/redis-slave  10.132.189.242/10.132.189.242   name=redisslave,replicationController=redisSlaveController   Running
-439b7b2f-6694-11e4-bd1f-04012f416701   brendanburns/redis-slave  10.132.189.243/10.132.189.243   name=redisslave,replicationController=redisSlaveController   Running
+ID                                     Image(s)            Host                            Labels                                                       Status
+----------                             ----------          ----------                      ----------                                                   ----------
+redis-master-2                         dockerfile/redis    10.132.189.243/10.132.189.243   name=redis-master                                            Running
+439c1c7c-6694-11e4-bd1f-04012f416701   jdef/redis-slave    10.132.189.242/10.132.189.242   name=redisslave,replicationController=redisSlaveController   Running
+439b7b2f-6694-11e4-bd1f-04012f416701   jdef/redis-slave    10.132.189.243/10.132.189.243   name=redisslave,replicationController=redisSlaveController   Running
 ```
 
 You will see a single redis master pod and two redis slave pods.
@@ -269,8 +269,8 @@ $ bin/kubecfg list pods
 ID                                     Image(s)                 Host                            Labels                                                       Status
 ----------                             ----------               ----------                      ----------                                                   ----------
 redis-master-2                         dockerfile/redis         10.132.189.243/10.132.189.243   name=redis-master                                            Running
-439c1c7c-6694-11e4-bd1f-04012f416701   brendanburns/redis-slave 10.132.189.242/10.132.189.242   name=redisslave,replicationController=redisSlaveController   Running
-439b7b2f-6694-11e4-bd1f-04012f416701   brendanburns/redis-slave 10.132.189.243/10.132.189.243   name=redisslave,replicationController=redisSlaveController   Running
+439c1c7c-6694-11e4-bd1f-04012f416701   jdef/redis-slave         10.132.189.242/10.132.189.242   name=redisslave,replicationController=redisSlaveController   Running
+439b7b2f-6694-11e4-bd1f-04012f416701   jdef/redis-slave         10.132.189.243/10.132.189.243   name=redisslave,replicationController=redisSlaveController   Running
 901eb1c1-6695-11e4-bd1f-04012f416701   brendanburns/php-redis   10.132.189.243/10.132.189.243   name=frontend,replicationController=frontendController       Running
 901edf34-6695-11e4-bd1f-04012f416701   brendanburns/php-redis   10.132.189.240/10.132.189.240   name=frontend,replicationController=frontendController       Running
 901e29a7-6695-11e4-bd1f-04012f416701   brendanburns/php-redis   10.132.189.242/10.132.189.242   name=frontend,replicationController=frontendController       Running
