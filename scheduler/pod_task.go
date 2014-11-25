@@ -118,6 +118,11 @@ func (t *PodTask) Ports() []uint64 {
 }
 
 func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
+
+	if offer == nil {
+		return false
+	}
+
 	var cpus float64 = 0
 	var mem float64 = 0
 
@@ -167,6 +172,12 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 }
 
 func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
+	if pod == nil {
+		return nil, fmt.Errorf("Illegal argument: pod was nil")
+	}
+	if executor == nil {
+		return nil, fmt.Errorf("Illegal argument: executor was nil")
+	}
 	taskId := uuid.NewUUID().String()
 	task := &PodTask{
 		ID:       taskId, // pod.JSONBase.ID,
