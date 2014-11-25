@@ -45,6 +45,7 @@ import (
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	kmmaster "github.com/mesosphere/kubernetes-mesos/master"
+	_ "github.com/mesosphere/kubernetes-mesos/profile"
 	kmscheduler "github.com/mesosphere/kubernetes-mesos/scheduler"
 )
 

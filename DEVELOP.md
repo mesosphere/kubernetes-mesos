@@ -3,6 +3,8 @@ Development of Kubernetes-Mesos
 
 * [Prerequisites](#prerequisites)
 * [Build](README.md#build) the framework
+* [Testing](#testing)
+* [Profiling](#profiling)
 
 ### Prerequisites
 To get started with development you'll need to install some prerequisites:
@@ -66,5 +68,37 @@ $ mkdir -pv /opt && (export GOPATH=/opt; cd /opt &&
     ln -sv /opt/bin/godep /usr/local/bin/godep)
 ```
 
+### Testing
+
+There is a Makefile target called `test` that will execute unit tests for packages that have them.
+```shell
+$ make test
+```
+
+### Profiling
+
+The project Makefile supports the inclusion of arbitrary Go build flags.
+To generate a build with profiling enabled, include `TAGS=profile`.
+If you're not using the Makefile then you must supply `-tags 'profile'` as part of your `go build` command.
+If you're using the dockerbuilder then read the [instructions][3] for profiling in the accompanying documentation.
+
+```shell
+$ make TAGS=profile
+```
+
+Profiling, when enabled, is supported for both the `kubernetes-mesos` (framework) and `kubernetes-executor` binaries:
+```shell
+$ ts=$(date +'%Y%m%d%H%M%S')
+$ curl http://${servicehost}:9000/debug/pprof/heap >framework.heap.$ts
+$ curl http://10.132.189.${slave}:10250/debug/pprof/heap >${slave}.heap.$ts
+```
+
+If you have captured two or more heaps it's trivial to use the Go pprof tooling to generate reports:
+```shell
+$ go tool pprof --base=./${slave}.heap.20141117175634 --inuse_objects --pdf \
+  ./bin/kubernetes-executor ./${slave}.heap.20141120162503 >${slave}-20141120a.pdf
+```
+
 [1]: https://github.com/mesosphere/kubernetes-mesos#build
 [2]: https://github.com/tools/godep
+[3]: hack/dockerbuild/README.md#profiling

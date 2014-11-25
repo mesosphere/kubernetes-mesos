@@ -1,0 +1,34 @@
+diff --git a/pkg/kubelet/dockertools/docker.go b/pkg/kubelet/dockertools/docker.go
+index 2f1bb12..46464ce 100644
+--- a/pkg/kubelet/dockertools/docker.go
++++ b/pkg/kubelet/dockertools/docker.go
+@@ -208,6 +208,9 @@ func GetKubeletDockerContainers(client DockerInterface, allContainers bool) (Doc
+ 	}
+ 	for i := range containers {
+ 		container := &containers[i]
++		if len(container.Names) == 0 {
++			continue
++		}
+ 		// Skip containers that we didn't create to allow users to manually
+ 		// spin up their own containers if they want.
+ 		// TODO(dchen1107): Remove the old separator "--" by end of Oct
+@@ -230,6 +233,9 @@ func GetRecentDockerContainersWithNameAndUUID(client DockerInterface, podFullNam
+ 		return nil, err
+ 	}
+ 	for _, dockerContainer := range containers {
++		if len(dockerContainer.Names) == 0 {
++			continue
++		}
+ 		dockerPodName, dockerUUID, dockerContainerName, _ := ParseDockerName(dockerContainer.Names[0])
+ 		if dockerPodName != podFullName {
+ 			continue
+@@ -340,6 +346,9 @@ func GetDockerPodInfo(client DockerInterface, manifest api.ContainerManifest, po
+ 	}
+ 
+ 	for _, value := range containers {
++		if len(value.Names) == 0 {
++			continue
++		}
+ 		dockerManifestID, dockerUUID, dockerContainerName, _ := ParseDockerName(value.Names[0])
+ 		if dockerManifestID != podFullName {
+ 			continue
