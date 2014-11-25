@@ -97,4 +97,4 @@ patch: $(PATCH_SCRIPT)
 	$(PATCH_SCRIPT)
 
 $(PATCH_SCRIPT):
-	chmod +x $@
+	test -x $@ || chmod +x $@
