@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	offerListenerMaxAge      = 5 // max number of times we'll attempt to fit an offer to a listener before requireing them to re-register themselves
+	offerListenerMaxAge      = 5 // max number of times we'll attempt to fit an offer to a listener before requiring them to re-register themselves
 	deferredDeclineTtlFactor = 2 // this factor, multiplied by the offer ttl, determines how long to wait before attempting to decline previously claimed offers that were subsequently deleted, then released. see offerStorage.Delete
 )
 
@@ -167,7 +167,7 @@ func (s *offerStorage) Delete(offerId string) {
 				go func() {
 					// TODO(jdef): not sure what a good value is here. the goal is to provide a
 					// launchTasks (driver) operation enough time to complete so that we don't end
-					// up delining an offer that we're actually attempting to use.
+					// up declining an offer that we're actually attempting to use.
 					time.Sleep(deferredDeclineTtlFactor * s.ttl)
 
 					// at this point the offer is in one of five states:
@@ -206,7 +206,7 @@ func (s *offerStorage) Invalidate(offerId string) {
 		}
 		offer.Acquire() // attempt to block others from using it
 		s.expireOffer(offer)
-		// don't reject it from the controller, we already know that it's an invalid offer
+		// don't decline, we already know that it's an invalid offer
 	}
 }
 
@@ -214,7 +214,7 @@ func (s *offerStorage) invalidateOne(offerId string) {
 	if offer, ok := s.Get(offerId); ok {
 		offer.Acquire() // attempt to block others from using it
 		s.expireOffer(offer)
-		// don't reject it from the controller, we already know that it's an invalid offer
+		// don't decline, we already know that it's an invalid offer
 	}
 }
 
