@@ -36,7 +36,7 @@ For a binary-only install of the Kubernetes-Mesos framework you can use the Dock
 ```shell
 # chcon needed for systems protected by SELinux
 $ mkdir bin && chcon -Rt svirt_sandbox_file_t bin   
-$ docker run -rm -v $(pwd)/bin:/target jdef/kubernetes-mesos:dockerbuild
+$ docker run -rm -v $(pwd)/bin:/target jdef/kubernetes-mesos:build-latest
 ```
 
 Instructions to build and install from source are as follows:
