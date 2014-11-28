@@ -42,23 +42,22 @@ import (
 // Server is a http.Handler which exposes kubelet functionality over HTTP.
 type Server struct {
 	host      HostInterface
-	updates   chan<- interface{}
 	mux       *http.ServeMux
 	namespace string
 }
 
 // ListenAndServeKubeletServer initializes a server to respond to HTTP network requests on the Kubelet.
-func ListenAndServeKubeletServer(host HostInterface, updates chan<- interface{}, address string, port uint, namespace string) {
+func ListenAndServeKubeletServer(host HostInterface, address net.IP, port uint, enableDebuggingHandlers bool, namespace string) error {
 	glog.Infof("Starting to listen on %s:%d", address, port)
-	handler := NewServer(host, updates, namespace)
+	handler := NewServer(host, enableDebuggingHandlers, namespace)
 	s := &http.Server{
-		Addr:           net.JoinHostPort(address, strconv.FormatUint(uint64(port), 10)),
+		Addr:           net.JoinHostPort(address.String(), strconv.FormatUint(uint64(port), 10)),
 		Handler:        &handler,
 		ReadTimeout:    10 * time.Second,
 		WriteTimeout:   10 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
-	s.ListenAndServe()
+	return s.ListenAndServe()
 }
 
 // HostInterface contains all the kubelet methods required by the server.
@@ -68,18 +67,21 @@ type HostInterface interface {
 	GetRootInfo(req *info.ContainerInfoRequest) (*info.ContainerInfo, error)
 	GetMachineInfo() (*info.MachineInfo, error)
 	GetPodInfo(name, uuid string) (api.PodInfo, error)
+	GetKubeletContainerLogs(podFullName, containerName, tail string, follow bool, stdout, stderr io.Writer) error
 	ServeLogs(w http.ResponseWriter, req *http.Request)
 }
 
 // NewServer initializes and configures a kubelet.Server object to handle HTTP requests.
-func NewServer(host HostInterface, updates chan<- interface{}, ns string) Server {
+func NewServer(host HostInterface, enableDebuggingHandlers bool, ns string) Server {
 	server := Server{
 		host:      host,
-		updates:   updates,
 		mux:       http.NewServeMux(),
 		namespace: ns,
 	}
 	server.InstallDefaultHandlers()
+	if enableDebuggingHandlers {
+		server.InstallDebuggingHandlers()
+	}
 	return server
 }
 
@@ -89,13 +91,65 @@ func (s *Server) InstallDefaultHandlers() {
 	profile.InstallHandler(s.mux)
 	s.mux.HandleFunc("/podInfo", s.handlePodInfo)
 	s.mux.HandleFunc("/stats/", s.handleStats)
-	s.mux.HandleFunc("/logs/", s.handleLogs)
 	s.mux.HandleFunc("/spec/", s.handleSpec)
+}
+
+// InstallDeguggingHandlers registers the HTTP request patterns that serve logs or run commands/containers
+func (s *Server) InstallDebuggingHandlers() {
+	s.mux.HandleFunc("/logs/", s.handleLogs)
+	s.mux.HandleFunc("/containerLogs/", s.handleContainerLogs)
 }
 
 // error serializes an error object into an HTTP response.
 func (s *Server) error(w http.ResponseWriter, err error) {
 	http.Error(w, fmt.Sprintf("Internal Error: %v", err), http.StatusInternalServerError)
+}
+
+// handleContainerLogs handles containerLogs request against the Kubelet
+func (s *Server) handleContainerLogs(w http.ResponseWriter, req *http.Request) {
+	defer req.Body.Close()
+	u, err := url.ParseRequestURI(req.RequestURI)
+	if err != nil {
+		s.error(w, err)
+		return
+	}
+	parts := strings.Split(u.Path, "/")
+
+	var podID, containerName string
+	if len(parts) == 4 {
+		podID = parts[2]
+		containerName = parts[3]
+	} else {
+		http.Error(w, "Unexpected path for command running", http.StatusBadRequest)
+		return
+	}
+
+	if len(podID) == 0 {
+		http.Error(w, `{"message": "Missing podID."}`, http.StatusBadRequest)
+		return
+	}
+	if len(containerName) == 0 {
+		http.Error(w, `{"message": "Missing container name."}`, http.StatusBadRequest)
+		return
+	}
+
+	uriValues := u.Query()
+	follow, _ := strconv.ParseBool(uriValues.Get("follow"))
+	tail := uriValues.Get("tail")
+
+	podFullName := kubelet.GetPodFullName(&kubelet.Pod{Name: podID, Namespace: s.namespace})
+
+	fw := FlushWriter{writer: w}
+	if flusher, ok := w.(http.Flusher); ok {
+		fw.flusher = flusher
+	}
+	w.Header().Set("Transfer-Encoding", "chunked")
+	w.WriteHeader(http.StatusOK)
+	err = s.host.GetKubeletContainerLogs(podFullName, containerName, tail, follow, &fw, &fw)
+	if err != nil {
+		s.error(w, err)
+		return
+	}
 }
 
 // handlePodInfo handles podInfo requests against the Kubelet.
@@ -194,9 +248,11 @@ func (s *Server) serveStats(w http.ResponseWriter, req *http.Request) {
 		errors.New("pod level status currently unimplemented")
 	case 3:
 		// Backward compatibility without uuid information
-		stats, err = s.host.GetContainerInfo(components[1], "", components[2], &query)
+		podFullName := kubelet.GetPodFullName(&kubelet.Pod{Name: components[1], Namespace: s.namespace})
+		stats, err = s.host.GetContainerInfo(podFullName, "", components[2], &query)
 	case 4:
-		stats, err = s.host.GetContainerInfo(components[1], components[2], components[2], &query)
+		podFullName := kubelet.GetPodFullName(&kubelet.Pod{Name: components[1], Namespace: s.namespace})
+		stats, err = s.host.GetContainerInfo(podFullName, components[2], components[2], &query)
 	default:
 		http.Error(w, "unknown resource.", http.StatusNotFound)
 		return
@@ -218,5 +274,25 @@ func (s *Server) serveStats(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Header().Add("Content-type", "application/json")
 	w.Write(data)
+	return
+}
+
+// HACK(jdef): FlushWriter taken from k8s /pkg/kubelet/handlers.go
+
+// FlushWriter provides wrapper for responseWriter with HTTP streaming capabilities
+type FlushWriter struct {
+	flusher http.Flusher
+	writer  io.Writer
+}
+
+// Write is a FlushWriter implementation of the io.Writer that sends any buffered data to the client.
+func (fw *FlushWriter) Write(p []byte) (n int, err error) {
+	n, err = fw.writer.Write(p)
+	if err != nil {
+		return
+	}
+	if fw.flusher != nil {
+		fw.flusher.Flush()
+	}
 	return
 }
