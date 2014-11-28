@@ -6,18 +6,25 @@ mkfile_path	:= $(abspath $(lastword $(MAKEFILE_LIST)))
 current_dir	:= $(patsubst %/,%,$(dir $(mkfile_path)))
 fail		:= ${MAKE} --no-print-directory --quiet -f $(current_dir)/Makefile error
 
+KUBE_GO_PACKAGE	?= github.com/GoogleCloudPlatform/kubernetes
+
 K8S_CMD		:= \
-                   github.com/GoogleCloudPlatform/kubernetes/cmd/controller-manager	\
-                   github.com/GoogleCloudPlatform/kubernetes/cmd/kubecfg		\
-                   github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
+                   ${KUBE_GO_PACKAGE}/cmd/kubecfg		\
+                   ${KUBE_GO_PACKAGE}/cmd/proxy
 FRAMEWORK_CMD	:= \
-                   github.com/mesosphere/kubernetes-mesos/kubernetes-mesos	\
+                   github.com/mesosphere/kubernetes-mesos/controller-manager		\
+                   github.com/mesosphere/kubernetes-mesos/kubernetes-mesos		\
                    github.com/mesosphere/kubernetes-mesos/kubernetes-executor
 FRAMEWORK_LIB	:= \
 		   github.com/mesosphere/kubernetes-mesos/scheduler	\
 		   github.com/mesosphere/kubernetes-mesos/service	\
+		   github.com/mesosphere/kubernetes-mesos/master	\
 		   github.com/mesosphere/kubernetes-mesos/executor	\
 		   github.com/mesosphere/kubernetes-mesos/queue
+
+KUBE_GIT_VERSION_FILE := $(current_dir)/.kube-version
+
+SHELL		:= /bin/bash
 
 # a list of upstream projects for which we test the availability of patches
 PATCH_SCRIPT	:= $(current_dir)/hack/patches/apply.sh
@@ -28,7 +35,7 @@ DESTDIR		?= /target
 # default build tags
 TAGS		?=
 
-.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test patch
+.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test patch version
 
 ifneq ($(WITH_MESOS_DIR),)
 
@@ -50,6 +57,9 @@ WITH_MESOS_CGO_FLAGS :=  \
 
 endif
 
+export SHELL
+export KUBE_GO_PACKAGE
+
 all: patch proxy framework
 
 error:
@@ -62,8 +72,8 @@ require-godep: require-gopath
 require-gopath:
 	@test -n "$(GOPATH)" || ${fail} MSG="GOPATH undefined, aborting"
 
-proxy: require-godep
-	go install $(K8S_CMD)
+proxy: require-godep $(KUBE_GIT_VERSION_FILE)
+	go install -ldflags "$$(cat $(KUBE_GIT_VERSION_FILE))" $(K8S_CMD)
 
 require-vendor:
 
@@ -95,6 +105,13 @@ bootstrap: require-godep
 
 patch: $(PATCH_SCRIPT)
 	$(PATCH_SCRIPT)
+
+version: $(KUBE_GIT_VERSION_FILE)
+
+$(KUBE_GIT_VERSION_FILE): require-gopath
+	@(pkg="$(GOPATH)"; cd "$${pkg%%:*}/src/$(KUBE_GO_PACKAGE)" && \
+	  source $(current_dir)/hack/kube-version.sh && \
+	  KUBE_GO_PACKAGE=$(KUBE_GO_PACKAGE) kube::version::ldflags) >$@
 
 $(PATCH_SCRIPT):
 	test -x $@ || chmod +x $@
