@@ -1,1 +1,8 @@
-docker build -t k8s-mesos-builder .
+docker build -t kubernetes-mesos:build-base .
+docker tag kubernetes-mesos:build-base jdef/kubernetes-mesos:build-base
+
+for i in mesos-0.20.1-compat mesos-0.21.0-compat; do
+  test -d $i && docker build -t kubernetes-mesos:build-$i $i && docker tag kubernetes-mesos:build-$i kubernetes-mesos:build-latest
+  docker tag kubernetes-mesos:build-$i jdef/kubernetes-mesos:build-$i
+  docker tag kubernetes-mesos:build-$i jdef/kubernetes-mesos:build-latest
+done

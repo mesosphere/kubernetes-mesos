@@ -2,13 +2,9 @@ FROM debian:wheezy
 MAINTAINER James DeFelice <james.defelice@gmail.com>
 
 ENV DEBIAN_FRONTEND noninteractive
-ENV DEB_VERSION_MESOS 0.20.1-1.0.debian75
 
-RUN apt-key adv --keyserver keyserver.ubuntu.com --recv E56151BF && \
-    echo "deb http://repos.mesosphere.io/debian wheezy main" | \
-          tee /etc/apt/sources.list.d/mesosphere.list && \
-    apt-get -y update && \
-    apt-get -y install mesos=$DEB_VERSION_MESOS g++ make curl mercurial git
+RUN apt-get -y update && \
+    apt-get -y install g++ make curl mercurial git
 
 RUN curl -L https://protobuf.googlecode.com/files/protobuf-2.5.0.tar.gz | tar xz && cd protobuf-2.5.0/ && ./configure --prefix=/usr && make && make install
 
