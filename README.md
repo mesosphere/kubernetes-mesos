@@ -53,16 +53,21 @@ Once the [prerequisites][7] have been installed you can build the project:
 $ cd $GOPATH # If you don't have one, create directory and set GOPATH accordingly.
 
 $ mkdir -p src/github.com/mesosphere/kubernetes-mesos
-$ git clone git@github.com:mesosphere/kubernetes-mesos.git src/github.com/mesosphere/kubernetes-mesos
+$ git clone https://github.com/mesosphere/kubernetes-mesos.git src/github.com/mesosphere/kubernetes-mesos
 $ cd src/github.com/mesosphere/kubernetes-mesos && godep restore
-$ go install github.com/GoogleCloudPlatform/kubernetes/cmd/{proxy,controller-manager}
-$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
+$ go install github.com/GoogleCloudPlatform/kubernetes/cmd/{proxy,kubecfg}
+$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor,controller-manager}
 ```
 
 ### Start the framework
 
+The examples that follow assume that you are running the mesos-master, etcd, and the kubernetes-mesos framework on the same host, exposed on an IP address referred to hereafter as `${servicehost}`.
+If you are not running in a production setting then a single etcd instance will suffice.
 To run etcd, see [github.com/coreos/etcd][6], or run it via docker:
+
 ```shell
+$ export servicehost=...  # IP address of the framework host
+
 $ sudo docker run -d --net=host coreos/etcd go-wrapper run \
    -advertise-client-urls=http://${servicehost}:4001 \
    -listen-client-urls=http://${servicehost}:4001 \

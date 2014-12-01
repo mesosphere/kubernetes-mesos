@@ -12,6 +12,8 @@ To get started with development you'll need to install some prerequisites:
 * Install protobuf and Go
 * Install [godep][2]
 
+The steps for installing prerequisites assume that you are logged in as `root`, otherwise you will need to insert `sudo` where appropriate.
+
 #### Debian
 
 ```shell
