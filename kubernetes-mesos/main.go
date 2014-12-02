@@ -225,7 +225,21 @@ func main() {
 
 	driver.Init()
 	defer driver.Destroy()
-	go driver.Start()
+
+	go func() {
+		if st, err := driver.Start(); err == nil {
+			if st != mesos.Status_DRIVER_RUNNING {
+				log.Fatalf("Scheduler driver failed to start, has status: %v", st)
+			}
+			if st, err = driver.Join(); err != nil {
+				log.Fatal(err)
+			} else if st != mesos.Status_DRIVER_RUNNING {
+				log.Fatalf("Scheduler driver failed to join, has status: %v", st)
+			}
+		} else {
+			log.Fatalf("Failed to start driver: %v", err)
+		}
+	}()
 
 	//TODO(jdef): upstream, this runs as a separate process... but not in this distro yet
 	plugin.New(mesosPodScheduler.NewPluginConfig()).Run()
