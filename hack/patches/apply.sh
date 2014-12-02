@@ -19,6 +19,7 @@ echo Patch directory $home
 declare -A pmap
 pmap=(
   [k8s]=github.com/GoogleCloudPlatform/kubernetes
+  [mgo]=github.com/mesos/mesos-go
 )
 
 # TODO(jdef) at some point we should be able to apply patches with

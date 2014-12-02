@@ -1,0 +1,91 @@
+diff --git a/mesos/c-api.hpp b/mesos/c-api.hpp
+index 5211739..5ce91cb 100644
+--- a/mesos/c-api.hpp
++++ b/mesos/c-api.hpp
+@@ -132,7 +132,8 @@ SchedulerPtrPair scheduler_init(
+     SchedulerCallbacks* callbacks,
+     void* payload,
+     ProtobufObj* framework,
+-    const char* master);
++    const char* master,
++    ProtobufObj* credobj);
+ 
+ void scheduler_destroy(void* driver, void* scheduler);
+ 
+diff --git a/mesos/scheduler.go b/mesos/scheduler.go
+index a688aa6..47c1660 100644
+--- a/mesos/scheduler.go
++++ b/mesos/scheduler.go
+@@ -110,6 +110,7 @@ type MesosSchedulerDriver struct {
+ 	callbacks C.SchedulerCallbacks
+ 	driver    unsafe.Pointer
+ 	scheduler unsafe.Pointer
++	Cred      *Credential
+ }
+ 
+ func serialize(pb proto.Message) (C.ProtobufObj, error) {
+@@ -150,13 +151,23 @@ func (sdriver *MesosSchedulerDriver) Init() error {
+ 		return err
+ 	}
+ 
++	var credObj *C.ProtobufObj
++	if sdriver.Cred != nil {
++		if c, err := serialize(sdriver.Cred); err != nil {
++			return err
++		} else {
++			credObj = &c
++		}
++	}
++
+ 	sdriver.callbacks = C.getSchedulerCallbacks()
+ 
+ 	pair := C.scheduler_init(
+ 		&sdriver.callbacks,
+ 		unsafe.Pointer(sdriver),
+ 		&dataObj,
+-		cmsg)
++		cmsg,
++		credObj)
+ 
+ 	sdriver.driver = pair.driver
+ 	sdriver.scheduler = pair.scheduler
+diff --git a/mesos/scheduler_driver.cpp b/mesos/scheduler_driver.cpp
+index a2cf3d8..ab08b50 100644
+--- a/mesos/scheduler_driver.cpp
++++ b/mesos/scheduler_driver.cpp
+@@ -64,7 +64,8 @@ SchedulerPtrPair scheduler_init(
+     SchedulerCallbacks* callbacks,
+     void* payload,
+     ProtobufObj* framework,
+-    const char* master)
++    const char* master,
++    ProtobufObj* credobj)
+ {
+   TRACE("scheduler_init()\n");
+   assert(master != NULL);
+@@ -81,10 +82,21 @@ SchedulerPtrPair scheduler_init(
+     return pair;
+   }
+ 
+-  MesosSchedulerDriver* driver = new MesosSchedulerDriver(
+-     scheduler,
+-     scheduler->info,
+-     std::string(master));
++  Credential cred;
++  if(credobj && !utils::deserialize<Credential>(cred, credobj)) {
++    return pair;
++  }
++
++  MesosSchedulerDriver* driver = credobj ? 
++     new MesosSchedulerDriver(
++       scheduler,
++       scheduler->info,
++       std::string(master),
++       cred) : 
++     new MesosSchedulerDriver(
++       scheduler,
++       scheduler->info,
++       std::string(master));
+ 
+   if (callbacks != NULL) {
+     scheduler->callbacks = *callbacks;

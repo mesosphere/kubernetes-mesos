@@ -201,15 +201,15 @@ func main() {
 	// Create mesos scheduler driver.
 	executor := prepareExecutorInfo()
 	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc, client, helper)
-	info, _, err := buildFrameworkInfo()
+	info, cred, err := buildFrameworkInfo()
 	if err != nil {
 		log.Fatalf("Misconfigured mesos framework: %v", err)
 	}
-	//TODO(jdef): use mesos.Credential in driver configuration (once supported)
 	driver := &mesos.MesosSchedulerDriver{
 		Master:    *mesosMaster,
 		Framework: *info,
 		Scheduler: mesosPodScheduler,
+		Cred:      cred,
 	}
 	m := kmmaster.New(&kmmaster.Config{
 		Client:             client,
