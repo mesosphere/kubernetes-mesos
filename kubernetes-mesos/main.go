@@ -295,6 +295,7 @@ func buildFrameworkInfo() (info *mesos.FrameworkInfo, cred *mesos.Credential, er
 	if err != nil {
 		return nil, nil, err
 	}
+	log.V(2).Infof("Framework configured with mesos user %v", username)
 	info = &mesos.FrameworkInfo{
 		Name: proto.String("KubernetesScheduler"),
 		User: proto.String(username),
