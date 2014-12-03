@@ -13,31 +13,51 @@ index 5211739..5ce91cb 100644
  void scheduler_destroy(void* driver, void* scheduler);
  
 diff --git a/mesos/scheduler.go b/mesos/scheduler.go
-index a688aa6..3bdb942 100644
+index a688aa6..3d0cff7 100644
 --- a/mesos/scheduler.go
 +++ b/mesos/scheduler.go
-@@ -86,10 +86,10 @@ type Scheduler interface {
+@@ -49,9 +49,7 @@ import "C"
+ import (
+ 	"encoding/binary"
+ 	"errors"
+-	//"log"
+ 	"reflect"
+-	"runtime"
+ 	"unsafe"
+ 
+ 	"code.google.com/p/goprotobuf/proto"
+@@ -86,11 +84,11 @@ type Scheduler interface {
  // ScheduerDriver defines the interfaces that needed to be implemented.
  type SchedulerDriver interface {
  	Init() error
 -	Start() error
-+	Start() (Status,error)
- 	Stop(bool) error
- 	Abort() error
+-	Stop(bool) error
+-	Abort() error
 -	Join() error
+-	Run() error
++	Start() (Status,error)
++	Stop(bool) (Status,error)
++	Abort() (Status,error)
 +	Join() (Status,error)
- 	Run() error
++	Run() (Status,error)
  	RequestResources([]*Request) error
  	LaunchTasks(*OfferID, []*TaskInfo, *Filters) error
-@@ -110,6 +110,7 @@ type MesosSchedulerDriver struct {
+ 	KillTask(*TaskID) error
+@@ -110,8 +108,13 @@ type MesosSchedulerDriver struct {
  	callbacks C.SchedulerCallbacks
  	driver    unsafe.Pointer
  	scheduler unsafe.Pointer
 +	Cred      *Credential
  }
  
++var (
++	ErrSchedulerNotInitialized = errors.New("Scheduler driver not initialized")
++)
++
  func serialize(pb proto.Message) (C.ProtobufObj, error) {
-@@ -150,13 +151,23 @@ func (sdriver *MesosSchedulerDriver) Init() error {
+ 	var dataObj C.ProtobufObj
+ 	data, err := proto.Marshal(pb)
+@@ -150,13 +153,23 @@ func (sdriver *MesosSchedulerDriver) Init() error {
  		return err
  	}
  
@@ -62,42 +82,151 @@ index a688aa6..3bdb942 100644
  
  	sdriver.driver = pair.driver
  	sdriver.scheduler = pair.scheduler
-@@ -164,13 +175,13 @@ func (sdriver *MesosSchedulerDriver) Init() error {
+@@ -164,54 +177,54 @@ func (sdriver *MesosSchedulerDriver) Init() error {
  	return nil
  }
  
 -func (sdriver *MesosSchedulerDriver) Start() error {
-+func (sdriver *MesosSchedulerDriver) Start() (Status,error) {
++func (sdriver *MesosSchedulerDriver) Start() (st Status, err error) {
  	if sdriver.driver != nil {
 -		C.scheduler_start(C.SchedulerDriverPtr(sdriver.driver))
-+		st := C.scheduler_start(C.SchedulerDriverPtr(sdriver.driver))
-+		return Status(st), nil
++		st = Status(C.scheduler_start(C.SchedulerDriverPtr(sdriver.driver)))
  	} else {
 -		return errors.New("Start() failed: scheduler driver not initialized")
-+		return Status(0), errors.New("Start() failed: scheduler driver not initialized")
++		err = ErrSchedulerNotInitialized
  	}
 -	return nil
++	return
  }
  
- func (sdriver *MesosSchedulerDriver) Stop(failover bool) error {
-@@ -196,13 +207,13 @@ func (sdriver *MesosSchedulerDriver) Abort() error {
- 	return nil
+-func (sdriver *MesosSchedulerDriver) Stop(failover bool) error {
++func (sdriver *MesosSchedulerDriver) Stop(failover bool) (st Status, err error) {
+ 	if sdriver.driver != nil {
+ 		var failoverInt C.int = 0
+ 		if failover {
+ 			failoverInt = 1
+ 		}
+ 
+-		C.scheduler_stop(C.SchedulerDriverPtr(sdriver.driver), failoverInt)
++		st = Status(C.scheduler_stop(C.SchedulerDriverPtr(sdriver.driver), failoverInt))
+ 	} else {
+-		return errors.New("Stop() failed: scheduler driver not initialized")
++		err = ErrSchedulerNotInitialized
+ 	}
+-	return nil
++	return
+ }
+ 
+-func (sdriver *MesosSchedulerDriver) Abort() error {
++func (sdriver *MesosSchedulerDriver) Abort() (st Status, err error) {
+ 	if sdriver.driver != nil {
+-		C.scheduler_abort(C.SchedulerDriverPtr(sdriver.driver))
++		st = Status(C.scheduler_abort(C.SchedulerDriverPtr(sdriver.driver)))
+ 	} else {
+-		return errors.New("Abort() failed: scheduler driver not initialized")
++		err = ErrSchedulerNotInitialized
+ 	}
+-	return nil
++	return
  }
  
 -func (sdriver *MesosSchedulerDriver) Join() error {
-+func (sdriver *MesosSchedulerDriver) Join() (Status,error) {
++func (sdriver *MesosSchedulerDriver) Join() (st Status, err error) {
  	if sdriver.driver != nil {
 -		C.scheduler_join(C.SchedulerDriverPtr(sdriver.driver))
-+		rc := C.scheduler_join(C.SchedulerDriverPtr(sdriver.driver))
-+		return Status(rc), nil
++		st = Status(C.scheduler_join(C.SchedulerDriverPtr(sdriver.driver)))
  	} else {
 -		return errors.New("Join() failed: scheduler driver not initialized")
-+		return Status(0), errors.New("Join() failed: scheduler driver not initialized")
++		err = ErrSchedulerNotInitialized
  	}
 -	return nil
++	return
  }
  
- func (sdriver *MesosSchedulerDriver) Run() error {
+-func (sdriver *MesosSchedulerDriver) Run() error {
++func (sdriver *MesosSchedulerDriver) Run() (st Status, err error) {
+ 	if sdriver.driver != nil {
+-		C.scheduler_run(C.SchedulerDriverPtr(sdriver.driver))
++		st = Status(C.scheduler_run(C.SchedulerDriverPtr(sdriver.driver)))
+ 	} else {
+-		return errors.New("Run() failed: scheduler driver not initialized")
++		err = ErrSchedulerNotInitialized
+ 	}
+-	return nil
++	return
+ }
+ 
+ func (sdriver *MesosSchedulerDriver) RequestResources(requests []*Request) error {
+@@ -235,8 +248,7 @@ func (sdriver *MesosSchedulerDriver) RequestResources(requests []*Request) error
+ 			C.SchedulerDriverPtr(sdriver.driver),
+ 			&requestsObj)
+ 	} else {
+-		return errors.New(
+-			"RequestResources() failed: scheduler driver not initialized")
++		return ErrSchedulerNotInitialized
+ 	}
+ 
+ 	return nil
+@@ -283,7 +295,7 @@ func (sdriver *MesosSchedulerDriver) LaunchTasks(
+ 			&tasksObj,
+ 			filters_)
+ 	} else {
+-		return errors.New("LaunchTasks() failed: scheduler driver not initialized")
++		return ErrSchedulerNotInitialized
+ 	}
+ 
+ 	return nil
+@@ -298,7 +310,7 @@ func (sdriver *MesosSchedulerDriver) KillTask(taskId *TaskID) error {
+ 
+ 		C.scheduler_killTask(C.SchedulerDriverPtr(sdriver.driver), &message)
+ 	} else {
+-		return errors.New("KillTask() failed: scheduler driver not initialized")
++		return ErrSchedulerNotInitialized
+ 	}
+ 
+ 	return nil
+@@ -328,7 +340,7 @@ func (sdriver *MesosSchedulerDriver) DeclineOffer(
+ 			&message,
+ 			filters_)
+ 	} else {
+-		return errors.New("Start() failed: scheduler driver not initialized")
++		return ErrSchedulerNotInitialized
+ 	}
+ 	return nil
+ }
+@@ -337,7 +349,7 @@ func (sdriver *MesosSchedulerDriver) ReviveOffers() error {
+ 	if sdriver.driver != nil {
+ 		C.scheduler_reviveOffers(C.SchedulerDriverPtr(sdriver.driver))
+ 	} else {
+-		return errors.New("ReviveOffers() failed: scheduler driver not initialized")
++		return ErrSchedulerNotInitialized
+ 	}
+ 	return nil
+ }
+@@ -365,8 +377,7 @@ func (sdriver *MesosSchedulerDriver) SendFrameworkMessage(
+ 			&slaveMessage,
+ 			cdata)
+ 	} else {
+-		return errors.New(
+-			"SendFrameworkMessage() failed: scheduler driver not initialized")
++		return ErrSchedulerNotInitialized
+ 	}
+ 
+ 	return nil
+@@ -376,11 +387,9 @@ func (sdriver *MesosSchedulerDriver) Destroy() {
+ 	C.scheduler_destroy(sdriver.driver, sdriver.scheduler)
+ }
+ 
++// Deprecated: this func adds little value to the binding API
+ func (sdriver *MesosSchedulerDriver) Wait() {
+-	for {
+-		// For now, wait for juicy details.
+-		runtime.Gosched()
+-	}
++	select {}
+ }
+ 
+ ///////////////
 diff --git a/mesos/scheduler_driver.cpp b/mesos/scheduler_driver.cpp
 index a2cf3d8..ab08b50 100644
 --- a/mesos/scheduler_driver.cpp
