@@ -203,7 +203,7 @@ As before, create a service specification:
 This time the selector for the service is `name=redisslave`, because that identifies the pods running redis slaves.
 It may also be helpful to set labels on your service itself--as we've done here--to make it easy to locate them with:
 
-* `bin/kubecfg -l "name=redisslave" list sevices`, or
+* `bin/kubecfg -l "name=redisslave" list services`, or
 * `curl ${KUBERNETES_MASTER}/api/v1beta1/services?labels=name=redisslave`
 
 Now that you have created the service specification, create it in your cluster via the REST API:
