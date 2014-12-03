@@ -240,7 +240,7 @@ Create a file named `frontend-controller.json`:
            "id": "frontendController",
            "containers": [{
              "name": "php-redis",
-             "image": "brendanburns/php-redis",
+             "image": "jdef/php-redis",
              "ports": [{"containerPort": 80, "hostPort": 31030}]
            }]
          }
@@ -259,7 +259,7 @@ $ bin/kubecfg -c examples/guestbook/frontend-controller.json create replicationC
 $ curl ${KUBERNETES_MASTER}/api/v1beta1/replicationControllers -XPOST -d@examples/guestbook/frontend-controller.json
 ID                   Image(s)                 Selector            Replicas
 ----------           ----------               ----------          ----------
-frontendController   brendanburns/php-redis   name=frontend       3
+frontendController   jdef/php-redis           name=frontend       3
 ```
 
 Once that's up you can list the pods in the cluster, to verify that the master, slaves and frontends are running:
@@ -271,9 +271,9 @@ ID                                     Image(s)                 Host            
 redis-master-2                         dockerfile/redis         10.132.189.243/10.132.189.243   name=redis-master                                            Running
 439c1c7c-6694-11e4-bd1f-04012f416701   jdef/redis-slave         10.132.189.242/10.132.189.242   name=redisslave,replicationController=redisSlaveController   Running
 439b7b2f-6694-11e4-bd1f-04012f416701   jdef/redis-slave         10.132.189.243/10.132.189.243   name=redisslave,replicationController=redisSlaveController   Running
-901eb1c1-6695-11e4-bd1f-04012f416701   brendanburns/php-redis   10.132.189.243/10.132.189.243   name=frontend,replicationController=frontendController       Running
-901edf34-6695-11e4-bd1f-04012f416701   brendanburns/php-redis   10.132.189.240/10.132.189.240   name=frontend,replicationController=frontendController       Running
-901e29a7-6695-11e4-bd1f-04012f416701   brendanburns/php-redis   10.132.189.242/10.132.189.242   name=frontend,replicationController=frontendController       Running
+901eb1c1-6695-11e4-bd1f-04012f416701   jdef/php-redis           10.132.189.243/10.132.189.243   name=frontend,replicationController=frontendController       Running
+901edf34-6695-11e4-bd1f-04012f416701   jdef/php-redis           10.132.189.240/10.132.189.240   name=frontend,replicationController=frontendController       Running
+901e29a7-6695-11e4-bd1f-04012f416701   jdef/php-redis           10.132.189.242/10.132.189.242   name=frontend,replicationController=frontendController       Running
 ```
 
 You will see a single redis master pod, two redis slaves, and three frontend pods.
