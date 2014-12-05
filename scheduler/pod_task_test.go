@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	t_min_cpu	= 128
-	t_min_mem	= 128
+	t_min_cpu = 128
+	t_min_mem = 128
 )
 
 func TestEmptyOffer(t *testing.T) {
@@ -51,6 +51,27 @@ func TestNoPortsInPodOrOffer(t *testing.T) {
 	}
 }
 
+func TestDefaultHostPortMatching(t *testing.T) {
+	t.Parallel()
+	pod := &api.Pod{}
+	task, _ := newPodTask(pod, &mesos.ExecutorInfo{})
+
+	offer := &mesos.Offer{
+		Resources: []*mesos.Resource{
+			mesos.ScalarResource("cpus", t_min_cpu),
+			mesos.ScalarResource("mem", t_min_mem),
+			rangeResource("ports", []uint64{1, 1}),
+		},
+	}
+	mapping, err := defaultHostPortMapping(task, offer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mapping) > 0 {
+		t.Fatalf("Found mappings for a pod without ports: %v", pod)
+	}
+}
+
 func TestNoMatchingPorts(t *testing.T) {
 	t.Parallel()
 	pod := &api.Pod{}
@@ -60,7 +81,7 @@ func TestNoMatchingPorts(t *testing.T) {
 		Resources: []*mesos.Resource{
 			mesos.ScalarResource("cpus", t_min_cpu),
 			mesos.ScalarResource("mem", t_min_mem),
-			rangeResource("ports", []uint64{1,1}),
+			rangeResource("ports", []uint64{1, 1}),
 		},
 	}
 	if ok := task.AcceptOffer(offer); !ok {

@@ -23,6 +23,7 @@ type PodTask struct {
 	TaskInfo *mesos.TaskInfo
 	Launched bool
 	Offer    PerishableOffer
+	mapper   hostPortMappingFunc
 }
 
 func rangeResource(name string, ports []uint64) *mesos.Resource {
@@ -79,12 +80,24 @@ func (t *PodTask) FillTaskInfo(offer PerishableOffer) error {
 		mesos.ScalarResource("cpus", containerCpus),
 		mesos.ScalarResource("mem", containerMem),
 	}
-	if ports := rangeResource("ports", t.Ports()); ports != nil {
-		t.TaskInfo.Resources = append(t.TaskInfo.Resources, ports)
-	}
-	var err error
-	if t.TaskInfo.Data, err = yaml.Marshal(&t.Pod.DesiredState.Manifest); err != nil {
+	if mapping, err := t.mapper(t, details); err != nil {
+		t.ClearTaskInfo()
 		return err
+	} else {
+		ports := []uint64{}
+		for _, entry := range mapping {
+			ports = append(ports, entry.offerPort)
+		}
+		if portsResource := rangeResource("ports", ports); portsResource != nil {
+			t.TaskInfo.Resources = append(t.TaskInfo.Resources, portsResource)
+		}
+	}
+
+	if data, err := yaml.Marshal(&t.Pod.DesiredState.Manifest); err != nil {
+		t.ClearTaskInfo()
+		return err
+	} else {
+		t.TaskInfo.Data = data
 	}
 	return nil
 }
@@ -100,21 +113,73 @@ func (t *PodTask) ClearTaskInfo() {
 	t.TaskInfo.Data = nil
 }
 
-func (t *PodTask) Ports() []uint64 {
-	ports := make([]uint64, 0)
-	for _, container := range t.Pod.DesiredState.Manifest.Containers {
+type hostPortMapping struct {
+	cindex    int // containerIndex
+	pindex    int // portIndex
+	offerPort uint64
+}
+
+// TODO(jdef): the label "k8sm:expose=hostPort0" on the pod will determine behavior here.
+// If unset, then hostPort==0 retains default k8s behavior -- ignored, and the related
+// container port remains private to the pod.
+// If set, then hostPort==0 indicates that a hostPort should be selected from among the
+// port resources available in the offer.
+type hostPortMappingFunc func(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error)
+
+type PortAllocationError struct {
+	PodId string
+	Ports []uint64
+}
+
+func (err *PortAllocationError) Error() string {
+	return fmt.Sprintf("Could not schedule pod %s: %d ports could not be allocated", err.PodId, len(err.Ports))
+}
+
+// default k8s host port mapping implementation: hostPort == 0 means containerPort remains pod-private
+var defaultHostPortMapping = func(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error) {
+	requiredPorts := make(map[uint64]hostPortMapping)
+	mapping := []hostPortMapping{}
+	for i, container := range t.Pod.DesiredState.Manifest.Containers {
 		// strip all port==0 from this array; k8s already knows what to do with zero-
 		// ports (it does not create 'port bindings' on the minion-host); we need to
 		// remove the wildcards from this array since they don't consume host resources
-		for _, port := range container.Ports {
-			// HostPort is int, not uint64.
-			if port.HostPort != 0 {
-				ports = append(ports, uint64(port.HostPort))
+		for pi, port := range container.Ports {
+			if port.HostPort == 0 {
+				continue // ignore
+			}
+			requiredPorts[uint64(port.HostPort)] = hostPortMapping{
+				cindex:    i,
+				pindex:    pi,
+				offerPort: uint64(port.HostPort),
 			}
 		}
 	}
-
-	return ports
+	for _, resource := range offer.Resources {
+		if resource.GetName() == "ports" {
+			for _, r := range (*resource).GetRanges().Range {
+				bp := r.GetBegin()
+				ep := r.GetEnd()
+				for port, _ := range requiredPorts {
+					log.V(3).Infof("Evaluating port range {%d:%d} %d", bp, ep, port)
+					if (bp <= port) && (port <= ep) {
+						mapping = append(mapping, requiredPorts[port])
+						delete(requiredPorts, port)
+					}
+				}
+			}
+		}
+	}
+	unsatisfiedPorts := len(requiredPorts)
+	if unsatisfiedPorts > 0 {
+		err := &PortAllocationError{
+			PodId: t.Pod.ID,
+		}
+		for p, _ := range requiredPorts {
+			err.Ports = append(err.Ports, p)
+		}
+		return nil, err
+	}
+	return mapping, nil
 }
 
 func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
@@ -126,12 +191,6 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 	var cpus float64 = 0
 	var mem float64 = 0
 
-	// Mimic set type
-	requiredPorts := make(map[uint64]struct{})
-	for _, port := range t.Ports() {
-		requiredPorts[port] = struct{}{}
-	}
-
 	for _, resource := range offer.Resources {
 		if resource.GetName() == "cpus" {
 			cpus = *resource.GetScalar().Value
@@ -140,26 +199,10 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 		if resource.GetName() == "mem" {
 			mem = *resource.GetScalar().Value
 		}
-
-		if resource.GetName() == "ports" {
-			for _, r := range (*resource).GetRanges().Range {
-				bp := r.GetBegin()
-				ep := r.GetEnd()
-
-				for port, _ := range requiredPorts {
-					log.V(2).Infof("Evaluating port range {%d:%d} %d", bp, ep, port)
-
-					if (bp <= port) && (port <= ep) {
-						delete(requiredPorts, port)
-					}
-				}
-			}
-		}
 	}
 
-	unsatisfiedPorts := len(requiredPorts)
-	if unsatisfiedPorts > 0 {
-		log.V(2).Infof("Could not schedule pod %s: %d ports could not be allocated", t.Pod.ID, unsatisfiedPorts)
+	if _, err := t.mapper(t, offer); err != nil {
+		log.V(2).Info(err)
 		return false
 	}
 
@@ -184,6 +227,7 @@ func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
 		Pod:      pod,
 		TaskInfo: new(mesos.TaskInfo),
 		Launched: false,
+		mapper:   defaultHostPortMapping,
 	}
 	task.TaskInfo.Name = proto.String("PodTask")
 	task.TaskInfo.Executor = executor
