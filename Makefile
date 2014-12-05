@@ -55,6 +55,8 @@ WITH_MESOS_CGO_FLAGS :=  \
 	  CGO_CXXFLAGS="$(CGO_CXXFLAGS)" \
 	  CGO_LDFLAGS="$(CGO_LDFLAGS)"
 
+WITH_MESOS_LD_LIBRARY_PATH := LD_LIBRARY_PATH=$(WITH_MESOS_DIR)/lib
+
 endif
 
 export SHELL
@@ -84,7 +86,7 @@ format: require-gopath
 	go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
 
 test: require-gopath
-	go test $(FRAMEWORK_LIB)
+	env $(WITH_MESOS_CGO_FLAGS) $(WITH_MESOS_LD_LIBRARY_PATH) go test $(FRAMEWORK_LIB)
 
 install: all
 	mkdir -p $(DESTDIR)
