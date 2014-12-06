@@ -72,7 +72,7 @@ func TestDefaultHostPortMatching(t *testing.T) {
 	}
 }
 
-func TestNoMatchingPorts(t *testing.T) {
+func TestAcceptOfferPorts(t *testing.T) {
 	t.Parallel()
 	pod := &api.Pod{}
 	task, _ := newPodTask(pod, &mesos.ExecutorInfo{})

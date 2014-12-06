@@ -26,6 +26,78 @@ type PodTask struct {
 	mapper   hostPortMappingFunc
 }
 
+type hostPortMapping struct {
+	cindex    int // containerIndex
+	pindex    int // portIndex
+	offerPort uint64
+}
+
+// TODO(jdef): the label "k8sm:expose=hostPort0" on the pod will determine the pod-mapping alg.
+// If unset, then hostPort==0 retains default k8s behavior -- ignored, and the related
+// container port remains private to the pod.
+// If set, then hostPort==0 indicates that a hostPort should be selected from among the
+// port resources available in the offer.
+// TODO(jdef): A replicated pod may end up with different host ports across different hosts when
+// host ports are chosen randomly from offers. Will this cause problems accessing a related service?
+
+type hostPortMappingFunc func(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error)
+
+type PortAllocationError struct {
+	PodId string
+	Ports []uint64
+}
+
+func (err *PortAllocationError) Error() string {
+	return fmt.Sprintf("Could not schedule pod %s: %d ports could not be allocated", err.PodId, len(err.Ports))
+}
+
+// default k8s host port mapping implementation: hostPort == 0 means containerPort remains pod-private
+var defaultHostPortMapping = func(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error) {
+	requiredPorts := make(map[uint64]hostPortMapping)
+	mapping := []hostPortMapping{}
+	for i, container := range t.Pod.DesiredState.Manifest.Containers {
+		// strip all port==0 from this array; k8s already knows what to do with zero-
+		// ports (it does not create 'port bindings' on the minion-host); we need to
+		// remove the wildcards from this array since they don't consume host resources
+		for pi, port := range container.Ports {
+			if port.HostPort == 0 {
+				continue // ignore
+			}
+			requiredPorts[uint64(port.HostPort)] = hostPortMapping{
+				cindex:    i,
+				pindex:    pi,
+				offerPort: uint64(port.HostPort),
+			}
+		}
+	}
+	for _, resource := range offer.Resources {
+		if resource.GetName() == "ports" {
+			for _, r := range (*resource).GetRanges().Range {
+				bp := r.GetBegin()
+				ep := r.GetEnd()
+				for port, _ := range requiredPorts {
+					log.V(3).Infof("Evaluating port range {%d:%d} %d", bp, ep, port)
+					if (bp <= port) && (port <= ep) {
+						mapping = append(mapping, requiredPorts[port])
+						delete(requiredPorts, port)
+					}
+				}
+			}
+		}
+	}
+	unsatisfiedPorts := len(requiredPorts)
+	if unsatisfiedPorts > 0 {
+		err := &PortAllocationError{
+			PodId: t.Pod.ID,
+		}
+		for p, _ := range requiredPorts {
+			err.Ports = append(err.Ports, p)
+		}
+		return nil, err
+	}
+	return mapping, nil
+}
+
 func rangeResource(name string, ports []uint64) *mesos.Resource {
 	if len(ports) == 0 {
 		// pod may consist of a container that doesn't expose any ports on the host
@@ -87,14 +159,25 @@ func (t *PodTask) FillTaskInfo(offer PerishableOffer) error {
 		ports := []uint64{}
 		for _, entry := range mapping {
 			ports = append(ports, entry.offerPort)
+
+			// update desired state with mapped ports
+			port := &t.Pod.DesiredState.Manifest.Containers[entry.cindex].Ports[entry.pindex]
+			port.HostPort = int(entry.offerPort)
 		}
 		if portsResource := rangeResource("ports", ports); portsResource != nil {
 			t.TaskInfo.Resources = append(t.TaskInfo.Resources, portsResource)
 		}
 	}
-
-	if data, err := yaml.Marshal(&t.Pod.DesiredState.Manifest); err != nil {
+	if err := t.UpdateDesiredState(&t.Pod.DesiredState.Manifest); err != nil {
 		t.ClearTaskInfo()
+		return err
+	}
+	return nil
+}
+
+func (t *PodTask) UpdateDesiredState(manifest *api.ContainerManifest) error {
+	t.Pod.DesiredState.Manifest = *manifest
+	if data, err := yaml.Marshal(manifest); err != nil {
 		return err
 	} else {
 		t.TaskInfo.Data = data
@@ -111,75 +194,6 @@ func (t *PodTask) ClearTaskInfo() {
 	t.TaskInfo.SlaveId = nil
 	t.TaskInfo.Resources = nil
 	t.TaskInfo.Data = nil
-}
-
-type hostPortMapping struct {
-	cindex    int // containerIndex
-	pindex    int // portIndex
-	offerPort uint64
-}
-
-// TODO(jdef): the label "k8sm:expose=hostPort0" on the pod will determine behavior here.
-// If unset, then hostPort==0 retains default k8s behavior -- ignored, and the related
-// container port remains private to the pod.
-// If set, then hostPort==0 indicates that a hostPort should be selected from among the
-// port resources available in the offer.
-type hostPortMappingFunc func(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error)
-
-type PortAllocationError struct {
-	PodId string
-	Ports []uint64
-}
-
-func (err *PortAllocationError) Error() string {
-	return fmt.Sprintf("Could not schedule pod %s: %d ports could not be allocated", err.PodId, len(err.Ports))
-}
-
-// default k8s host port mapping implementation: hostPort == 0 means containerPort remains pod-private
-var defaultHostPortMapping = func(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error) {
-	requiredPorts := make(map[uint64]hostPortMapping)
-	mapping := []hostPortMapping{}
-	for i, container := range t.Pod.DesiredState.Manifest.Containers {
-		// strip all port==0 from this array; k8s already knows what to do with zero-
-		// ports (it does not create 'port bindings' on the minion-host); we need to
-		// remove the wildcards from this array since they don't consume host resources
-		for pi, port := range container.Ports {
-			if port.HostPort == 0 {
-				continue // ignore
-			}
-			requiredPorts[uint64(port.HostPort)] = hostPortMapping{
-				cindex:    i,
-				pindex:    pi,
-				offerPort: uint64(port.HostPort),
-			}
-		}
-	}
-	for _, resource := range offer.Resources {
-		if resource.GetName() == "ports" {
-			for _, r := range (*resource).GetRanges().Range {
-				bp := r.GetBegin()
-				ep := r.GetEnd()
-				for port, _ := range requiredPorts {
-					log.V(3).Infof("Evaluating port range {%d:%d} %d", bp, ep, port)
-					if (bp <= port) && (port <= ep) {
-						mapping = append(mapping, requiredPorts[port])
-						delete(requiredPorts, port)
-					}
-				}
-			}
-		}
-	}
-	unsatisfiedPorts := len(requiredPorts)
-	if unsatisfiedPorts > 0 {
-		err := &PortAllocationError{
-			PodId: t.Pod.ID,
-		}
-		for p, _ := range requiredPorts {
-			err.Ports = append(err.Ports, p)
-		}
-		return nil, err
-	}
-	return mapping, nil
 }
 
 func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
@@ -226,7 +240,6 @@ func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
 		ID:       taskId, // pod.JSONBase.ID,
 		Pod:      pod,
 		TaskInfo: new(mesos.TaskInfo),
-		Launched: false,
 		mapper:   defaultHostPortMapping,
 	}
 	task.TaskInfo.Name = proto.String("PodTask")
