@@ -24,6 +24,7 @@ type PodTask struct {
 	Launched bool
 	Offer    PerishableOffer
 	mapper   hostPortMappingFunc
+	ports    []hostPortMapping
 }
 
 type hostPortMapping struct {
@@ -48,11 +49,78 @@ type PortAllocationError struct {
 }
 
 func (err *PortAllocationError) Error() string {
-	return fmt.Sprintf("Could not schedule pod %s: %d ports could not be allocated", err.PodId, len(err.Ports))
+	return fmt.Sprintf("Could not schedule pod %s: %d port(s) could not be allocated", err.PodId, len(err.Ports))
+}
+
+type DuplicateHostPortError struct {
+	m1, m2 hostPortMapping
+}
+
+func (err *DuplicateHostPortError) Error() string {
+	return fmt.Sprintf(
+		"Host port %d is specified for container %d, pod %d and container %d, pod %d",
+		err.m1.offerPort, err.m1.cindex, err.m1.pindex, err.m2.cindex, err.m2.pindex)
+}
+
+// wildcard k8s host port mapping implementation: hostPort == 0 gets mapped to any available offer port
+func wildcardHostPortMapping(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error) {
+
+	mapping, err := defaultHostPortMapping(t, offer)
+	if err != nil {
+		return nil, err
+	}
+	taken := make(map[uint64]struct{})
+	for _, entry := range mapping {
+		taken[entry.offerPort] = struct{}{}
+	}
+	wildports := []hostPortMapping{}
+	for i, container := range t.Pod.DesiredState.Manifest.Containers {
+		for pi, port := range container.Ports {
+			if port.HostPort == 0 {
+				wildports = append(wildports, hostPortMapping{
+					cindex: i,
+					pindex: pi,
+				})
+			}
+		}
+	}
+	remaining := len(wildports)
+	for _, resource := range offer.Resources {
+		if resource.GetName() == "ports" {
+			for _, r := range (*resource).GetRanges().Range {
+				bp := r.GetBegin()
+				ep := r.GetEnd()
+				log.V(3).Infof("Searching for wildcard port in range {%d:%d}", bp, ep)
+				for _, entry := range wildports {
+					if entry.offerPort != 0 {
+						continue
+					}
+					for port := bp; port <= ep && remaining > 0; port++ {
+						if _, inuse := taken[port]; inuse {
+							continue
+						}
+						entry.offerPort = port
+						mapping = append(mapping, entry)
+						remaining--
+						taken[port] = struct{}{}
+						break
+					}
+				}
+			}
+		}
+	}
+	if remaining > 0 {
+		err := &PortAllocationError{
+			PodId: t.Pod.ID,
+		}
+		// it doesn't make sense to include a port list here because they were all zero (wildcards)
+		return nil, err
+	}
+	return mapping, nil
 }
 
 // default k8s host port mapping implementation: hostPort == 0 means containerPort remains pod-private
-var defaultHostPortMapping = func(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error) {
+func defaultHostPortMapping(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error) {
 	requiredPorts := make(map[uint64]hostPortMapping)
 	mapping := []hostPortMapping{}
 	for i, container := range t.Pod.DesiredState.Manifest.Containers {
@@ -63,11 +131,15 @@ var defaultHostPortMapping = func(t *PodTask, offer *mesos.Offer) ([]hostPortMap
 			if port.HostPort == 0 {
 				continue // ignore
 			}
-			requiredPorts[uint64(port.HostPort)] = hostPortMapping{
+			m := hostPortMapping{
 				cindex:    i,
 				pindex:    pi,
 				offerPort: uint64(port.HostPort),
 			}
+			if entry, inuse := requiredPorts[uint64(port.HostPort)]; inuse {
+				return nil, &DuplicateHostPortError{entry, m}
+			}
+			requiredPorts[uint64(port.HostPort)] = m
 		}
 	}
 	for _, resource := range offer.Resources {
@@ -112,9 +184,13 @@ func rangeResource(name string, ports []uint64) *mesos.Resource {
 
 // func NewRange(begin uint64, end uint64) *mesos.Value_Ranges {
 func NewRanges(ports []uint64) *mesos.Value_Ranges {
-	r := make([]*mesos.Value_Range, 0)
+	r := []*mesos.Value_Range{}
 	for _, port := range ports {
-		r = append(r, &mesos.Value_Range{Begin: &port, End: &port})
+		// this is subtle: since we're using pointers to the port we must not
+		// use the loop variable, otherwise the begin and end of all the ranges
+		// we construct will end up being exactly the same. so copy it to x
+		x := port
+		r = append(r, &mesos.Value_Range{Begin: &x, End: &x})
 	}
 	return &mesos.Value_Ranges{Range: r}
 }
@@ -159,11 +235,8 @@ func (t *PodTask) FillTaskInfo(offer PerishableOffer) error {
 		ports := []uint64{}
 		for _, entry := range mapping {
 			ports = append(ports, entry.offerPort)
-
-			// update desired state with mapped ports
-			port := &t.Pod.DesiredState.Manifest.Containers[entry.cindex].Ports[entry.pindex]
-			port.HostPort = int(entry.offerPort)
 		}
+		t.ports = mapping
 		if portsResource := rangeResource("ports", ports); portsResource != nil {
 			t.TaskInfo.Resources = append(t.TaskInfo.Resources, portsResource)
 		}
@@ -177,6 +250,24 @@ func (t *PodTask) FillTaskInfo(offer PerishableOffer) error {
 
 func (t *PodTask) UpdateDesiredState(manifest *api.ContainerManifest) error {
 	t.Pod.DesiredState.Manifest = *manifest
+
+	// avoid potentially contaminating the desired state with specialized
+	// port assignments just in case this task is re-scheduled later and
+	// we need access to the original manifest
+
+	// TODO(jdef): will this confuse some recification loop that wants to
+	// ensure that desired state == running state?
+
+	if len(t.ports) > 0 {
+		m := *manifest
+		manifest = &m
+
+		// include updated port mappings in task data
+		for _, entry := range t.ports {
+			port := &(manifest.Containers[entry.cindex].Ports[entry.pindex])
+			port.HostPort = int(entry.offerPort)
+		}
+	}
 	if data, err := yaml.Marshal(manifest); err != nil {
 		return err
 	} else {
@@ -194,6 +285,7 @@ func (t *PodTask) ClearTaskInfo() {
 	t.TaskInfo.SlaveId = nil
 	t.TaskInfo.Resources = nil
 	t.TaskInfo.Data = nil
+	t.ports = nil
 }
 
 func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
