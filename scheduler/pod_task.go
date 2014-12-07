@@ -6,6 +6,7 @@ import (
 	"code.google.com/p/go-uuid/uuid"
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	"gopkg.in/v1/yaml"
@@ -33,14 +34,8 @@ type hostPortMapping struct {
 	offerPort uint64
 }
 
-// TODO(jdef): the label "k8sm:expose=hostPort0" on the pod will determine the pod-mapping alg.
-// If unset, then hostPort==0 retains default k8s behavior -- ignored, and the related
-// container port remains private to the pod.
-// If set, then hostPort==0 indicates that a hostPort should be selected from among the
-// port resources available in the offer.
 // TODO(jdef): A replicated pod may end up with different host ports across different hosts when
 // host ports are chosen randomly from offers. Will this cause problems accessing a related service?
-
 type hostPortMappingFunc func(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error)
 
 type PortAllocationError struct {
@@ -332,9 +327,35 @@ func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
 		ID:       taskId, // pod.JSONBase.ID,
 		Pod:      pod,
 		TaskInfo: new(mesos.TaskInfo),
-		mapper:   defaultHostPortMapping,
+		mapper:   hostPortMappingFuncFor(pod),
 	}
 	task.TaskInfo.Name = proto.String("PodTask")
 	task.TaskInfo.Executor = executor
 	return task, nil
+}
+
+// The label "k8sm:expose=*" on the pod will determine the pod-mapping alg.
+// If unset, then hostPort==0 retains default k8s behavior -- ignored, and the related
+// container port remains private to the pod.
+// If set, then hostPort==0 indicates that a hostPort should be selected from among the
+// port resources available in the offer; applies to all the pod's containers.
+func hostPortMappingFuncFor(pod *api.Pod) hostPortMappingFunc {
+
+	// TODO(jdef): a better design might be this:
+	//   k8sm:expose  := '*' | ct-port-list
+	//   ct-port-list := ct-port | ct-port ',' ct-port-list
+	//   ct-port      := ct-port-number | ct-port-name
+	//
+	// The above approach provides a short, simple syntax for exposing all wildcard
+	// host ports. If more control is desired then users can list specific ct-ports
+	// to expose.
+	//
+	filter := map[string]string{
+		"k8sm:expose": "*",
+	}
+	selector := labels.Set(filter).AsSelector()
+	if selector.Matches(labels.Set(pod.Labels)) {
+		return wildcardHostPortMapping
+	}
+	return defaultHostPortMapping
 }
