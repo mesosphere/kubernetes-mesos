@@ -12,11 +12,13 @@ To get started with development you'll need to install some prerequisites:
 * Install protobuf and Go
 * Install [godep][2]
 
+The steps for installing prerequisites assume that you are logged in as `root`, otherwise you will need to insert `sudo` where appropriate.
+
 #### Debian
 
 ```shell
 $ export DEB_VERSION_MESOS=0.20.1-1.0.debian75
-$ apt-key adv --keyserver keyserver.ubuntu.com --recv E56151BF &&
+$ apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv E56151BF &&
     echo "deb http://repos.mesosphere.io/debian wheezy main" |
           tee /etc/apt/sources.list.d/mesosphere.list &&
     apt-get -y update &&
@@ -41,7 +43,7 @@ $ mkdir -pv /opt && (export GOPATH=/opt; cd /opt &&
 ```shell
 $ DISTRO=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
 $ CODENAME=$(lsb_release -cs)
-$ apt-key adv --keyserver keyserver.ubuntu.com --recv E56151BF &&
+$ apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv E56151BF &&
     echo "deb http://repos.mesosphere.io/${DISTRO} ${CODENAME} main" |
           tee /etc/apt/sources.list.d/mesosphere.list &&
     apt-get -y update &&
