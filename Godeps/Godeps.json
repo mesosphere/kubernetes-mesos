@@ -189,7 +189,7 @@
 			"Rev": "5a6d06c02600b1e57e55a9d9f71dbac1bfc9fe6c"
 		},
 		{
-			"ImportPath": "github.com/mesos/mesos-go/mesos",
+			"ImportPath": "github.com/mesos/mesos-go",
 			"Rev": "9c6a968b270c50e35f99d6cf649a18521b76c18a"
 		},
 		{
