@@ -181,11 +181,8 @@ func rangeResource(name string, ports []uint64) *mesos.Resource {
 func NewRanges(ports []uint64) *mesos.Value_Ranges {
 	r := []*mesos.Value_Range{}
 	for _, port := range ports {
-		// this is subtle: since we're using pointers to the port we must not
-		// use the loop variable, otherwise the begin and end of all the ranges
-		// we construct will end up being exactly the same. so copy it to x
-		x := port
-		r = append(r, &mesos.Value_Range{Begin: &x, End: &x})
+		x := proto.Uint64(port)
+		r = append(r, &mesos.Value_Range{Begin: x, End: x})
 	}
 	return &mesos.Value_Ranges{Range: r}
 }
