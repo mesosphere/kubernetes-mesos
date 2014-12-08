@@ -111,7 +111,7 @@ type KubernetesScheduler struct {
 	client   *client.Client
 	podQueue *cache.FIFO
 
-	manifestFactory kpod.ManifestFactory
+	boundPodFactory kpod.BoundPodFactory
 }
 
 // New create a new KubernetesScheduler
@@ -157,10 +157,10 @@ func (k *KubernetesScheduler) getTask(taskId string) (*PodTask, stateType) {
 	return nil, stateUnknown
 }
 
-func (k *KubernetesScheduler) Init(d mesos.SchedulerDriver, f kpod.ManifestFactory) {
+func (k *KubernetesScheduler) Init(d mesos.SchedulerDriver, f kpod.BoundPodFactory) {
 	k.offers.Init()
 	k.driver = d
-	k.manifestFactory = f
+	k.boundPodFactory = f
 }
 
 // Registered is called when the scheduler registered with the master successfully.
@@ -316,7 +316,7 @@ func (k *KubernetesScheduler) fillRunningPodInfo(task *PodTask, taskStatus *meso
 					log.Warningf("No network settings: %#v", netContainerInfo)
 				}
 			} else {
-				log.Warningf("Couldn't find network container for %s in %v", task.Pod.ID, target)
+				log.Warningf("Couldn't find network container for %s in %v", task.Pod.UID, target)
 			}
 		} else {
 			log.Errorf("Invalid TaskStatus.Data for task '%v': %v", task.ID, err)
@@ -339,7 +339,7 @@ func (k *KubernetesScheduler) handleTaskFinished(taskStatus *mesos.TaskStatus) {
 		log.V(2).Infof(
 			"Received finished status for running task: '%v', running/pod task queue length = %d/%d",
 			taskStatus, len(k.runningTasks), len(k.podToTask))
-		delete(k.podToTask, task.Pod.ID)
+		delete(k.podToTask, task.Pod.UID)
 		k.finishedTasks.Next().Value = taskId
 		delete(k.runningTasks, taskId)
 	case stateFinished:
@@ -356,10 +356,10 @@ func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 	switch task, state := k.getTask(taskId); state {
 	case statePending:
 		delete(k.pendingTasks, taskId)
-		delete(k.podToTask, task.Pod.ID)
+		delete(k.podToTask, task.Pod.UID)
 	case stateRunning:
 		delete(k.runningTasks, taskId)
-		delete(k.podToTask, task.Pod.ID)
+		delete(k.podToTask, task.Pod.UID)
 	}
 }
 
@@ -370,10 +370,10 @@ func (k *KubernetesScheduler) handleTaskKilled(taskStatus *mesos.TaskStatus) {
 	switch task, state := k.getTask(taskId); state {
 	case statePending:
 		delete(k.pendingTasks, taskId)
-		delete(k.podToTask, task.Pod.ID)
+		delete(k.podToTask, task.Pod.UID)
 	case stateRunning:
 		delete(k.runningTasks, taskId)
-		delete(k.podToTask, task.Pod.ID)
+		delete(k.podToTask, task.Pod.UID)
 	}
 }
 
@@ -384,10 +384,10 @@ func (k *KubernetesScheduler) handleTaskLost(taskStatus *mesos.TaskStatus) {
 	switch task, state := k.getTask(taskId); state {
 	case statePending:
 		delete(k.pendingTasks, taskId)
-		delete(k.podToTask, task.Pod.ID)
+		delete(k.podToTask, task.Pod.UID)
 	case stateRunning:
 		delete(k.runningTasks, taskId)
-		delete(k.podToTask, task.Pod.ID)
+		delete(k.podToTask, task.Pod.UID)
 	}
 }
 
@@ -432,13 +432,13 @@ func (k *KubernetesScheduler) Error(driver mesos.SchedulerDriver, message string
 // Schedule implements the Scheduler interface of the Kubernetes.
 // It returns the selectedMachine's name and error (if there's any).
 func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (string, error) {
-	log.Infof("Try to schedule pod %v\n", pod.ID)
+	log.Infof("Try to schedule pod %v\n", pod.UID)
 
 	k.Lock()
 	defer k.Unlock()
 
-	if taskID, ok := k.podToTask[pod.ID]; !ok {
-		return "", fmt.Errorf("Pod %s cannot be resolved to a task", pod.ID)
+	if taskID, ok := k.podToTask[pod.UID]; !ok {
+		return "", fmt.Errorf("Pod %s cannot be resolved to a task", pod.UID)
 	} else {
 		if task, found := k.pendingTasks[taskID]; !found {
 			return "", fmt.Errorf("Task %s is not pending, nothing to schedule", taskID)
@@ -470,20 +470,20 @@ func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
 // implementation of scheduling plugin's NextPod func; see plugin/pkg/scheduler
 func (k *KubernetesScheduler) yield() *api.Pod {
 	pod := k.podQueue.Pop().(*api.Pod)
-	log.V(2).Infof("About to try and schedule pod %v\n", pod.ID)
+	log.V(2).Infof("About to try and schedule pod %v\n", pod.UID)
 	return pod
 }
 
 // implementation of scheduling plugin's Error func; see plugin/pkg/scheduler
 func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *api.Pod, err error) {
-	log.Infof("Error scheduling %v: %v; retrying", pod.ID, err)
+	log.Infof("Error scheduling %v: %v; retrying", pod.UID, err)
 	backoff.gc()
 
 	// Retry asynchronously.
 	// Note that this is extremely rudimentary and we need a more real error handling path.
 	go func() {
 		defer util.HandleCrash()
-		podId := pod.ID
+		podId := pod.UID
 		// did we error out because if non-matching offers? if so, register an offer
 		// listener to be notified if/when a matching offer comes in.
 		var offersAvailable <-chan empty
@@ -520,7 +520,7 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 					// TODO(jdef) not sure that this is strictly necessary since once the pod is schedule, only the ID is
 					// passed around in the Pod.Registry API
 					task.Pod = pod
-					k.podQueue.Add(pod.ID, pod)
+					k.podQueue.Add(pod.UID, pod)
 				} else {
 					// this state shouldn't really be possible, so I'm warning if we ever see it
 					log.Errorf("Scheduler detected pod no longer pending: %v, will not re-queue; possible offer leak", podId)
@@ -614,7 +614,7 @@ func (k *KubernetesScheduler) GetPod(ctx api.Context, podId string) (*api.Pod, e
 func (k *KubernetesScheduler) CreatePod(ctx api.Context, pod *api.Pod) error {
 	log.V(2).Infof("Create pod: '%v'\n", pod)
 	// Set current status to "Waiting".
-	pod.CurrentState.Status = api.PodWaiting
+	pod.CurrentState.Status = api.PodPending
 	pod.CurrentState.Host = ""
 	// DesiredState.Host == "" is a signal to the scheduler that this pod needs scheduling.
 	pod.DesiredState.Status = api.PodRunning
@@ -630,12 +630,12 @@ func (k *KubernetesScheduler) CreatePod(ctx api.Context, pod *api.Pod) error {
 	k.Lock()
 	defer k.Unlock()
 
-	if _, ok := k.podToTask[pod.ID]; ok {
-		return fmt.Errorf("Pod %s already launched. Please choose a unique pod name", pod.ID)
+	if _, ok := k.podToTask[pod.UID]; ok {
+		return fmt.Errorf("Pod %s already launched. Please choose a unique pod name", pod.UID)
 	}
 
-	k.podQueue.Add(pod.ID, pod)
-	k.podToTask[pod.ID] = task.ID
+	k.podQueue.Add(pod.UID, pod)
+	k.podToTask[pod.UID] = task.ID
 	k.pendingTasks[task.ID] = task
 
 	return nil
@@ -692,21 +692,19 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 }
 
 func (k *KubernetesScheduler) prepareTaskForLaunch(machine string, task *PodTask) error {
-	// TODO(k8s): move this to a watch/rectification loop.
-	manifest, err := k.manifestFactory.MakeManifest(machine, *task.Pod)
+	boundPod, err := k.boundPodFactory.MakeBoundPod(machine, task.Pod)
 	if err != nil {
-		log.V(2).Infof("Failed to generate an updated manifest")
+		log.V(2).Infof("Failed to generate an updated boundPod")
 		return err
 	}
 
-	// update the manifest here to pick up things like environment variables that
+	// update the boundPod here to pick up things like environment variables that
 	// pod containers will use for service discovery. the kubelet-executor uses this
-	// manifest to instantiate the pods and this is the last update we make before
+	// boundPod to instantiate the pods and this is the last update we make before
 	// firing up the pod.
-	task.Pod.DesiredState.Manifest = manifest
-	task.TaskInfo.Data, err = yaml.Marshal(&manifest)
+	task.TaskInfo.Data, err = yaml.Marshal(&boundPod)
 	if err != nil {
-		log.V(2).Infof("Failed to marshal the updated manifest")
+		log.V(2).Infof("Failed to marshal the updated boundPod")
 		return err
 	}
 	return nil
@@ -791,7 +789,7 @@ func FCFSScheduleFunc(r OfferRegistry, slaves map[string]*Slave, task *PodTask) 
 		if task.AcceptOffer(offer) {
 			if p.Acquire() {
 				acceptedOffer = p
-				log.V(3).Infof("Pod %v accepted offer %v", task.Pod.ID, offer.Id.GetValue())
+				log.V(3).Infof("Pod %v accepted offer %v", task.Pod.UID, offer.Id.GetValue())
 				return true, nil // stop, we found an offer
 			}
 		}
@@ -804,10 +802,10 @@ func FCFSScheduleFunc(r OfferRegistry, slaves map[string]*Slave, task *PodTask) 
 		return acceptedOffer, nil
 	}
 	if err != nil {
-		log.V(2).Infof("failed to find a fit for pod: %v, err = %v", task.Pod.ID, err)
+		log.V(2).Infof("failed to find a fit for pod: %v, err = %v", task.Pod.UID, err)
 		return nil, err
 	}
-	log.V(2).Infof("failed to find a fit for pod: %v", task.Pod.ID)
+	log.V(2).Infof("failed to find a fit for pod: %v", task.Pod.UID)
 	return nil, noSuitableOffersErr
 }
 

@@ -71,7 +71,7 @@ func (t *PodTask) FillTaskInfo(offer PerishableOffer) error {
 		return fmt.Errorf("Offer assignment must be idempotent with task %v: %v", t, offer)
 	}
 	t.Offer = offer
-	log.V(3).Infof("Recording offer(s) %v against pod %v", details.Id, t.Pod.ID)
+	log.V(3).Infof("Recording offer(s) %v against pod %v", details.Id, t.Pod.UID)
 
 	t.TaskInfo.TaskId = &mesos.TaskID{Value: proto.String(t.ID)}
 	t.TaskInfo.SlaveId = details.GetSlaveId()
@@ -92,7 +92,7 @@ func (t *PodTask) FillTaskInfo(offer PerishableOffer) error {
 // Clear offer-related details from the task, should be called if/when an offer
 // has already been assigned to a task but for some reason is no longer valid.
 func (t *PodTask) ClearTaskInfo() {
-	log.V(3).Infof("Clearing offer(s) from pod %v", t.Pod.ID)
+	log.V(3).Infof("Clearing offer(s) from pod %v", t.Pod.UID)
 	t.Offer = nil
 	t.TaskInfo.TaskId = nil
 	t.TaskInfo.SlaveId = nil
@@ -154,7 +154,7 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 
 	unsatisfiedPorts := len(requiredPorts)
 	if unsatisfiedPorts > 0 {
-		log.V(2).Infof("Could not schedule pod %s: %d ports could not be allocated", t.Pod.ID, unsatisfiedPorts)
+		log.V(2).Infof("Could not schedule pod %s: %d ports could not be allocated", t.Pod.UID, unsatisfiedPorts)
 		return false
 	}
 
@@ -169,7 +169,7 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
 	taskId := uuid.NewUUID().String()
 	task := &PodTask{
-		ID:       taskId, // pod.JSONBase.ID,
+		ID:       taskId,
 		Pod:      pod,
 		TaskInfo: new(mesos.TaskInfo),
 		Launched: false,

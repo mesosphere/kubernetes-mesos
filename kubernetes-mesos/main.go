@@ -29,15 +29,11 @@ import (
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/apiserver"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/auth/authenticator/bearertoken"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/auth/authenticator/tokenfile"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/auth/handlers"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/capabilities"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/pod"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/ui"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
 	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
@@ -50,23 +46,47 @@ import (
 )
 
 var (
-	port                  = flag.Uint("port", 8888, "The port to listen on.  Default 8888.")
+	// Note: the weird ""+ in below lines seems to be the only way to get gofmt to
+	// arrange these text blocks sensibly. Grrr.
+	port = flag.Int("port", 8888, ""+
+		"The port to listen on.  Default 8888. It is assumed that firewall rules are "+
+		"set up such that this port is not reachable from outside of the cluster. It is "+
+		"further assumed that port 443 on the cluster's public address is proxied to this "+
+		"port.")
 	address               = util.IP(net.ParseIP("127.0.0.1"))
-	apiPrefix             = flag.String("api_prefix", "/api", "The prefix for API requests on the server. Default '/api'")
-	storageVersion        = flag.String("storage_version", "", "The version to store resources with. Defaults to server preferred")
-	minionPort            = flag.Uint("minion_port", 10250, "The port at which kubelet will be listening on the minions. Default 10250.")
-	healthCheckMinions    = flag.Bool("health_check_minions", true, "If true, health check minions and filter unhealthy ones. Default true.")
-	minionCacheTTL        = flag.Duration("minion_cache_ttl", 30*time.Second, "Duration of time to cache minion information. Default 30 seconds.")
-	eventTTL              = flag.Duration("event_ttl", 48*time.Hour, "Amount of time to retain events. Default 2 days.")
-	tokenAuthFile         = flag.String("token_auth_file", "", "If set, the file that will be used to secure the API server via token authentication.")
-	etcdServerList        util.StringList
-	etcdConfigFile        = flag.String("etcd_config", "", "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
-	corsAllowedOriginList util.StringList
-	allowPrivileged       = flag.Bool("allow_privileged", false, "If true, allow privileged containers. Default false.")
-	enableLogsSupport     = flag.Bool("enable_logs_support", true, "Enables server endpoint for log collection. Default true.")
-	mesosMaster           = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master. Default localhost:5050.")
-	executorPath          = flag.String("executor_path", "", "Location of the kubernetes executor executable")
-	proxyPath             = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
+	publicAddressOverride = flag.String("public_address_override", "", ""+
+		"Public serving address. Read only port will be opened on this address, "+
+		"and it is assumed that port 443 at this address will be proxied/redirected "+
+		"to '-address':'-port'. If blank, the address in the first listed interface "+
+		"will be used.")
+	readOnlyPort = flag.Int("read_only_port", 7080, ""+
+		"The port from which to serve read-only resources. If 0, don't serve on a "+
+		"read-only address. It is assumed that firewall rules are set up such that "+
+		"this port is not reachable from outside of the cluster.")
+	securePort              = flag.Int("secure_port", 0, "The port from which to serve HTTPS with authentication and authorization. If 0, don't serve HTTPS ")
+	tlsCertFile             = flag.String("tls_cert_file", "", "File containing x509 Certificate for HTTPS.  (CA cert, if any, concatenated after server cert).")
+	tlsPrivateKeyFile       = flag.String("tls_private_key_file", "", "File containing x509 private key matching --tls_cert_file.")
+	apiPrefix               = flag.String("api_prefix", "/api", "The prefix for API requests on the server. Default '/api'")
+	storageVersion          = flag.String("storage_version", "", "The version to store resources with. Defaults to server preferred")
+	healthCheckMinions      = flag.Bool("health_check_minions", true, "If true, health check minions and filter unhealthy ones. Default true.")
+	minionCacheTTL          = flag.Duration("minion_cache_ttl", 30*time.Second, "Duration of time to cache minion information. Default 30 seconds.")
+	eventTTL                = flag.Duration("event_ttl", 48*time.Hour, "Amount of time to retain events. Default 2 days.")
+	tokenAuthFile           = flag.String("token_auth_file", "", "If set, the file that will be used to secure the API server via token authentication.")
+	authorizationMode       = flag.String("authorization_mode", "AlwaysAllow", "Selects how to do authorization on the secure port.  One of: "+strings.Join(apiserver.AuthorizationModeChoices, ","))
+	authorizationPolicyFile = flag.String("authorization_policy_file", "", "File with authorization policy in csv format, used with --authorization_mode=ABAC, on the secure port.")
+	etcdServerList          util.StringList
+	etcdConfigFile          = flag.String("etcd_config", "", "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
+	corsAllowedOriginList   util.StringList
+	allowPrivileged         = flag.Bool("allow_privileged", false, "If true, allow privileged containers. Default false.")
+	portalNet               util.IPNet // TODO: make this a list
+	enableLogsSupport       = flag.Bool("enable_logs_support", true, "Enables server endpoint for log collection. Default true.")
+	kubeletConfig           = client.KubeletConfig{
+		Port:        10250,
+		EnableHttps: false,
+	}
+	mesosMaster  = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master. Default localhost:5050.")
+	executorPath = flag.String("executor_path", "", "Location of the kubernetes executor executable")
+	proxyPath    = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
 )
 
 const (
@@ -79,6 +99,15 @@ func init() {
 	flag.Var(&address, "address", "The IP address on to serve on (set to 0.0.0.0 for all interfaces). Default 127.0.0.1.")
 	flag.Var(&etcdServerList, "etcd_servers", "Servers for the etcd (http://ip:port), comma separated")
 	flag.Var(&corsAllowedOriginList, "cors_allowed_origins", "List of allowed origins for CORS, comma separated.  An allowed origin can be a regular expression to support subdomain matching.  If this list is empty CORS will not be enabled.")
+	flag.Var(&portalNet, "portal_net", "A CIDR notation IP range from which to assign portal IPs. This must not overlap with any IP ranges assigned to nodes for pods.")
+	client.BindKubeletClientConfigFlags(flag.CommandLine, &kubeletConfig)
+}
+
+// TODO(k8s): Longer term we should read this from some config store, rather than a flag.
+func verifyPortalFlags() {
+	if portalNet.IP == nil {
+		log.Fatal("No -portal_net specified")
+	}
 }
 
 func newEtcd(etcdConfigFile string, etcdServerList util.StringList) (helper tools.EtcdHelper, err error) {
@@ -128,6 +157,7 @@ func prepareExecutorInfo() *mesos.ExecutorInfo {
 
 	//TODO(jdef): provide some way (env var?) for user's to customize executor config
 	//TODO(jdef): set -hostname_override and -address to 127.0.0.1 if `address` is 127.0.0.1
+	//TODO(jdef): kubelet can publish events to the api server, we should probably tell it our IP address
 	executorCommand := fmt.Sprintf("./%s -v=2 -hostname_override=0.0.0.0", executorCmd)
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
@@ -160,6 +190,7 @@ func main() {
 	defer util.FlushLogs()
 
 	verflag.PrintAndExitIfRequested()
+	verifyPortalFlags()
 
 	if (*etcdConfigFile != "" && len(etcdServerList) != 0) || (*etcdConfigFile == "" && len(etcdServerList) == 0) {
 		log.Fatalf("specify either -etcd_servers or -etcd_config")
@@ -171,10 +202,9 @@ func main() {
 
 	// TODO(nnielsen): Using default pod info getter until
 	// MesosPodInfoGetter supports network containers.
-	// podInfoGetter := MesosPodInfoGetter.New(mesosPodScheduler)
-	podInfoGetter := &client.HTTPPodInfoGetter{
-		Client: http.DefaultClient,
-		Port:   *minionPort,
+	kubeletClient, err := client.NewKubeletClient(&kubeletConfig)
+	if err != nil {
+		log.Fatalf("Failure to start kubelet client: %v", err)
 	}
 
 	// TODO(k8s): expose same flags as client.BindClientConfigFlags but for a server
@@ -192,6 +222,13 @@ func main() {
 		log.Fatalf("Invalid storage version or misconfigured etcd: %v", err)
 	}
 
+	n := net.IPNet(portalNet)
+
+	authorizer, err := apiserver.NewAuthorizerFromAuthorizationConfig(*authorizationMode, *authorizationPolicyFile)
+	if err != nil {
+		log.Fatalf("Invalid Authorization Config: %v", err)
+	}
+
 	// Create mesos scheduler driver.
 	executor := prepareExecutorInfo()
 	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc, client, helper)
@@ -203,66 +240,102 @@ func main() {
 		},
 		Scheduler: mesosPodScheduler,
 	}
-	m := kmmaster.New(&kmmaster.Config{
-		Client:             client,
-		Cloud:              &kmscheduler.MesosCloud{mesosPodScheduler},
-		EtcdHelper:         helper,
-		HealthCheckMinions: *healthCheckMinions,
-		MinionCacheTTL:     *minionCacheTTL,
-		EventTTL:           *eventTTL,
-		PodInfoGetter:      podInfoGetter,
-		PRFactory:          func() pod.Registry { return mesosPodScheduler },
-	})
-	mesosPodScheduler.Init(driver, m.GetManifestFactory())
+	config := &kmmaster.Config{
+		Client:                client,
+		Cloud:                 &kmscheduler.MesosCloud{mesosPodScheduler},
+		EtcdHelper:            helper,
+		HealthCheckMinions:    *healthCheckMinions,
+		EventTTL:              *eventTTL,
+		KubeletClient:         kubeletClient,
+		PortalNet:             &n,
+		EnableLogsSupport:     *enableLogsSupport,
+		EnableUISupport:       true,
+		APIPrefix:             *apiPrefix,
+		CorsAllowedOriginList: corsAllowedOriginList,
+		TokenAuthFile:         *tokenAuthFile,
+		ReadOnlyPort:          *readOnlyPort,
+		ReadWritePort:         *port,
+		PublicAddress:         *publicAddressOverride,
+		Authorizer:            authorizer,
+		PRFactory:             func() pod.Registry { return mesosPodScheduler },
+	}
+	m := kmmaster.New(config)
+	mesosPodScheduler.Init(driver, m.GetBoundPodFactory())
 
 	driver.Init()
 	defer driver.Destroy()
 	go driver.Start()
 
-	//TODO(jdef): upstream, this runs as a separate process... but not in this distro yet
+	//TODO(jdef): upstream, the scheduler runs as a separate process... but not in this distro yet
 	plugin.New(mesosPodScheduler.NewPluginConfig()).Run()
 
-	log.Fatal(run(m, net.JoinHostPort(address.String(), strconv.Itoa(int(*port)))))
+	log.Fatal(runApiServer(config, m))
 }
 
 // Run begins serving the Kubernetes API. It never returns.
-func run(m *kmmaster.Master, myAddress string) error {
-	mux := http.NewServeMux()
-	apiserver.NewAPIGroup(m.API_v1beta1()).InstallREST(mux, *apiPrefix+"/v1beta1")
-	apiserver.NewAPIGroup(m.API_v1beta2()).InstallREST(mux, *apiPrefix+"/v1beta2")
-	apiserver.InstallSupport(mux)
-	if *enableLogsSupport {
-		apiserver.InstallLogsSupport(mux)
+func runApiServer(config *kmmaster.Config, m *kmmaster.Master) error {
+	// We serve on 3 ports.  See docs/reaching_the_api.md
+	roLocation := ""
+	if *readOnlyPort != 0 {
+		roLocation = net.JoinHostPort(config.PublicAddress, strconv.Itoa(config.ReadOnlyPort))
 	}
-	ui.InstallSupport(mux)
+	secureLocation := ""
+	if *securePort != 0 {
+		secureLocation = net.JoinHostPort(config.PublicAddress, strconv.Itoa(*securePort))
+	}
+	rwLocation := net.JoinHostPort(address.String(), strconv.Itoa(int(*port)))
 
-	handler := http.Handler(mux)
+	// See the flag commentary to understand our assumptions when opening the read-only and read-write ports.
 
-	if len(corsAllowedOriginList) > 0 {
-		allowedOriginRegexps, err := util.CompileRegexps(corsAllowedOriginList)
-		if err != nil {
-			log.Fatalf("Invalid CORS allowed origin, --cors_allowed_origins flag was set to %v - %v", strings.Join(corsAllowedOriginList, ","), err)
+	if roLocation != "" {
+		// Allow 1 read-only request per second, allow up to 20 in a burst before enforcing.
+		rl := util.NewTokenBucketRateLimiter(1.0, 20)
+		readOnlyServer := &http.Server{
+			Addr:           roLocation,
+			Handler:        apiserver.RecoverPanics(apiserver.ReadOnly(apiserver.RateLimit(rl, m.InsecureHandler))),
+			ReadTimeout:    5 * time.Minute,
+			WriteTimeout:   5 * time.Minute,
+			MaxHeaderBytes: 1 << 20,
 		}
-		handler = apiserver.CORS(handler, allowedOriginRegexps, nil, nil, "true")
+		log.Infof("Serving read-only insecurely on %s", roLocation)
+		go func() {
+			defer util.HandleCrash()
+			for {
+				if err := readOnlyServer.ListenAndServe(); err != nil {
+					log.Errorf("Unable to listen for read only traffic (%v); will try again.", err)
+				}
+				time.Sleep(15 * time.Second)
+			}
+		}()
 	}
 
-	if len(*tokenAuthFile) != 0 {
-		auth, err := tokenfile.New(*tokenAuthFile)
-		if err != nil {
-			log.Fatalf("Unable to load the token authentication file '%s': %v", *tokenAuthFile, err)
+	if secureLocation != "" {
+		secureServer := &http.Server{
+			Addr:           secureLocation,
+			Handler:        apiserver.RecoverPanics(m.Handler),
+			ReadTimeout:    5 * time.Minute,
+			WriteTimeout:   5 * time.Minute,
+			MaxHeaderBytes: 1 << 20,
 		}
-		userContexts := handlers.NewUserRequestContext()
-		handler = handlers.NewRequestAuthenticator(userContexts, bearertoken.New(auth), handlers.Unauthorized, handler)
+		log.Infof("Serving securely on %s", secureLocation)
+		go func() {
+			defer util.HandleCrash()
+			for {
+				if err := secureServer.ListenAndServeTLS(*tlsCertFile, *tlsPrivateKeyFile); err != nil {
+					log.Errorf("Unable to listen for secure (%v); will try again.", err)
+				}
+				time.Sleep(15 * time.Second)
+			}
+		}()
 	}
-
-	handler = apiserver.RecoverPanics(handler)
 
 	s := &http.Server{
-		Addr:           myAddress,
-		Handler:        handler,
-		ReadTimeout:    httpReadTimeout,
-		WriteTimeout:   httpWriteTimeout,
+		Addr:           rwLocation,
+		Handler:        apiserver.RecoverPanics(m.InsecureHandler),
+		ReadTimeout:    5 * time.Minute,
+		WriteTimeout:   5 * time.Minute,
 		MaxHeaderBytes: 1 << 20,
 	}
+	log.Infof("Serving insecurely on %s", rwLocation)
 	return s.ListenAndServe()
 }

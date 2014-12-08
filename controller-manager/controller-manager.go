@@ -33,7 +33,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/controller"
 	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
-	masterPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/master"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	kendpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
@@ -43,10 +43,10 @@ import (
 )
 
 var (
-	port                 = flag.Int("port", masterPkg.ControllerManagerPort, "The port that the controller-manager's http service runs on")
+	port                 = flag.Int("port", ports.ControllerManagerPort, "The port that the controller-manager's http service runs on")
 	address              = util.IP(net.ParseIP("127.0.0.1"))
-	useHostPortEndpoints = flag.Bool("host_port_endpoints", true, "Map service endpoints to hostIP:hostPort instead of podIP:containerPort. Default true.")
 	clientConfig         = &client.Config{}
+	useHostPortEndpoints = flag.Bool("host_port_endpoints", true, "Map service endpoints to hostIP:hostPort instead of podIP:containerPort. Default true.")
 )
 
 func init() {

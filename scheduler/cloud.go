@@ -33,6 +33,13 @@ func (c *MesosCloud) Zones() (cloud.Zones, bool) {
 	return nil, false
 }
 
+// implementation of cloud.Interface; Mesos does not provide support for multiple clusters
+func (c *MesosCloud) Clusters() (cloud.Clusters, bool) {
+	//TODO(jdef): we could probably implement this and always return a
+	//single cluster- this one.
+	return nil, false
+}
+
 // implementation of cloud.Instances.
 // IPAddress returns an IP address of the specified instance.
 func (c *MesosCloud) IPAddress(name string) (net.IP, error) {

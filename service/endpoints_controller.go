@@ -48,16 +48,20 @@ func NewEndpointController(client *client.Client) EndpointController {
 
 // SyncServiceEndpoints syncs service endpoints.
 func (e *endpointController) SyncServiceEndpoints() error {
-	ctx := api.NewContext()
-	services, err := e.client.ListServices(ctx, labels.Everything())
+	services, err := e.client.Services(api.NamespaceAll).List(labels.Everything())
 	if err != nil {
 		glog.Errorf("Failed to list services: %v", err)
 		return err
 	}
 	var resultErr error
 	for _, service := range services.Items {
-		nsCtx := api.WithNamespace(ctx, service.Namespace)
-		pods, err := e.client.ListPods(nsCtx, labels.Set(service.Selector).AsSelector())
+		if service.Name == "kubernetes" || service.Name == "kubernetes-ro" {
+			// HACK(k8s): This is a temporary hack for supporting the master services
+			// until we actually start running apiserver in a pod.
+			continue
+		}
+		glog.Infof("About to update endpoints for service %v", service.Name)
+		pods, err := e.client.Pods(service.Namespace).List(labels.Set(service.Spec.Selector).AsSelector())
 		if err != nil {
 			glog.Errorf("Error syncing service: %#v, skipping.", service)
 			resultErr = err
@@ -66,7 +70,7 @@ func (e *endpointController) SyncServiceEndpoints() error {
 		endpoints := []string{}
 		for _, pod := range pods.Items {
 			// HACK(jdef): looks up a HostPort in the container, either by port-name or matching HostPort
-			port, err := findPort(&pod.DesiredState.Manifest, service.ContainerPort)
+			port, err := findPort(&pod.DesiredState.Manifest, service.Spec.ContainerPort)
 			if err != nil {
 				glog.Errorf("Failed to find port for service: %v, %v", service, err)
 				continue
@@ -78,13 +82,12 @@ func (e *endpointController) SyncServiceEndpoints() error {
 			}
 			endpoints = append(endpoints, net.JoinHostPort(pod.CurrentState.HostIP, strconv.Itoa(port)))
 		}
-		currentEndpoints, err := e.client.GetEndpoints(nsCtx, service.ID)
+		currentEndpoints, err := e.client.Endpoints(service.Namespace).Get(service.Name)
 		if err != nil {
-			// TODO(k8s) this is brittle as all get out, refactor the client libraries to return a structured error.
 			if errors.IsNotFound(err) {
 				currentEndpoints = &api.Endpoints{
-					TypeMeta: api.TypeMeta{
-						ID: service.ID,
+					ObjectMeta: api.ObjectMeta{
+						Name: service.Name,
 					},
 				}
 			} else {
@@ -98,14 +101,14 @@ func (e *endpointController) SyncServiceEndpoints() error {
 
 		if len(currentEndpoints.ResourceVersion) == 0 {
 			// No previous endpoints, create them
-			_, err = e.client.CreateEndpoints(nsCtx, newEndpoints)
+			_, err = e.client.Endpoints(service.Namespace).Create(newEndpoints)
 		} else {
 			// Pre-existing
 			if endpointsEqual(currentEndpoints, endpoints) {
-				glog.V(2).Infof("endpoints are equal for %s, skipping update", service.ID)
+				glog.V(2).Infof("endpoints are equal for %s, skipping update", service.Name)
 				continue
 			}
-			_, err = e.client.UpdateEndpoints(nsCtx, newEndpoints)
+			_, err = e.client.Endpoints(service.Namespace).Update(newEndpoints)
 		}
 		if err != nil {
 			glog.Errorf("Error updating endpoints: %#v", err)
@@ -142,12 +145,40 @@ func endpointsEqual(e *api.Endpoints, endpoints []string) bool {
 // findPort locates the Host port for the given manifest and portName.
 // HACK(jdef): return the HostPort instead of the ContainerPort for generic mesos compat.
 func findPort(manifest *api.ContainerManifest, portName util.IntOrString) (int, error) {
-	if ((portName.Kind == util.IntstrString && len(portName.StrVal) == 0) ||
-		(portName.Kind == util.IntstrInt && portName.IntVal == 0)) &&
-		len(manifest.Containers[0].Ports) > 0 {
-		return manifest.Containers[0].Ports[0].HostPort, nil
+	firstHostPort := 0
+	if len(manifest.Containers[0].Ports) > 0 {
+		firstHostPort = manifest.Containers[0].Ports[0].HostPort
 	}
-	if portName.Kind == util.IntstrInt {
+
+	switch portName.Kind {
+	case util.IntstrString:
+		if len(portName.StrVal) == 0 {
+			if firstHostPort != 0 {
+				return firstHostPort, nil
+			}
+			break
+		}
+		name := portName.StrVal
+		for _, container := range manifest.Containers {
+			for _, port := range container.Ports {
+				if port.Name == name {
+					return port.HostPort, nil
+				}
+			}
+		}
+		return -1, fmt.Errorf("no suitable port %s for manifest: %s", name, manifest.ID)
+	case util.IntstrInt:
+		if portName.IntVal == 0 {
+			if firstHostPort != 0 {
+				return firstHostPort, nil
+			}
+			break
+		}
+		// HACK(jdef): slightly different semantics from upstream here:
+		// we ensure that if the user spec'd a port in the service that
+		// it actually maps to a host-port declared in the pod. upstream
+		// doesn't check this and happily returns the port spec'd in the
+		// service.
 		p := portName.IntVal
 		for _, container := range manifest.Containers {
 			for _, port := range container.Ports {
@@ -156,15 +187,8 @@ func findPort(manifest *api.ContainerManifest, portName util.IntOrString) (int, 
 				}
 			}
 		}
-		return -1, fmt.Errorf("no suitable port for manifest: %s", manifest.ID)
+		return -1, fmt.Errorf("no suitable port %d for manifest: %s", p, manifest.ID)
 	}
-	name := portName.StrVal
-	for _, container := range manifest.Containers {
-		for _, port := range container.Ports {
-			if port.Name == name {
-				return port.HostPort, nil
-			}
-		}
-	}
+	// should never get this far..
 	return -1, fmt.Errorf("no suitable port for manifest: %s", manifest.ID)
 }

@@ -22,6 +22,10 @@ func (r *CloudRegistry) CreateMinion(api.Context, *api.Minion) error {
 	return fmt.Errorf("unsupported")
 }
 
+func (r *CloudRegistry) UpdateMinion(api.Context, *api.Minion) error {
+	return fmt.Errorf("unsupported")
+}
+
 func (r *CloudRegistry) GetMinion(ctx api.Context, minionId string) (*api.Minion, error) {
 	instances, ok := r.cloud.Instances()
 	if !ok {
@@ -53,10 +57,11 @@ func (r *CloudRegistry) ListMinions(ctx api.Context) (*api.MinionList, error) {
 	for _, m := range hostnames {
 		minions = append(minions, *(toApiMinion(ctx, m)))
 	}
-	ns, _ := api.NamespaceFrom(ctx)
 	return &api.MinionList{
-		TypeMeta: api.TypeMeta{Kind: "minionList", Namespace: ns},
-		Items:    minions,
+		TypeMeta: api.TypeMeta{
+			Kind: "minionList",
+		},
+		Items: minions,
 	}, nil
 }
 
@@ -64,8 +69,10 @@ func toApiMinion(ctx api.Context, hostname string) *api.Minion {
 	ns, _ := api.NamespaceFrom(ctx)
 	return &api.Minion{
 		TypeMeta: api.TypeMeta{
-			ID:        hostname,
-			Kind:      "minion",
+			Kind: "minion",
+		},
+		ObjectMeta: api.ObjectMeta{
+			Name:      hostname,
 			Namespace: ns,
 		},
 		HostIP: hostname,
