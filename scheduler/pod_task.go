@@ -247,7 +247,7 @@ func (t *PodTask) UpdateDesiredState(manifest *api.ContainerManifest) error {
 	// port assignments just in case this task is re-scheduled later and
 	// we need access to the original manifest
 
-	// TODO(jdef): will this confuse some recification loop that wants to
+	// TODO(jdef): will this confuse some rectification loop that wants to
 	// ensure that desired state == running state?
 
 	if len(t.ports) > 0 {
