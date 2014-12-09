@@ -486,7 +486,7 @@ func (k *KubernetesScheduler) yield() *api.Pod {
 	// blocking...
 	pod := k.podQueue.Pop().(*api.Pod)
 
-	// HACK(jdef): refresh the pod data via the client, updates things like selflink that 
+	// HACK(jdef): refresh the pod data via the client, updates things like selflink that
 	// the upstream scheduling controller expects to have. Will not need this once we divorce
 	// scheduling from the apiserver (soon I hope)
 	pod, err := k.client.Pods(pod.Namespace).Get(pod.Name)

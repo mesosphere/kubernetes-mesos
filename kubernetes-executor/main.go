@@ -294,7 +294,7 @@ func runProxyService() {
 		args = append(args, "-etcd_config="+*etcdConfigFile)
 	}
 	//TODO(jdef): don't hardcode name of the proxy executable here
-	cmd := exec.Command("./proxy", args...)
+	cmd := exec.Command("./kube-proxy", args...)
 	_, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Fatal(err)
