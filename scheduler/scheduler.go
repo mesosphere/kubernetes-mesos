@@ -529,10 +529,19 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 		backoff.wait(podKey, offersAvailable)
 
 		// Get the pod again; it may have changed/been scheduled already.
-		pod = &api.Pod{}
-		err = k.client.Get().Namespace(pod.Namespace).Path("pods").Path(pod.Name).Do().Into(pod)
+		//pod = &api.Pod{}
+		//err = k.client.Get().Namespace(pod.Namespace).Path("pods").Path(pod.Name).Do().Into(pod)
+		pod, err = k.client.Pods(pod.Namespace).Get(pod.Name)
 		if err != nil {
-			log.Infof("Failed to get pod %v for retry: %v; abandoning", podKey, err)
+			log.Warningf("Failed to get pod %v for retry: %v; abandoning", podKey, err)
+
+			// avoid potential pod leak..
+			k.Lock()
+			defer k.Unlock()
+			if taskId, exists := k.podToTask[podKey]; exists {
+				delete(k.pendingTasks, taskId)
+			}
+			delete(k.podToTask, podKey)
 			return
 		}
 		if pod.DesiredState.Host == "" {
