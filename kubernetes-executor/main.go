@@ -181,10 +181,14 @@ func main() {
 
 	// TODO(???): Destroy existing k8s containers for now - we don't know how to reconcile yet.
 	if containers, err := dockertools.GetKubeletDockerContainers(dockerClient, true); err == nil {
+		opts := docker.RemoveContainerOptions{
+			RemoveVolumes: true,
+			Force:         true,
+		}
 		for _, container := range containers {
-			id := container.ID
-			log.V(2).Infof("Removing container: %v", id)
-			if err := dockerClient.RemoveContainer(docker.RemoveContainerOptions{ID: id, RemoveVolumes: true}); err != nil {
+			opts.ID = container.ID
+			log.V(2).Infof("Removing container: %v", opts.ID)
+			if err := dockerClient.RemoveContainer(opts); err != nil {
 				log.Warning(err)
 			}
 		}
