@@ -21,7 +21,6 @@ import (
 	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
-	"gopkg.in/v1/yaml"
 )
 
 const (
@@ -703,13 +702,7 @@ func (k *KubernetesScheduler) prepareTaskForLaunch(machine string, task *PodTask
 	// pod containers will use for service discovery. the kubelet-executor uses this
 	// manifest to instantiate the pods and this is the last update we make before
 	// firing up the pod.
-	task.Pod.DesiredState.Manifest = manifest
-	task.TaskInfo.Data, err = yaml.Marshal(&manifest)
-	if err != nil {
-		log.V(2).Infof("Failed to marshal the updated manifest")
-		return err
-	}
-	return nil
+	return task.UpdateDesiredState(&manifest)
 }
 
 // Update an existing pod.
