@@ -190,7 +190,7 @@
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/mesos",
-			"Rev": "9c6a968b270c50e35f99d6cf649a18521b76c18a"
+			"Rev": "3bf3f3e448da25618ff5b5300b0b706f5ae4b4e1"
 		},
 		{
 			"ImportPath": "github.com/skratchdot/open-golang/open",

@@ -21,8 +21,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
+	"os/user"
 	"strconv"
 	"strings"
 	"time"
@@ -67,6 +69,10 @@ var (
 	mesosMaster           = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master. Default localhost:5050.")
 	executorPath          = flag.String("executor_path", "", "Location of the kubernetes executor executable")
 	proxyPath             = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
+	mesosUser             = flag.String("mesos_user", "", "Mesos user for this framework, defaults to the username that owns the framework process.")
+	mesosRole             = flag.String("mesos_role", "", "Mesos role for this framework, defaults to none.")
+	mesosAuthPrincipal    = flag.String("mesos_authentication_principal", "", "Mesos authentication principal.")
+	mesosAuthSecretFile   = flag.String("mesos_authentication_secret_file", "", "Mesos authentication secret file.")
 )
 
 const (
@@ -195,13 +201,15 @@ func main() {
 	// Create mesos scheduler driver.
 	executor := prepareExecutorInfo()
 	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc, client, helper)
+	info, cred, err := buildFrameworkInfo()
+	if err != nil {
+		log.Fatalf("Misconfigured mesos framework: %v", err)
+	}
 	driver := &mesos.MesosSchedulerDriver{
-		Master: *mesosMaster,
-		Framework: mesos.FrameworkInfo{
-			Name: proto.String("KubernetesScheduler"),
-			User: proto.String("root"),
-		},
+		Master:    *mesosMaster,
+		Framework: *info,
 		Scheduler: mesosPodScheduler,
+		Cred:      cred,
 	}
 	m := kmmaster.New(&kmmaster.Config{
 		Client:             client,
@@ -217,7 +225,21 @@ func main() {
 
 	driver.Init()
 	defer driver.Destroy()
-	go driver.Start()
+
+	go func() {
+		if st, err := driver.Start(); err == nil {
+			if st != mesos.Status_DRIVER_RUNNING {
+				log.Fatalf("Scheduler driver failed to start, has status: %v", st)
+			}
+			if st, err = driver.Join(); err != nil {
+				log.Fatal(err)
+			} else if st != mesos.Status_DRIVER_RUNNING {
+				log.Fatalf("Scheduler driver failed to join, has status: %v", st)
+			}
+		} else {
+			log.Fatalf("Failed to start driver: %v", err)
+		}
+	}()
 
 	//TODO(jdef): upstream, this runs as a separate process... but not in this distro yet
 	plugin.New(mesosPodScheduler.NewPluginConfig()).Run()
@@ -265,4 +287,45 @@ func run(m *kmmaster.Master, myAddress string) error {
 		MaxHeaderBytes: 1 << 20,
 	}
 	return s.ListenAndServe()
+}
+
+func buildFrameworkInfo() (info *mesos.FrameworkInfo, cred *mesos.Credential, err error) {
+
+	username, err := getUsername()
+	if err != nil {
+		return nil, nil, err
+	}
+	log.V(2).Infof("Framework configured with mesos user %v", username)
+	info = &mesos.FrameworkInfo{
+		Name: proto.String("KubernetesScheduler"),
+		User: proto.String(username),
+	}
+	if *mesosRole != "" {
+		info.Role = proto.String(*mesosRole)
+	}
+	if *mesosAuthPrincipal != "" {
+		info.Principal = proto.String(*mesosAuthPrincipal)
+		secret, err := ioutil.ReadFile(*mesosAuthSecretFile)
+		if err != nil {
+			return nil, nil, err
+		}
+		cred = &mesos.Credential{
+			Principal: proto.String(*mesosAuthPrincipal),
+			Secret:    secret,
+		}
+	}
+	return
+}
+
+func getUsername() (username string, err error) {
+	username = *mesosUser
+	if username == "" {
+		if u, err := user.Current(); err == nil {
+			username = u.Username
+			if username == "" {
+				username = "root"
+			}
+		}
+	}
+	return
 }
