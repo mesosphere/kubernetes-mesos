@@ -56,7 +56,8 @@ $ mkdir -p src/github.com/mesosphere/kubernetes-mesos
 $ git clone https://github.com/mesosphere/kubernetes-mesos.git src/github.com/mesosphere/kubernetes-mesos
 $ cd src/github.com/mesosphere/kubernetes-mesos && godep restore
 $ go install github.com/GoogleCloudPlatform/kubernetes/cmd/{proxy,kubecfg}
-$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor,controller-manager}
+$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
+$ go install github.com/mesosphere/kubernetes-mesos/controller-manager
 ```
 
 ### Start the framework
