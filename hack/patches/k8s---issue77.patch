@@ -32,16 +32,6 @@ index f14cb61..a8e99ed 100644
  		// Skip containers that we didn't create to allow users to manually
  		// spin up their own containers if they want.
  		// TODO(dchen1107): Remove the old separator "--" by end of Oct
-@@ -311,6 +320,9 @@ func GetRecentDockerContainersWithNameAndUUID(client DockerInterface, podFullNam
- 		return nil, err
- 	}
- 	for _, dockerContainer := range containers {
-+		if len(dockerContainer.Names) == 0 {
-+			continue
-+		}
- 		dockerPodName, dockerUUID, dockerContainerName, _ := ParseDockerName(dockerContainer.Names[0])
- 		if dockerPodName != podFullName {
- 			continue
 @@ -439,6 +451,9 @@ func GetDockerPodInfo(client DockerInterface, manifest api.PodSpec, podFullName,
  	}
  

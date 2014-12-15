@@ -224,6 +224,11 @@ func main() {
 
 	n := net.IPNet(portalNet)
 
+	authenticator, err := apiserver.NewAuthenticatorFromTokenFile(*tokenAuthFile)
+	if err != nil {
+		log.Fatalf("Invalid Authentication Config: %v", err)
+	}
+
 	authorizer, err := apiserver.NewAuthorizerFromAuthorizationConfig(*authorizationMode, *authorizationPolicyFile)
 	if err != nil {
 		log.Fatalf("Invalid Authorization Config: %v", err)
@@ -252,10 +257,10 @@ func main() {
 		EnableUISupport:       true,
 		APIPrefix:             *apiPrefix,
 		CorsAllowedOriginList: corsAllowedOriginList,
-		TokenAuthFile:         *tokenAuthFile,
 		ReadOnlyPort:          *readOnlyPort,
 		ReadWritePort:         *port,
 		PublicAddress:         *publicAddressOverride,
+		Authenticator:         authenticator,
 		Authorizer:            authorizer,
 		PRFactory:             func() pod.Registry { return mesosPodScheduler },
 	}

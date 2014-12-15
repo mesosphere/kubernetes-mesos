@@ -70,17 +70,17 @@ func (e *endpointController) SyncServiceEndpoints() error {
 		endpoints := []string{}
 		for _, pod := range pods.Items {
 			// HACK(jdef): looks up a HostPort in the container, either by port-name or matching HostPort
-			port, err := findPort(&pod.DesiredState.Manifest, service.Spec.ContainerPort)
+			port, err := findPort(&pod, service.Spec.ContainerPort)
 			if err != nil {
 				glog.Errorf("Failed to find port for service: %v, %v", service, err)
 				continue
 			}
 			// HACK(jdef): use HostIP instead of pod.CurrentState.PodIP for generic mesos compat
-			if len(pod.CurrentState.HostIP) == 0 {
+			if len(pod.Status.HostIP) == 0 {
 				glog.Errorf("Failed to find a host IP for pod: %v", pod)
 				continue
 			}
-			endpoints = append(endpoints, net.JoinHostPort(pod.CurrentState.HostIP, strconv.Itoa(port)))
+			endpoints = append(endpoints, net.JoinHostPort(pod.Status.HostIP, strconv.Itoa(port)))
 		}
 		currentEndpoints, err := e.client.Endpoints(service.Namespace).Get(service.Name)
 		if err != nil {
@@ -91,7 +91,7 @@ func (e *endpointController) SyncServiceEndpoints() error {
 					},
 				}
 			} else {
-				glog.Errorf("Error getting endpoints: %#v", err)
+				glog.Errorf("Error getting endpoints: %v", err)
 				continue
 			}
 		}
@@ -111,7 +111,7 @@ func (e *endpointController) SyncServiceEndpoints() error {
 			_, err = e.client.Endpoints(service.Namespace).Update(newEndpoints)
 		}
 		if err != nil {
-			glog.Errorf("Error updating endpoints: %#v", err)
+			glog.Errorf("Error updating endpoints: %v", err)
 			continue
 		}
 	}
@@ -144,10 +144,10 @@ func endpointsEqual(e *api.Endpoints, endpoints []string) bool {
 
 // findPort locates the Host port for the given manifest and portName.
 // HACK(jdef): return the HostPort instead of the ContainerPort for generic mesos compat.
-func findPort(manifest *api.ContainerManifest, portName util.IntOrString) (int, error) {
+func findPort(pod *api.Pod, portName util.IntOrString) (int, error) {
 	firstHostPort := 0
-	if len(manifest.Containers[0].Ports) > 0 {
-		firstHostPort = manifest.Containers[0].Ports[0].HostPort
+	if len(pod.Spec.Containers) > 0 && len(pod.Spec.Containers[0].Ports) > 0 {
+		firstHostPort = pod.Spec.Containers[0].Ports[0].HostPort
 	}
 
 	switch portName.Kind {
@@ -159,14 +159,14 @@ func findPort(manifest *api.ContainerManifest, portName util.IntOrString) (int, 
 			break
 		}
 		name := portName.StrVal
-		for _, container := range manifest.Containers {
+		for _, container := range pod.Spec.Containers {
 			for _, port := range container.Ports {
 				if port.Name == name {
 					return port.HostPort, nil
 				}
 			}
 		}
-		return -1, fmt.Errorf("no suitable port %s for manifest: %s", name, manifest.ID)
+		return -1, fmt.Errorf("no suitable port %s for manifest: %s", name, pod.UID)
 	case util.IntstrInt:
 		if portName.IntVal == 0 {
 			if firstHostPort != 0 {
@@ -180,15 +180,15 @@ func findPort(manifest *api.ContainerManifest, portName util.IntOrString) (int, 
 		// doesn't check this and happily returns the port spec'd in the
 		// service.
 		p := portName.IntVal
-		for _, container := range manifest.Containers {
+		for _, container := range pod.Spec.Containers {
 			for _, port := range container.Ports {
 				if port.HostPort == p {
 					return p, nil
 				}
 			}
 		}
-		return -1, fmt.Errorf("no suitable port %d for manifest: %s", p, manifest.ID)
+		return -1, fmt.Errorf("no suitable port %d for manifest: %s", p, pod.UID)
 	}
 	// should never get this far..
-	return -1, fmt.Errorf("no suitable port for manifest: %s", manifest.ID)
+	return -1, fmt.Errorf("no suitable port for manifest: %s", pod.UID)
 }

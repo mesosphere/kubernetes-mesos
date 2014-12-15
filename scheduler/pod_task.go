@@ -8,7 +8,6 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
-	"gopkg.in/v1/yaml"
 )
 
 const (
@@ -83,10 +82,6 @@ func (t *PodTask) FillTaskInfo(offer PerishableOffer) error {
 	if ports := rangeResource("ports", t.Ports()); ports != nil {
 		t.TaskInfo.Resources = append(t.TaskInfo.Resources, ports)
 	}
-	var err error
-	if t.TaskInfo.Data, err = yaml.Marshal(&t.Pod.DesiredState.Manifest); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -103,7 +98,7 @@ func (t *PodTask) ClearTaskInfo() {
 
 func (t *PodTask) Ports() []uint64 {
 	ports := make([]uint64, 0)
-	for _, container := range t.Pod.DesiredState.Manifest.Containers {
+	for _, container := range t.Pod.Spec.Containers {
 		// strip all port==0 from this array; k8s already knows what to do with zero-
 		// ports (it does not create 'port bindings' on the minion-host); we need to
 		// remove the wildcards from this array since they don't consume host resources

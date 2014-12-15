@@ -297,27 +297,24 @@ func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 }
 
 func (k *KubernetesScheduler) fillRunningPodInfo(task *PodTask, taskStatus *mesos.TaskStatus) {
-	task.Pod.CurrentState.Status = task.Pod.DesiredState.Status
-	task.Pod.CurrentState.Manifest = task.Pod.DesiredState.Manifest
-	task.Pod.CurrentState.Host = task.Pod.DesiredState.Host
-
+	task.Pod.Status.Phase = api.PodRunning
 	if taskStatus.Data != nil {
-		var target api.PodInfo
-		err := json.Unmarshal(taskStatus.Data, &target)
+		var info api.PodInfo
+		err := json.Unmarshal(taskStatus.Data, &info)
 		if err == nil {
-			task.Pod.CurrentState.Info = target
+			task.Pod.Status.Info = info
 			/// TODO(jdef) this is problematic using default Docker networking on a default
 			/// Docker bridge -- meaning that pod IP's are not routable across the
 			/// k8s-mesos cluster. For now, I've duplicated logic from k8s fillPodInfo
-			netContainerInfo, ok := target["net"] // docker.Container
+			netContainerInfo, ok := info["net"] // docker.Container
 			if ok {
 				if netContainerInfo.PodIP != "" {
-					task.Pod.CurrentState.PodIP = netContainerInfo.PodIP
+					task.Pod.Status.PodIP = netContainerInfo.PodIP
 				} else {
 					log.Warningf("No network settings: %#v", netContainerInfo)
 				}
 			} else {
-				log.Warningf("Couldn't find network container for %s in %v", task.podKey, target)
+				log.Warningf("Couldn't find network container for %s in %v", task.podKey, info)
 			}
 		} else {
 			log.Errorf("Invalid TaskStatus.Data for task '%v': %v", task.ID, err)
@@ -535,7 +532,7 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 			log.Infof("Failed to get pod %v for retry: %v; abandoning", podKey, err)
 			return
 		}
-		if pod.DesiredState.Host == "" {
+		if pod.Status.Host == "" {
 			// ensure that the pod hasn't been deleted while we were trying to schedule it
 			k.Lock()
 			defer k.Unlock()
@@ -649,12 +646,8 @@ func (k *KubernetesScheduler) GetPod(ctx api.Context, id string) (*api.Pod, erro
 // instead the pod is queued for scheduling.
 func (k *KubernetesScheduler) CreatePod(ctx api.Context, pod *api.Pod) error {
 	log.V(2).Infof("Create pod: '%v'\n", pod)
-	// Set current status to "Waiting".
-	pod.CurrentState.Status = api.PodPending
-	pod.CurrentState.Host = ""
-	// DesiredState.Host == "" is a signal to the scheduler that this pod needs scheduling.
-	pod.DesiredState.Status = api.PodRunning
-	pod.DesiredState.Host = ""
+	pod.Status.Phase = api.PodPending
+	pod.Status.Host = ""
 
 	// TODO(jdef) should we make a copy of the pod object instead of just assuming that the caller is
 	// well behaved and will not change the state of the object it has given to us?
@@ -728,7 +721,7 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 		if err = k.driver.LaunchTasks(task.Offer.Details().Id, taskList, nil); err == nil {
 			// we *intentionally* do not record our binding to etcd since we're not using bindings
 			// to manage pod lifecycle
-			task.Pod.DesiredState.Host = binding.Host
+			task.Pod.Status.Host = binding.Host
 			task.Launched = true
 			k.offers.Invalidate(offerId)
 			return nil
@@ -812,7 +805,7 @@ func (k *KubernetesScheduler) DeletePod(ctx api.Context, id string) error {
 		return fmt.Errorf("Cannot kill pod '%s': pod not found", podKey)
 	}
 	// signal to watchers that the related pod is going down
-	task.Pod.DesiredState.Host = ""
+	task.Pod.Status.Host = ""
 	return k.driver.KillTask(killTaskId)
 }
 

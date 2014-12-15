@@ -75,6 +75,8 @@ func toApiMinion(ctx api.Context, hostname string) *api.Minion {
 			Name:      hostname,
 			Namespace: ns,
 		},
-		HostIP: hostname,
+		Status: api.NodeStatus{
+			HostIP: hostname,
+		},
 	}
 }
