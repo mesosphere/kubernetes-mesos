@@ -113,7 +113,7 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 		mesosTaskInfo: taskInfo,
 		podName:       podFullName,
 	}
-	k.pods[pod.Name] = &pod
+	k.pods[podFullName] = &pod
 
 	getPidInfo := func(name string) (api.PodInfo, error) {
 		return k.kl.GetPodInfo(name, "")

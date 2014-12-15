@@ -21,6 +21,7 @@ import (
 	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	kconfig "github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/config"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
@@ -179,21 +180,20 @@ func main() {
 	}
 
 	// TODO(???): Destroy existing k8s containers for now - we don't know how to reconcile yet.
-	containers, err := dockerClient.ListContainers(docker.ListContainersOptions{All: true})
-	if err == nil {
-		for _, container := range containers {
-			log.V(2).Infof("Existing container: %v", container.Names)
-
-			for _, containerName := range container.Names {
-				if strings.HasPrefix(containerName, "/k8s--") {
-					id := container.ID
-					log.V(2).Infof("Removing container: %v", id)
-					err = dockerClient.RemoveContainer(docker.RemoveContainerOptions{ID: id, RemoveVolumes: true})
-					continue
-				}
-			}
-
+	if containers, err := dockertools.GetKubeletDockerContainers(dockerClient, true); err == nil {
+		opts := docker.RemoveContainerOptions{
+			RemoveVolumes: true,
+			Force:         true,
 		}
+		for _, container := range containers {
+			opts.ID = container.ID
+			log.V(2).Infof("Removing container: %v", opts.ID)
+			if err := dockerClient.RemoveContainer(opts); err != nil {
+				log.Warning(err)
+			}
+		}
+	} else {
+		log.Warningf("Failed to list kubelet docker containers: %v", err)
 	}
 
 	// TODO(k8s): block until all sources have delivered at least one update to the channel, or break the sync loop
@@ -298,7 +298,7 @@ func runProxyService() {
 		args = append(args, "-etcd_config="+*etcdConfigFile)
 	}
 	//TODO(jdef): don't hardcode name of the proxy executable here
-	cmd := exec.Command("./proxy", args...)
+	cmd := exec.Command("./kube-proxy", args...)
 	_, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Fatal(err)
