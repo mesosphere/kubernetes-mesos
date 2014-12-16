@@ -55,12 +55,17 @@ $ cd $GOPATH # If you don't have one, create directory and set GOPATH accordingl
 $ mkdir -p src/github.com/mesosphere/kubernetes-mesos
 $ git clone https://github.com/mesosphere/kubernetes-mesos.git src/github.com/mesosphere/kubernetes-mesos
 $ cd src/github.com/mesosphere/kubernetes-mesos && godep restore
-$ go install github.com/GoogleCloudPlatform/kubernetes/cmd/{proxy,kubecfg}
+$ go install github.com/GoogleCloudPlatform/kubernetes/cmd/{kube-proxy,kubecfg,kubectl}
 $ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 $ go install github.com/mesosphere/kubernetes-mesos/controller-manager
 ```
 
 ### Start the framework
+
+**NETWORKING:** Kubernetes v0.5 introduced "Services v2" which follows a Service-per-IP model.
+A consequence of this is that you must identify CIDR subnet to the Kubernetes-Mesos master that may be used for allocating IP addresses for Kubernetes services (the `-portal_net` parameter).
+The value provided in the example below is purely for illustration and may need to be adjusted for your network.
+See the Kubernetes [release notes](https://github.com/GoogleCloudPlatform/kubernetes/releases/tag/v0.5) for additional details regarding the new Services model.
 
 The examples that follow assume that you are running the mesos-master, etcd, and the kubernetes-mesos framework on the same host, exposed on an IP address referred to hereafter as `${servicehost}`.
 If you are not running in a production setting then a single etcd instance will suffice.
@@ -84,7 +89,8 @@ $ ./bin/kubernetes-mesos \
   -mesos_master=${servicehost}:5050 \
   -etcd_servers=http://${servicehost}:4001 \
   -executor_path=$(pwd)/bin/kubernetes-executor \
-  -proxy_path=$(pwd)/bin/proxy
+  -proxy_path=$(pwd)/bin/kube-proxy \
+  -portal_net=10.10.10.0/24
 ```
 
 For simpler execution of `kubecfg`:
