@@ -95,7 +95,7 @@ func (k *KubernetesScheduler) prepareTaskForLaunch(ctx api.Context, machine stri
 	for ix, container := range boundPod.Spec.Containers {
 		boundPod.Spec.Containers[ix].Env = append(container.Env, envVars...)
 	}
-	
+
 	// update the boundPod here to pick up things like environment variables that
 	// pod containers will use for service discovery. the kubelet-executor uses this
 	// boundPod to instantiate the pods and this is the last update we make before
