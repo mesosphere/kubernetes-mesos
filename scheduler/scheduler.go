@@ -10,8 +10,6 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
-	kpod "github.com/GoogleCloudPlatform/kubernetes/pkg/registry/pod"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 )
@@ -45,9 +43,6 @@ type KubernetesScheduler struct {
 	// and the invoking the pod registry interfaces.
 	*sync.RWMutex
 
-	// easy access to etcd ops
-	tools.EtcdHelper
-
 	// Mesos context.
 	executor    *mesos.ExecutorInfo
 	driver      mesos.SchedulerDriver
@@ -75,16 +70,13 @@ type KubernetesScheduler struct {
 
 	client   *client.Client
 	podQueue *cache.FIFO
-
-	boundPodFactory kpod.BoundPodFactory
 }
 
 // New create a new KubernetesScheduler
-func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client, helper tools.EtcdHelper) *KubernetesScheduler {
+func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client) *KubernetesScheduler {
 	var k *KubernetesScheduler
 	k = &KubernetesScheduler{
 		RWMutex:    new(sync.RWMutex),
-		EtcdHelper: helper,
 		executor:   executor,
 		offers: CreateOfferRegistry(OfferRegistryConfig{
 			declineOffer: func(id string) error {
@@ -122,10 +114,9 @@ func (k *KubernetesScheduler) getTask(taskId string) (*PodTask, stateType) {
 	return nil, stateUnknown
 }
 
-func (k *KubernetesScheduler) Init(d mesos.SchedulerDriver, f kpod.BoundPodFactory) {
+func (k *KubernetesScheduler) Init(d mesos.SchedulerDriver) {
 	k.offers.Init()
 	k.driver = d
-	k.boundPodFactory = f
 }
 
 // Registered is called when the scheduler registered with the master successfully.
