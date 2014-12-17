@@ -11,6 +11,7 @@ KUBE_GO_PACKAGE	?= github.com/GoogleCloudPlatform/kubernetes
 K8S_CMD		:= \
                    ${KUBE_GO_PACKAGE}/cmd/kubecfg		\
                    ${KUBE_GO_PACKAGE}/cmd/kubectl		\
+                   ${KUBE_GO_PACKAGE}/cmd/kube-apiserver	\
                    ${KUBE_GO_PACKAGE}/cmd/kube-proxy
 FRAMEWORK_CMD	:= \
                    github.com/mesosphere/kubernetes-mesos/controller-manager		\

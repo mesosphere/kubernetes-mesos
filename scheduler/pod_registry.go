@@ -1,5 +1,7 @@
 package scheduler
 
+/*
+
 import (
 	"fmt"
 	"strings"
@@ -188,3 +190,5 @@ func (k *KubernetesScheduler) DeletePod(ctx api.Context, id string) error {
 func (k *KubernetesScheduler) WatchPods(ctx api.Context, resourceVersion string, filter func(*api.Pod) bool) (watch.Interface, error) {
 	return nil, nil
 }
+
+*/
