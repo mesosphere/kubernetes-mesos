@@ -148,6 +148,11 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 				continue
 			}
 
+			// avoid sending back a running status while pod networking is down
+			if podnet, ok := info["net"]; !ok || podnet.State.Running == nil {
+				continue
+			}
+
 			log.V(2).Infof("Found pod info: '%v'", info)
 			data, err := json.Marshal(info)
 
