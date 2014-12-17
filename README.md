@@ -62,10 +62,10 @@ $ go install github.com/mesosphere/kubernetes-mesos/controller-manager
 
 ### Start the framework
 
-**NETWORKING:** Kubernetes v0.5 introduced "Services v2" which follows a Service-per-IP model.
-A consequence of this is that you must identify CIDR subnet to the Kubernetes-Mesos master that may be used for allocating IP addresses for Kubernetes services (the `-portal_net` parameter).
-The value provided in the example below is purely for illustration and may need to be adjusted for your network.
-See the Kubernetes [release notes](https://github.com/GoogleCloudPlatform/kubernetes/releases/tag/v0.5) for additional details regarding the new Services model.
+**NETWORKING:** Kubernetes v0.5 introduced "Services v2" which follows an IP-per-Service model.
+A consequence of this is that you must provide the Kubernetes-Mesos framework with a [CIDR][8] subnet that will be used for the allocation of IP addresses for Kubernetes services: the `-portal_net` parameter.
+Please keep this in mind when reviewing (and attempting) the example below - the CIDR subnet may need to be adjusted for your network.
+See the Kubernetes [release notes][9] for additional details regarding the new services model.
 
 The examples that follow assume that you are running the mesos-master, etcd, and the kubernetes-mesos framework on the same host, exposed on an IP address referred to hereafter as `${servicehost}`.
 If you are not running in a production setting then a single etcd instance will suffice.
@@ -378,3 +378,5 @@ $ go test github.com/mesosphere/kubernetes-mesos/kubernetes-mesos -v
 [5]: https://github.com/tools/godep
 [6]: https://github.com/coreos/etcd/releases/
 [7]: DEVELOP.md#prerequisites
+[8]: http://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing
+[9]: https://github.com/GoogleCloudPlatform/kubernetes/releases/tag/v0.5
