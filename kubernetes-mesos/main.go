@@ -86,13 +86,13 @@ var (
 		Port:        10250,
 		EnableHttps: false,
 	}
-	mesosMaster  = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master. Default localhost:5050.")
-	executorPath = flag.String("executor_path", "", "Location of the kubernetes executor executable")
-	proxyPath    = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
-	mesosUser             = flag.String("mesos_user", "", "Mesos user for this framework, defaults to the username that owns the framework process.")
-	mesosRole             = flag.String("mesos_role", "", "Mesos role for this framework, defaults to none.")
-	mesosAuthPrincipal    = flag.String("mesos_authentication_principal", "", "Mesos authentication principal.")
-	mesosAuthSecretFile   = flag.String("mesos_authentication_secret_file", "", "Mesos authentication secret file.")
+	mesosMaster         = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master. Default localhost:5050.")
+	executorPath        = flag.String("executor_path", "", "Location of the kubernetes executor executable")
+	proxyPath           = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
+	mesosUser           = flag.String("mesos_user", "", "Mesos user for this framework, defaults to the username that owns the framework process.")
+	mesosRole           = flag.String("mesos_role", "", "Mesos role for this framework, defaults to none.")
+	mesosAuthPrincipal  = flag.String("mesos_authentication_principal", "", "Mesos authentication principal.")
+	mesosAuthSecretFile = flag.String("mesos_authentication_secret_file", "", "Mesos authentication secret file.")
 )
 
 const (
