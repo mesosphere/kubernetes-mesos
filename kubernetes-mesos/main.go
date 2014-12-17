@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"os/user"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,6 +48,7 @@ var (
 	etcdServerList      util.StringList
 	etcdConfigFile      = flag.String("etcd_config", "", "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
 	clientConfig        = &client.Config{}
+	allowPrivileged     = flag.Bool("allow_privileged", false, "If true, allow privileged containers. Default false.")
 	mesosMaster         = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master. Default localhost:5050.")
 	executorPath        = flag.String("executor_path", "", "Location of the kubernetes executor executable")
 	proxyPath           = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
@@ -179,6 +181,7 @@ func main() {
 		}
 	}()
 
+	go http.ListenAndServe(net.JoinHostPort(address.String(), strconv.Itoa(*port)), nil)
 	plugin.New(mesosPodScheduler.NewPluginConfig()).Run()
 
 	select {}
