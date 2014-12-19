@@ -486,9 +486,11 @@ func (k *KubernetesScheduler) yield() *api.Pod {
 	// HACK(jdef): refresh the pod data via the client, updates things like selflink that
 	// the upstream scheduling controller expects to have. Will not need this once we divorce
 	// scheduling from the apiserver (soon I hope)
-	pod, err := k.client.Pods(pod.Namespace).Get(pod.Name)
+	updatedPod, err := k.client.Pods(pod.Namespace).Get(pod.Name)
 	if err != nil {
 		log.Warningf("Failed to refresh pod %v, attempting to continue: %v", pod.Name, err)
+	} else {
+		pod = updatedPod
 	}
 
 	log.V(2).Infof("About to try and schedule pod %v\n", pod.Name)
