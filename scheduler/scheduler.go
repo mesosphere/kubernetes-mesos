@@ -76,8 +76,8 @@ type KubernetesScheduler struct {
 func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client) *KubernetesScheduler {
 	var k *KubernetesScheduler
 	k = &KubernetesScheduler{
-		RWMutex:    new(sync.RWMutex),
-		executor:   executor,
+		RWMutex:  new(sync.RWMutex),
+		executor: executor,
 		offers: CreateOfferRegistry(OfferRegistryConfig{
 			declineOffer: func(id string) error {
 				offerId := &mesos.OfferID{Value: proto.String(id)}
