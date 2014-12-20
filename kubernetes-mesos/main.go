@@ -42,11 +42,11 @@ import (
 )
 
 var (
-	port = flag.Int("port", ports.SchedulerPort, "The port that the scheduler's http service runs on")
-	address               = util.IP(net.ParseIP("127.0.0.1"))
-        etcdServerList          util.StringList
-        etcdConfigFile          = flag.String("etcd_config", "", "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
-	clientConfig = &client.Config{}
+	port                = flag.Int("port", ports.SchedulerPort, "The port that the scheduler's http service runs on")
+	address             = util.IP(net.ParseIP("127.0.0.1"))
+	etcdServerList      util.StringList
+	etcdConfigFile      = flag.String("etcd_config", "", "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
+	clientConfig        = &client.Config{}
 	mesosMaster         = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master. Default localhost:5050.")
 	executorPath        = flag.String("executor_path", "", "Location of the kubernetes executor executable")
 	proxyPath           = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")

@@ -20,7 +20,6 @@ FRAMEWORK_CMD	:= \
 FRAMEWORK_LIB	:= \
 		   github.com/mesosphere/kubernetes-mesos/scheduler	\
 		   github.com/mesosphere/kubernetes-mesos/service	\
-		   github.com/mesosphere/kubernetes-mesos/master	\
 		   github.com/mesosphere/kubernetes-mesos/executor	\
 		   github.com/mesosphere/kubernetes-mesos/queue
 
