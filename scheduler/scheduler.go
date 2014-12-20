@@ -45,6 +45,14 @@ var (
 	noSuitableOffersErr = errors.New("No suitable offers for pod/task")
 )
 
+type NoSuchTaskForPod struct {
+	podKey string
+}
+
+func (err *NoSuchTaskForPod) Error() string {
+	return fmt.Sprintf("Pod %s cannot be resolved to a task", err.podKey)
+}
+
 // PodScheduleFunc implements how to schedule pods among slaves.
 // We can have different implementation for different scheduling policy.
 //
@@ -449,7 +457,7 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionListe
 	defer k.Unlock()
 
 	if taskID, ok := k.podToTask[podKey]; !ok {
-		return "", fmt.Errorf("Pod %s cannot be resolved to a task", podKey)
+		return "", &NoSuchTaskForPod{podKey}
 	} else {
 		if task, found := k.pendingTasks[taskID]; !found {
 			return "", fmt.Errorf("Task %s is not pending, nothing to schedule", taskID)
@@ -499,6 +507,11 @@ func (k *KubernetesScheduler) yield() *api.Pod {
 
 // implementation of scheduling plugin's Error func; see plugin/pkg/scheduler
 func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *api.Pod, err error) {
+
+	if nst, ok := err.(*NoSuchTaskForPod); ok {
+		log.V(2).Infof("Not rescheduling pod %v since it has no mapped task", nst.podKey)
+		return
+	}
 	log.Infof("Error scheduling %v: %v; retrying", pod.Name, err)
 	backoff.gc()
 
@@ -640,7 +653,7 @@ func (k *KubernetesScheduler) GetPod(ctx api.Context, id string) (*api.Pod, erro
 
 	taskId, exists := k.podToTask[podKey]
 	if !exists {
-		return nil, fmt.Errorf("Could not resolve pod '%s' to task id", podKey)
+		return nil, &NoSuchTaskForPod{podKey}
 	}
 
 	switch task, state := k.getTask(taskId); state {
@@ -797,7 +810,7 @@ func (k *KubernetesScheduler) DeletePod(ctx api.Context, id string) error {
 
 	taskId, exists := k.podToTask[podKey]
 	if !exists {
-		return fmt.Errorf("Could not resolve pod '%s' to task id", podKey)
+		return &NoSuchTaskForPod{podKey}
 	}
 
 	// determine if the task has already been launched to mesos, if not then
