@@ -67,10 +67,9 @@ func dead(msg *Entry) {
 // processed once, and when it is processed, the most recent version will be
 // processed. This can't be done with a channel.
 type HistoricalFIFO struct {
-	lock sync.RWMutex
-	cond sync.Cond
-	// We depend on the property that items in the queue are in the set.
-	history map[string][]*Entry
+	lock    sync.RWMutex
+	cond    sync.Cond
+	history map[string][]*Entry // We depend on the property that items in the queue are in the set.
 	queue   []string
 	carrier pigeon // may be dead, but never nil
 }
@@ -88,8 +87,16 @@ func checkType(obj interface{}) UniqueCopyable {
 // if it doesn't already exist in the set.
 func (f *HistoricalFIFO) Add(id string, v interface{}) {
 	obj := checkType(v)
+	notifications := []*Entry(nil)
+	defer func() {
+		for _, e := range notifications {
+			f.carrier(e)
+		}
+	}()
+
 	f.lock.Lock()
 	defer f.lock.Unlock()
+
 	if entries, exists := f.history[id]; !exists {
 		f.queue = append(f.queue, id)
 	} else {
@@ -98,13 +105,8 @@ func (f *HistoricalFIFO) Add(id string, v interface{}) {
 			f.queue = append(f.queue, id)
 		}
 	}
-	notifications := f.merge(id, obj)
+	notifications = f.merge(id, obj)
 	f.cond.Broadcast()
-	go func() {
-		for _, e := range notifications {
-			f.carrier(e)
-		}
-	}()
 }
 
 // Update is the same as Add in this implementation.
@@ -116,15 +118,19 @@ func (f *HistoricalFIFO) Update(id string, obj interface{}) {
 // this implementation assumes the consumer only cares about the objects,
 // not the order in which they were created/added.
 func (f *HistoricalFIFO) Delete(id string) {
+	deleteEvent := (*Entry)(nil)
+	defer func() {
+		f.carrier(deleteEvent)
+	}()
+
 	f.lock.Lock()
 	defer f.lock.Unlock()
 	entries, exists := f.history[id]
 	if exists {
 		//TODO(jdef): set a timer to expunge the history for this object
 		head := entries[len(entries)-1]
-		e := &Entry{Value: head.Value, Event: DELETE_EVENT}
-		f.history[id] = append(entries, e)
-		go f.carrier(e)
+		deleteEvent = &Entry{Value: head.Value, Event: DELETE_EVENT}
+		f.history[id] = append(entries, deleteEvent)
 	}
 }
 
@@ -180,6 +186,11 @@ func (f *HistoricalFIFO) Get(id string) (interface{}, bool) {
 // The item is removed from the queue (and the store) before it is returned,
 // so if you don't succesfully process it, you need to add it back with Add().
 func (f *HistoricalFIFO) Pop() interface{} {
+	popEvent := (*Entry)(nil)
+	defer func() {
+		f.carrier(popEvent)
+	}()
+
 	f.lock.Lock()
 	defer f.lock.Unlock()
 	for {
@@ -195,9 +206,8 @@ func (f *HistoricalFIFO) Pop() interface{} {
 			continue
 		}
 		value := head.Value
-		e := &Entry{Value: value, Event: POP_EVENT}
-		f.history[id] = append(entries, e)
-		go f.carrier(e)
+		popEvent = &Entry{Value: value, Event: POP_EVENT}
+		f.history[id] = append(entries, popEvent)
 		return value.Copy()
 	}
 }
@@ -207,10 +217,16 @@ func (f *HistoricalFIFO) Pop() interface{} {
 // after calling this function. f's queue is reset, too; upon return, it
 // will contain the items in the map, in no particular order.
 func (f *HistoricalFIFO) Replace(idToObj map[string]interface{}) {
+	notifications := make([]*Entry, 0, len(idToObj))
+	defer func() {
+		for _, e := range notifications {
+			f.carrier(e)
+		}
+	}()
+
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
-	notifications := make([]*Entry, 0, len(idToObj))
 	f.queue = f.queue[:0]
 	for id, v := range idToObj {
 		obj := checkType(v)
@@ -221,11 +237,6 @@ func (f *HistoricalFIFO) Replace(idToObj map[string]interface{}) {
 	if len(f.queue) > 0 {
 		f.cond.Broadcast()
 	}
-	go func() {
-		for _, e := range notifications {
-			f.carrier(e)
-		}
-	}()
 }
 
 // expects that caller has already locked around state
