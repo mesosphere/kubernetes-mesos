@@ -124,19 +124,22 @@ func (k *KubernetesScheduler) getServiceEnvironmentVariables(ctx api.Context) ([
 // It returns the selectedMachine's name and error (if there's any).
 func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (string, error) {
 	log.Infof("Try to schedule pod %v\n", pod.Name)
+	ctx := api.WithNamespace(api.NewDefaultContext(), pod.Namespace)
 
-	// HACK(jdef): infer context from pod namespace. i wonder if this will create
-	// problems down the line. the pod.Registry interface accepts Context so it's a
-	// little strange that the scheduler interface does not. see Bind()
-	ctx := api.NewDefaultContext()
-	if len(pod.Namespace) != 0 {
-		ctx = api.WithNamespace(ctx, pod.Namespace)
-	}
 	// default upstream scheduler passes pod.Name as binding.PodID
 	podKey, err := makePodKey(ctx, pod.Name)
 	if err != nil {
 		return "", err
 	}
+
+	// TODO(jdef): there's a bit of a race here, a pod could have been yielded() but
+	// and then before we get *here* it could be deleted. Unwittingly we'd end up
+	// rescheduling it because there's no way to tell that it had recently been deleted.
+	// Should we implement a lingering/delay-queueish thing here, like we have for offers,
+	// so that we can avoid rescheduling deleted things?
+
+	// TODO(jdef): once we detect the above condition, we'll error out - but we need to
+	// avoid requeueing the pod for scheduling for this particular error
 
 	k.Lock()
 	defer k.Unlock()
@@ -151,6 +154,8 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionListe
 		return k.doSchedule(task)
 	} else {
 		if task, found := k.pendingTasks[taskID]; !found {
+			// TODO(jdef): this is quite exceptional: we should avoid requeueing the pod for
+			// scheduling in the error handler if we see an error like this.
 			return "", fmt.Errorf("Task %s is not pending, nothing to schedule", taskID)
 		} else {
 			return k.doSchedule(task)
