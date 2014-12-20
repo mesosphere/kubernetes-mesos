@@ -16,6 +16,7 @@ package queue
 
 import (
 	"fmt"
+	"reflect"
 	"sync"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
@@ -258,8 +259,9 @@ func (f *HistoricalFIFO) merge(id string, obj UniqueCopyable) (notifications []*
 			e2 := &Entry{Value: obj.Copy().(UniqueCopyable), Event: ADD_EVENT}
 			f.history[id] = append(entries, e1, e2)
 			notifications = append(notifications, e1, e2)
-		} else {
-			// normal update
+		} else if !reflect.DeepEqual(obj, head.Value) {
+			//TODO(jdef): it would be nice if we could rely on resource versions
+			//instead of doing a DeepEqual. Maybe someday we'll be able to.
 			e := &Entry{Value: obj.Copy().(UniqueCopyable), Event: UPDATE_EVENT}
 			f.history[id] = append(entries, e)
 			notifications = append(notifications, e)
