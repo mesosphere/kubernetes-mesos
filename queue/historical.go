@@ -67,6 +67,9 @@ func dead(msg *Entry) {
 // an item is in the queue before it has been processed, it will only be
 // processed once, and when it is processed, the most recent version will be
 // processed. This can't be done with a channel.
+// TODO(jdef): I used to think that I'd need history of state changes recorded
+// in `history` but it's turning out that I really only need to maintain the
+// the current state, so `history` should revert back into `items`
 type HistoricalFIFO struct {
 	lock    sync.RWMutex
 	cond    sync.Cond
@@ -106,13 +109,40 @@ func (f *HistoricalFIFO) Add(id string, v interface{}) {
 			f.queue = append(f.queue, id)
 		}
 	}
-	notifications = f.merge(id, obj)
+	notifications = f.merge(id, obj, nil)
 	f.cond.Broadcast()
 }
 
 // Update is the same as Add in this implementation.
 func (f *HistoricalFIFO) Update(id string, obj interface{}) {
 	f.Add(id, obj)
+}
+
+// Add the item to the store, but only if there exists a prior entry for
+// for the object in the store whose event type matches that given, and then
+// only enqueued if it doesn't already exist in the set.
+func (f *HistoricalFIFO) Readd(id string, v interface{}, t EventType) {
+	obj := checkType(v)
+	notifications := []*Entry(nil)
+	defer func() {
+		for _, e := range notifications {
+			f.carrier(e)
+		}
+	}()
+
+	f.lock.Lock()
+	defer f.lock.Unlock()
+
+	if entries, exists := f.history[id]; exists {
+		head := entries[len(entries)-1]
+		if head.Event != t {
+			return
+		} else if head.Event == DELETE_EVENT || head.Event == POP_EVENT {
+			f.queue = append(f.queue, id)
+		}
+	}
+	notifications = f.merge(id, obj, nil)
+	f.cond.Broadcast()
 }
 
 // Delete removes an item. It doesn't add it to the queue, because
@@ -129,6 +159,8 @@ func (f *HistoricalFIFO) Delete(id string) {
 	entries, exists := f.history[id]
 	if exists {
 		//TODO(jdef): set a timer to expunge the history for this object
+		//or else, simply do garbage collection every n'th merge(), removing
+		//expired DELETE entries
 		head := entries[len(entries)-1]
 		deleteEvent = &Entry{Value: head.Value, Event: DELETE_EVENT}
 		f.history[id] = append(entries, deleteEvent)
@@ -232,7 +264,7 @@ func (f *HistoricalFIFO) Replace(idToObj map[string]interface{}) {
 	for id, v := range idToObj {
 		obj := checkType(v)
 		f.queue = append(f.queue, id)
-		n := f.merge(id, obj)
+		n := f.merge(id, obj, nil)
 		notifications = append(notifications, n...)
 	}
 	if len(f.queue) > 0 {
@@ -240,14 +272,19 @@ func (f *HistoricalFIFO) Replace(idToObj map[string]interface{}) {
 	}
 }
 
+type mergeFilter func(older, newer *Entry) bool
+
 // expects that caller has already locked around state
-func (f *HistoricalFIFO) merge(id string, obj UniqueCopyable) (notifications []*Entry) {
+//TODO(jdef): eliminate the use of mergeFilter if we don't end up needing it
+func (f *HistoricalFIFO) merge(id string, obj UniqueCopyable, accepts mergeFilter) (notifications []*Entry) {
 	entries, exists := f.history[id]
 	if !exists {
 		entries = make([]*Entry, 0, 3)
 		e := &Entry{Value: obj.Copy().(UniqueCopyable), Event: ADD_EVENT}
-		f.history[id] = append(entries, e)
-		notifications = append(notifications, e)
+		if accepts == nil || accepts(nil, e) {
+			f.history[id] = append(entries, e)
+			notifications = append(notifications, e)
+		}
 	} else {
 		head := entries[len(entries)-1]
 		if head.Event != DELETE_EVENT && head.Value.GetUID() != obj.GetUID() {
@@ -257,14 +294,18 @@ func (f *HistoricalFIFO) merge(id string, obj UniqueCopyable) (notifications []*
 			// .. and notify listeners in that order
 			e1 := &Entry{Value: head.Value, Event: DELETE_EVENT}
 			e2 := &Entry{Value: obj.Copy().(UniqueCopyable), Event: ADD_EVENT}
-			f.history[id] = append(entries, e1, e2)
-			notifications = append(notifications, e1, e2)
+			if accepts == nil || accepts(e1, e2) {
+				f.history[id] = append(entries, e1, e2)
+				notifications = append(notifications, e1, e2)
+			}
 		} else if !reflect.DeepEqual(obj, head.Value) {
 			//TODO(jdef): it would be nice if we could rely on resource versions
 			//instead of doing a DeepEqual. Maybe someday we'll be able to.
 			e := &Entry{Value: obj.Copy().(UniqueCopyable), Event: UPDATE_EVENT}
-			f.history[id] = append(entries, e)
-			notifications = append(notifications, e)
+			if accepts == nil || accepts(head, e) {
+				f.history[id] = append(entries, e)
+				notifications = append(notifications, e)
+			}
 		}
 	}
 	return
