@@ -67,13 +67,10 @@ func dead(msg *Entry) {
 // an item is in the queue before it has been processed, it will only be
 // processed once, and when it is processed, the most recent version will be
 // processed. This can't be done with a channel.
-// TODO(jdef): I used to think that I'd need history of state changes recorded
-// in `history` but it's turning out that I really only need to maintain the
-// the current state, so `history` should revert back into `items`
 type HistoricalFIFO struct {
 	lock    sync.RWMutex
 	cond    sync.Cond
-	history map[string][]*Entry // We depend on the property that items in the queue are in the set.
+	items   map[string]*Entry // We depend on the property that items in the queue are in the set.
 	queue   []string
 	carrier pigeon // may be dead, but never nil
 }
@@ -101,15 +98,14 @@ func (f *HistoricalFIFO) Add(id string, v interface{}) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
-	if entries, exists := f.history[id]; !exists {
+	if entry, exists := f.items[id]; !exists {
 		f.queue = append(f.queue, id)
 	} else {
-		head := entries[len(entries)-1]
-		if head.Event == DELETE_EVENT || head.Event == POP_EVENT {
+		if entry.Event == DELETE_EVENT || entry.Event == POP_EVENT {
 			f.queue = append(f.queue, id)
 		}
 	}
-	notifications = f.merge(id, obj, nil)
+	notifications = f.merge(id, obj)
 	f.cond.Broadcast()
 }
 
@@ -133,15 +129,14 @@ func (f *HistoricalFIFO) Readd(id string, v interface{}, t EventType) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
-	if entries, exists := f.history[id]; exists {
-		head := entries[len(entries)-1]
-		if head.Event != t {
+	if entry, exists := f.items[id]; exists {
+		if entry.Event != t {
 			return
-		} else if head.Event == DELETE_EVENT || head.Event == POP_EVENT {
+		} else if entry.Event == DELETE_EVENT || entry.Event == POP_EVENT {
 			f.queue = append(f.queue, id)
 		}
 	}
-	notifications = f.merge(id, obj, nil)
+	notifications = f.merge(id, obj)
 	f.cond.Broadcast()
 }
 
@@ -156,14 +151,13 @@ func (f *HistoricalFIFO) Delete(id string) {
 
 	f.lock.Lock()
 	defer f.lock.Unlock()
-	entries, exists := f.history[id]
+	entry, exists := f.items[id]
 	if exists {
 		//TODO(jdef): set a timer to expunge the history for this object
 		//or else, simply do garbage collection every n'th merge(), removing
 		//expired DELETE entries
-		head := entries[len(entries)-1]
-		deleteEvent = &Entry{Value: head.Value, Event: DELETE_EVENT}
-		f.history[id] = append(entries, deleteEvent)
+		deleteEvent = &Entry{Value: entry.Value, Event: DELETE_EVENT}
+		f.items[id] = deleteEvent
 	}
 }
 
@@ -175,12 +169,11 @@ func (f *HistoricalFIFO) List() []interface{} {
 	// TODO(jdef): slightly overallocates b/c of deleted items
 	list := make([]interface{}, 0, len(f.queue))
 
-	for _, entries := range f.history {
-		head := entries[len(entries)-1]
-		if head.Event == DELETE_EVENT || head.Event == POP_EVENT {
+	for _, entry := range f.items {
+		if entry.Event == DELETE_EVENT || entry.Event == POP_EVENT {
 			continue
 		}
-		list = append(list, head.Value.Copy())
+		list = append(list, entry.Value.Copy())
 	}
 	return list
 }
@@ -192,9 +185,8 @@ func (c *HistoricalFIFO) ContainedIDs() util.StringSet {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
 	set := util.StringSet{}
-	for id, entries := range c.history {
-		head := entries[len(entries)-1]
-		if head.Event == DELETE_EVENT || head.Event == POP_EVENT {
+	for id, entry := range c.items {
+		if entry.Event == DELETE_EVENT || entry.Event == POP_EVENT {
 			continue
 		}
 		set.Insert(id)
@@ -206,10 +198,9 @@ func (c *HistoricalFIFO) ContainedIDs() util.StringSet {
 func (f *HistoricalFIFO) Get(id string) (interface{}, bool) {
 	f.lock.RLock()
 	defer f.lock.RUnlock()
-	entries, exists := f.history[id]
-	head := entries[len(entries)-1]
-	if exists && !(head.Event == DELETE_EVENT || head.Event == POP_EVENT) {
-		return head.Value.Copy(), true
+	entry, exists := f.items[id]
+	if exists && !(entry.Event == DELETE_EVENT || entry.Event == POP_EVENT) {
+		return entry.Value.Copy(), true
 	}
 	return nil, false
 }
@@ -232,15 +223,14 @@ func (f *HistoricalFIFO) Pop() interface{} {
 		}
 		id := f.queue[0]
 		f.queue = f.queue[1:]
-		entries, ok := f.history[id]
-		head := entries[len(entries)-1]
-		if !ok || head.Event == DELETE_EVENT || head.Event == POP_EVENT {
+		entry, ok := f.items[id]
+		if !ok || entry.Event == DELETE_EVENT || entry.Event == POP_EVENT {
 			// Item may have been deleted subsequently.
 			continue
 		}
-		value := head.Value
+		value := entry.Value
 		popEvent = &Entry{Value: value, Event: POP_EVENT}
-		f.history[id] = append(entries, popEvent)
+		f.items[id] = popEvent
 		return value.Copy()
 	}
 }
@@ -261,10 +251,19 @@ func (f *HistoricalFIFO) Replace(idToObj map[string]interface{}) {
 	defer f.lock.Unlock()
 
 	f.queue = f.queue[:0]
+	for id, v := range f.items {
+		if _, exists := idToObj[id]; !exists && v.Event != DELETE_EVENT {
+			// a non-deleted entry in the items list that doesn't show up in the
+			// new list: mark it as deleted
+			e := &Entry{Value: v.Value, Event: DELETE_EVENT}
+			f.items[id] = e
+			notifications = append(notifications, e)
+		}
+	}
 	for id, v := range idToObj {
 		obj := checkType(v)
 		f.queue = append(f.queue, id)
-		n := f.merge(id, obj, nil)
+		n := f.merge(id, obj)
 		notifications = append(notifications, n...)
 	}
 	if len(f.queue) > 0 {
@@ -272,40 +271,29 @@ func (f *HistoricalFIFO) Replace(idToObj map[string]interface{}) {
 	}
 }
 
-type mergeFilter func(older, newer *Entry) bool
-
 // expects that caller has already locked around state
-//TODO(jdef): eliminate the use of mergeFilter if we don't end up needing it
-func (f *HistoricalFIFO) merge(id string, obj UniqueCopyable, accepts mergeFilter) (notifications []*Entry) {
-	entries, exists := f.history[id]
+func (f *HistoricalFIFO) merge(id string, obj UniqueCopyable) (notifications []*Entry) {
+	entry, exists := f.items[id]
 	if !exists {
-		entries = make([]*Entry, 0, 3)
 		e := &Entry{Value: obj.Copy().(UniqueCopyable), Event: ADD_EVENT}
-		if accepts == nil || accepts(nil, e) {
-			f.history[id] = append(entries, e)
-			notifications = append(notifications, e)
-		}
+		f.items[id] = e
+		notifications = append(notifications, e)
 	} else {
-		head := entries[len(entries)-1]
-		if head.Event != DELETE_EVENT && head.Value.GetUID() != obj.GetUID() {
+		if entry.Event != DELETE_EVENT && entry.Value.GetUID() != obj.GetUID() {
 			// hidden DELETE!
 			// (1) append a DELETE
 			// (2) append an ADD
 			// .. and notify listeners in that order
-			e1 := &Entry{Value: head.Value, Event: DELETE_EVENT}
+			e1 := &Entry{Value: entry.Value, Event: DELETE_EVENT}
 			e2 := &Entry{Value: obj.Copy().(UniqueCopyable), Event: ADD_EVENT}
-			if accepts == nil || accepts(e1, e2) {
-				f.history[id] = append(entries, e1, e2)
-				notifications = append(notifications, e1, e2)
-			}
-		} else if !reflect.DeepEqual(obj, head.Value) {
+			f.items[id] = e2
+			notifications = append(notifications, e1, e2)
+		} else if !reflect.DeepEqual(obj, entry.Value) {
 			//TODO(jdef): it would be nice if we could rely on resource versions
 			//instead of doing a DeepEqual. Maybe someday we'll be able to.
 			e := &Entry{Value: obj.Copy().(UniqueCopyable), Event: UPDATE_EVENT}
-			if accepts == nil || accepts(head, e) {
-				f.history[id] = append(entries, e)
-				notifications = append(notifications, e)
-			}
+			f.items[id] = e
+			notifications = append(notifications, e)
 		}
 	}
 	return
@@ -326,7 +314,7 @@ func NewFIFO(mux *config.Mux) *HistoricalFIFO {
 		}
 	}
 	f := &HistoricalFIFO{
-		history: map[string][]*Entry{},
+		items:   map[string]*Entry{},
 		queue:   []string{},
 		carrier: carrier,
 	}
