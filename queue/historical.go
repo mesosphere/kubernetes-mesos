@@ -97,9 +97,6 @@ func dead(msg Entry) {
 // an item is in the queue before it has been processed, it will only be
 // processed once, and when it is processed, the most recent version will be
 // processed. This can't be done with a channel.
-// TODO(jdef): I used to think that I'd need history of state changes recorded
-// in `history` but it's turning out that I really only need to maintain the
-// the current state, so `history` should revert back into `items`
 type HistoricalFIFO struct {
 	lock      sync.RWMutex
 	cond      sync.Cond
@@ -140,7 +137,7 @@ func (f *HistoricalFIFO) Add(id string, v interface{}) {
 			f.queue = append(f.queue, id)
 		}
 	}
-	notifications = f.merge(id, obj, nil)
+	notifications = f.merge(id, obj)
 	f.cond.Broadcast()
 }
 
@@ -300,7 +297,7 @@ func (f *HistoricalFIFO) Replace(idToObj map[string]interface{}) {
 	for id, v := range idToObj {
 		obj := checkType(v)
 		f.queue = append(f.queue, id)
-		n := f.merge(id, obj, nil)
+		n := f.merge(id, obj)
 		notifications = append(notifications, n...)
 	}
 	if len(f.queue) > 0 {
