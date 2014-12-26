@@ -164,7 +164,7 @@ func prepareExecutorInfo() *mesos.ExecutorInfo {
 	//TODO(jdef): provide some way (env var?) for user's to customize executor config
 	//TODO(jdef): set -hostname_override and -address to 127.0.0.1 if `address` is 127.0.0.1
 	//TODO(jdef): kubelet can publish events to the api server, we should probably tell it our IP address
-	executorCommand := fmt.Sprintf("./%s -v=2 -hostname_override=0.0.0.0", executorCmd)
+	executorCommand := fmt.Sprintf("./%s -v=2 -hostname_override=0.0.0.0 -allow_privileged=%t", executorCmd, *allowPrivileged)
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
 		executorCommand = fmt.Sprintf("%s -etcd_servers=%s", executorCommand, etcdServerArguments)
