@@ -157,9 +157,9 @@ func serveExecutorArtifact(path string) (*string, string) {
 func prepareExecutorInfo() *mesos.ExecutorInfo {
 	executorUris := []*mesos.CommandInfo_URI{}
 	uri, _ := serveExecutorArtifact(*proxyPath)
-	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri})
+	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri, Executable: proto.Bool(true)})
 	uri, executorCmd := serveExecutorArtifact(*executorPath)
-	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri})
+	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri, Executable: proto.Bool(true)})
 
 	//TODO(jdef): provide some way (env var?) for user's to customize executor config
 	//TODO(jdef): set -hostname_override and -address to 127.0.0.1 if `address` is 127.0.0.1
