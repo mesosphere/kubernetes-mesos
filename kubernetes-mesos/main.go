@@ -178,11 +178,13 @@ func prepareExecutorInfo() *mesos.ExecutorInfo {
 	log.V(2).Info("Serving executor artifacts...")
 
 	// Create mesos scheduler driver.
+	// TODO(jdef): don't hardcode executor user here
 	return &mesos.ExecutorInfo{
 		ExecutorId: &mesos.ExecutorID{Value: proto.String("KubeleteExecutorID")},
 		Command: &mesos.CommandInfo{
 			Value: proto.String(executorCommand),
 			Uris:  executorUris,
+			User:  proto.String("root"), // must be able to use docker socket
 		},
 		Name:   proto.String("Kubelet Executor"),
 		Source: proto.String("kubernetes"),
