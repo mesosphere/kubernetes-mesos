@@ -90,7 +90,8 @@ $ ./bin/kubernetes-mesos \
   -etcd_servers=http://${servicehost}:4001 \
   -executor_path=$(pwd)/bin/kubernetes-executor \
   -proxy_path=$(pwd)/bin/kube-proxy \
-  -portal_net=10.10.10.0/24
+  -portal_net=10.10.10.0/24 \
+  -mesos_user=root
 ```
 
 For simpler execution of `kubecfg`:
