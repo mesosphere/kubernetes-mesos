@@ -9,9 +9,10 @@ import (
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
+	"github.com/mesosphere/kubernetes-mesos/queue"
 )
 
 const (
@@ -19,6 +20,7 @@ const (
 	defaultOfferTTL          = 5    // seconds that an offer is viable, prior to being expired
 	defaultOfferLingerTTL    = 120  // seconds that an expired offer lingers in history
 	defaultListenerDelay     = 1    // number of seconds between offer listener notifications
+	defaultUpdatesBacklog    = 2048 // size of the pod updates channel
 )
 
 type Slave struct {
@@ -69,12 +71,14 @@ type KubernetesScheduler struct {
 	scheduleFunc PodScheduleFunc
 
 	client   *client.Client
-	podQueue *cache.FIFO
+	podQueue queue.FIFO
+	updates  <-chan queue.Entry
 }
 
 // New create a new KubernetesScheduler
 func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client) *KubernetesScheduler {
 	var k *KubernetesScheduler
+	updates := make(chan queue.Entry, defaultUpdatesBacklog)
 	k = &KubernetesScheduler{
 		RWMutex:  new(sync.RWMutex),
 		executor: executor,
@@ -95,7 +99,8 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 		podToTask:     make(map[string]string),
 		scheduleFunc:  scheduleFunc,
 		client:        client,
-		podQueue:      cache.NewFIFO(),
+		podQueue:      &podStoreAdapter{queue.NewFIFO(updates)},
+		updates:       updates,
 	}
 	return k
 }
@@ -115,8 +120,11 @@ func (k *KubernetesScheduler) getTask(taskId string) (*PodTask, stateType) {
 }
 
 func (k *KubernetesScheduler) Init(d mesos.SchedulerDriver) {
-	k.offers.Init()
 	k.driver = d
+	k.offers.Init()
+	go util.Forever(func() {
+		k.monitorPodEvents()
+	}, 1*time.Second)
 }
 
 // Registered is called when the scheduler registered with the master successfully.

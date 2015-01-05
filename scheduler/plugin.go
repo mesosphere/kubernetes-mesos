@@ -16,6 +16,7 @@ import (
 	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
+	"github.com/mesosphere/kubernetes-mesos/queue"
 	"gopkg.in/v1/yaml"
 )
 
@@ -185,9 +186,16 @@ func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
 // implementation of scheduling plugin's NextPod func; see plugin/pkg/scheduler
 func (k *KubernetesScheduler) yield() *api.Pod {
 	// blocking...
-	pod := k.podQueue.Pop().(*api.Pod)
-	log.V(2).Infof("About to try and schedule pod %v\n", pod.Name)
-	return pod
+	for {
+		pod := k.podQueue.Pop().(*Pod)
+		if pod.Status.Host != "" {
+			// skip updates for pods that are already scheduled
+			// TODO(jdef): we should probably send update messages to the executor task
+			continue
+		}
+		log.V(2).Infof("About to try and schedule pod %v\n", pod.Name)
+		return pod.Pod
+	}
 }
 
 // implementation of scheduling plugin's Error func; see plugin/pkg/scheduler
@@ -248,7 +256,9 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 				if task, ok := k.pendingTasks[taskId]; ok && !task.hasAcceptedOffer() {
 					// "pod" now refers to a Pod instance that is not pointed to by the PodTask, so update our records
 					task.Pod = pod
-					k.podQueue.Add(podKey, pod)
+					if added := k.podQueue.Readd(podKey, &Pod{pod}, queue.POP_EVENT); !added {
+						log.V(2).Info("failed to readd pod %v, did someone else change it?", podKey)
+					}
 				} else {
 					// this state shouldn't really be possible, so I'm warning if we ever see it
 					log.Errorf("Scheduler detected pod no longer pending: %v, will not re-queue; possible offer leak", podKey)
@@ -260,7 +270,20 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 	}()
 }
 
-func (k *KubernetesScheduler) handlePodDeleted(pod *api.Pod) error {
+// currently monitors for "pod deleted" events, upon which handlePodDeleted()
+// is invoked.
+func (k *KubernetesScheduler) monitorPodEvents() {
+	for {
+		entry := <-k.updates
+		if !entry.Is(queue.DELETE_EVENT) {
+			continue
+		}
+		pod := entry.Value().(*Pod)
+		log.Error(k.handlePodDeleted(pod))
+	}
+}
+
+func (k *KubernetesScheduler) handlePodDeleted(pod *Pod) error {
 	ctx := api.WithNamespace(api.NewDefaultContext(), pod.Namespace)
 	podKey, err := makePodKey(ctx, pod.Name)
 	if err != nil {
@@ -313,10 +336,7 @@ func (k *KubernetesScheduler) handlePodDeleted(pod *api.Pod) error {
 func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
 
 	// Watch and queue pods that need scheduling.
-	cache.NewReflector(k.createUnassignedPodLW(), &api.Pod{}, k.podQueue).Run()
-
-	// Watch for deleted pods
-	cache.NewReflector(k.createAllPodsLW(), &api.Pod{}, &deleteStore{cache.NewStore(), deleteStoreFn(k.handlePodDeleted)}).Run()
+	cache.NewReflector(k.createAllPodsLW(), &api.Pod{}, k.podQueue).Run()
 
 	podBackoff := podBackoff{
 		perPodBackoff: map[string]*backoffEntry{},
@@ -360,41 +380,6 @@ func (lw *listWatch) Watch(resourceVersion string) (watch.Interface, error) {
 		Watch()
 }
 
-// createUnassignedPodLW returns a listWatch that finds all pods that need to be
-// scheduled.
-func (k *KubernetesScheduler) createUnassignedPodLW() *listWatch {
-	return &listWatch{
-		client:        k.client,
-		fieldSelector: labels.Set{"DesiredState.Host": ""}.AsSelector(),
-		resource:      "pods",
-	}
-}
-
-type deleteStoreFn func(*api.Pod) error
-
-type deleteStore struct {
-	cache.Store
-	deleteFn deleteStoreFn
-}
-
-func (d *deleteStore) Delete(id string) {
-	obj, exists := d.Store.Get(id)
-	d.Store.Delete(id)
-	if exists {
-		pod, ok := obj.(*api.Pod)
-		if !ok {
-			log.Warningf("Expected a pod object, not %v", obj)
-			return
-		}
-		go func() {
-			defer util.HandleCrash()
-			if err := d.deleteFn(pod); err != nil {
-				log.Error(err)
-			}
-		}()
-	}
-}
-
 // createAllPodsLW returns a listWatch that finds all pods
 func (k *KubernetesScheduler) createAllPodsLW() *listWatch {
 	return &listWatch{
@@ -402,4 +387,47 @@ func (k *KubernetesScheduler) createAllPodsLW() *listWatch {
 		fieldSelector: labels.Everything(),
 		resource:      "pods",
 	}
+}
+
+// Consumes *api.Pod, produces *Pod; the k8s reflector wants to push *api.Pod
+// objects at us, but we want to store more flexible (Pod) type defined in
+// this package. The adapter implementation facilitates this. It's a little
+// hackish since the object type going in is different than the object type
+// coming out -- you've been warned.
+type podStoreAdapter struct {
+	*queue.HistoricalFIFO
+}
+
+func (psa *podStoreAdapter) Add(id string, obj interface{}) {
+	pod := obj.(*api.Pod)
+	psa.HistoricalFIFO.Add(id, &Pod{pod})
+}
+
+func (psa *podStoreAdapter) Update(id string, obj interface{}) {
+	pod := obj.(*api.Pod)
+	psa.HistoricalFIFO.Update(id, &Pod{pod})
+}
+
+// Replace will delete the contents of the store, using instead the
+// given map. This store implementation does NOT take ownership of the map.
+func (psa *podStoreAdapter) Replace(idToObj map[string]interface{}) {
+	newmap := map[string]interface{}{}
+	for k, v := range idToObj {
+		pod := v.(*api.Pod)
+		newmap[k] = &Pod{pod}
+	}
+	psa.HistoricalFIFO.Replace(newmap)
+}
+
+func (p *Pod) Copy() queue.Copyable {
+	if p == nil {
+		return nil
+	}
+	//TODO(jdef) we may need a better "deep-copy" implementation
+	pod := *(p.Pod)
+	return &Pod{&pod}
+}
+
+func (p *Pod) GetUID() string {
+	return p.UID
 }

@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"errors"
+
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 )
 
 // PodScheduleFunc implements how to schedule pods among slaves.
@@ -31,3 +33,8 @@ const (
 var (
 	noSuitableOffersErr = errors.New("No suitable offers for pod/task")
 )
+
+// wrapper for the k8s pod type so that we can define additional methods on a "pod"
+type Pod struct {
+	*api.Pod
+}

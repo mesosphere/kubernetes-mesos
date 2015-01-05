@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 )
 
@@ -92,6 +93,20 @@ func dead(msg Entry) {
 	// intentionally blank
 }
 
+type FIFO interface {
+	cache.Store
+	// Pop waits until an item is ready and returns it. If multiple items are
+	// ready, they are returned in the order in which they were added/updated.
+	// The item is removed from the queue (and the store) before it is returned,
+	// so if you don't succesfully process it, you need to add it back with Add()
+	// or Readd().
+	Pop() interface{}
+	// Add the item to the store, but only if there exists a prior entry for
+	// for the object in the store whose event type matches that given, and then
+	// only enqueued if it doesn't already exist in the set. Returns true if added.
+	Readd(id string, v interface{}, t EventType) bool
+}
+
 // HistoricalFIFO receives adds and updates from a Reflector, and puts them in a queue for
 // FIFO order processing. If multiple adds/updates of a single item happen while
 // an item is in the queue before it has been processed, it will only be
@@ -148,8 +163,8 @@ func (f *HistoricalFIFO) Update(id string, obj interface{}) {
 
 // Add the item to the store, but only if there exists a prior entry for
 // for the object in the store whose event type matches that given, and then
-// only enqueued if it doesn't already exist in the set.
-func (f *HistoricalFIFO) Readd(id string, v interface{}, t EventType) {
+// only enqueued if it doesn't already exist in the set. Returns true if added.
+func (f *HistoricalFIFO) Readd(id string, v interface{}, t EventType) bool {
 	obj := checkType(v)
 	notifications := []Entry(nil)
 	defer func() {
@@ -163,13 +178,14 @@ func (f *HistoricalFIFO) Readd(id string, v interface{}, t EventType) {
 
 	if entry, exists := f.items[id]; exists {
 		if !entry.Is(t) {
-			return
+			return false
 		} else if entry.Is(DELETE_EVENT | POP_EVENT) {
 			f.queue = append(f.queue, id)
 		}
 	}
 	notifications = f.merge(id, obj)
 	f.cond.Broadcast()
+	return true
 }
 
 // Delete removes an item. It doesn't add it to the queue, because
@@ -236,10 +252,6 @@ func (f *HistoricalFIFO) Get(id string) (interface{}, bool) {
 	return nil, false
 }
 
-// Pop waits until an item is ready and returns it. If multiple items are
-// ready, they are returned in the order in which they were added/updated.
-// The item is removed from the queue (and the store) before it is returned,
-// so if you don't succesfully process it, you need to add it back with Add().
 func (f *HistoricalFIFO) Pop() interface{} {
 	popEvent := (Entry)(nil)
 	defer func() {
@@ -266,10 +278,6 @@ func (f *HistoricalFIFO) Pop() interface{} {
 	}
 }
 
-// Replace will delete the contents of 'f', using instead the given map.
-// 'f' takes ownersip of the map, you should not reference the map again
-// after calling this function. f's queue is reset, too; upon return, it
-// will contain the items in the map, in no particular order.
 func (f *HistoricalFIFO) Replace(idToObj map[string]interface{}) {
 	notifications := make([]Entry, 0, len(idToObj))
 	defer func() {
