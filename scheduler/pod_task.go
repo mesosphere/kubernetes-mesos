@@ -8,7 +8,6 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
-	"gopkg.in/v1/yaml"
 )
 
 const (
@@ -23,6 +22,7 @@ type PodTask struct {
 	TaskInfo *mesos.TaskInfo
 	Launched bool
 	Offer    PerishableOffer
+	podKey   string
 }
 
 func rangeResource(name string, ports []uint64) *mesos.Resource {
@@ -71,7 +71,7 @@ func (t *PodTask) FillTaskInfo(offer PerishableOffer) error {
 		return fmt.Errorf("Offer assignment must be idempotent with task %v: %v", t, offer)
 	}
 	t.Offer = offer
-	log.V(3).Infof("Recording offer(s) %v against pod %v", details.Id, t.Pod.ID)
+	log.V(3).Infof("Recording offer(s) %v against pod %v", details.Id, t.Pod.Name)
 
 	t.TaskInfo.TaskId = &mesos.TaskID{Value: proto.String(t.ID)}
 	t.TaskInfo.SlaveId = details.GetSlaveId()
@@ -82,17 +82,13 @@ func (t *PodTask) FillTaskInfo(offer PerishableOffer) error {
 	if ports := rangeResource("ports", t.Ports()); ports != nil {
 		t.TaskInfo.Resources = append(t.TaskInfo.Resources, ports)
 	}
-	var err error
-	if t.TaskInfo.Data, err = yaml.Marshal(&t.Pod.DesiredState.Manifest); err != nil {
-		return err
-	}
 	return nil
 }
 
 // Clear offer-related details from the task, should be called if/when an offer
 // has already been assigned to a task but for some reason is no longer valid.
 func (t *PodTask) ClearTaskInfo() {
-	log.V(3).Infof("Clearing offer(s) from pod %v", t.Pod.ID)
+	log.V(3).Infof("Clearing offer(s) from pod %v", t.Pod.Name)
 	t.Offer = nil
 	t.TaskInfo.TaskId = nil
 	t.TaskInfo.SlaveId = nil
@@ -102,7 +98,7 @@ func (t *PodTask) ClearTaskInfo() {
 
 func (t *PodTask) Ports() []uint64 {
 	ports := make([]uint64, 0)
-	for _, container := range t.Pod.DesiredState.Manifest.Containers {
+	for _, container := range t.Pod.Spec.Containers {
 		// strip all port==0 from this array; k8s already knows what to do with zero-
 		// ports (it does not create 'port bindings' on the minion-host); we need to
 		// remove the wildcards from this array since they don't consume host resources
@@ -154,7 +150,7 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 
 	unsatisfiedPorts := len(requiredPorts)
 	if unsatisfiedPorts > 0 {
-		log.V(2).Infof("Could not schedule pod %s: %d ports could not be allocated", t.Pod.ID, unsatisfiedPorts)
+		log.V(2).Infof("Could not schedule pod %s: %d ports could not be allocated", t.Pod.Name, unsatisfiedPorts)
 		return false
 	}
 
@@ -166,15 +162,63 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 	return true
 }
 
-func newPodTask(pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
+func newPodTask(ctx api.Context, pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
+	key, err := makePodKey(ctx, pod.Name)
+	if err != nil {
+		return nil, err
+	}
 	taskId := uuid.NewUUID().String()
 	task := &PodTask{
-		ID:       taskId, // pod.JSONBase.ID,
+		ID:       taskId,
 		Pod:      pod,
 		TaskInfo: new(mesos.TaskInfo),
 		Launched: false,
+		podKey:   key,
 	}
 	task.TaskInfo.Name = proto.String("PodTask")
 	task.TaskInfo.Executor = executor
 	return task, nil
+}
+
+/**
+HACK(jdef): we're not using etcd but k8s has implemented namespace support and
+we're going to try to honor that by namespacing pod keys. Hence, the following
+funcs that were stolen from:
+    https://github.com/GoogleCloudPlatform/kubernetes/blob/release-0.5/pkg/registry/etcd/etcd.go
+**/
+
+const PodPath = "/pods"
+
+// makeListKey constructs etcd paths to resource directories enforcing namespace rules
+func makeListKey(ctx api.Context, prefix string) string {
+	key := prefix
+	ns, ok := api.NamespaceFrom(ctx)
+	if ok && len(ns) > 0 {
+		key = key + "/" + ns
+	}
+	return key
+}
+
+// makeItemKey constructs etcd paths to a resource relative to prefix enforcing namespace rules.  If no namespace is on context, it errors.
+func makeItemKey(ctx api.Context, prefix string, id string) (string, error) {
+	key := makeListKey(ctx, prefix)
+	ns, ok := api.NamespaceFrom(ctx)
+	if !ok || len(ns) == 0 {
+		return "", fmt.Errorf("Invalid request.  Namespace parameter required.")
+	}
+	if len(id) == 0 {
+		return "", fmt.Errorf("Invalid request.  Id parameter required.")
+	}
+	key = key + "/" + id
+	return key, nil
+}
+
+// makePodListKey constructs etcd paths to pod directories enforcing namespace rules.
+func makePodListKey(ctx api.Context) string {
+	return makeListKey(ctx, PodPath)
+}
+
+// makePodKey constructs etcd paths to pod items enforcing namespace rules.
+func makePodKey(ctx api.Context, id string) (string, error) {
+	return makeItemKey(ctx, PodPath, id)
 }

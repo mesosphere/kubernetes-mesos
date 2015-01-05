@@ -55,12 +55,17 @@ $ cd $GOPATH # If you don't have one, create directory and set GOPATH accordingl
 $ mkdir -p src/github.com/mesosphere/kubernetes-mesos
 $ git clone https://github.com/mesosphere/kubernetes-mesos.git src/github.com/mesosphere/kubernetes-mesos
 $ cd src/github.com/mesosphere/kubernetes-mesos && godep restore
-$ go install github.com/GoogleCloudPlatform/kubernetes/cmd/{proxy,kubecfg}
+$ go install github.com/GoogleCloudPlatform/kubernetes/cmd/{kube-proxy,kubecfg,kubectl}
 $ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
 $ go install github.com/mesosphere/kubernetes-mesos/controller-manager
 ```
 
 ### Start the framework
+
+**NETWORKING:** Kubernetes v0.5 introduced "Services v2" which follows an IP-per-Service model.
+A consequence of this is that you must provide the Kubernetes-Mesos framework with a [CIDR][8] subnet that will be used for the allocation of IP addresses for Kubernetes services: the `-portal_net` parameter.
+Please keep this in mind when reviewing (and attempting) the example below - the CIDR subnet may need to be adjusted for your network.
+See the Kubernetes [release notes][9] for additional details regarding the new services model.
 
 The examples that follow assume that you are running the mesos-master, etcd, and the kubernetes-mesos framework on the same host, exposed on an IP address referred to hereafter as `${servicehost}`.
 If you are not running in a production setting then a single etcd instance will suffice.
@@ -84,7 +89,9 @@ $ ./bin/kubernetes-mesos \
   -mesos_master=${servicehost}:5050 \
   -etcd_servers=http://${servicehost}:4001 \
   -executor_path=$(pwd)/bin/kubernetes-executor \
-  -proxy_path=$(pwd)/bin/proxy
+  -proxy_path=$(pwd)/bin/kube-proxy \
+  -portal_net=10.10.10.0/24 \
+  -mesos_user=root
 ```
 
 For simpler execution of `kubecfg`:
@@ -372,3 +379,5 @@ $ go test github.com/mesosphere/kubernetes-mesos/kubernetes-mesos -v
 [5]: https://github.com/tools/godep
 [6]: https://github.com/coreos/etcd/releases/
 [7]: DEVELOP.md#prerequisites
+[8]: http://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing
+[9]: https://github.com/GoogleCloudPlatform/kubernetes/releases/tag/v0.5

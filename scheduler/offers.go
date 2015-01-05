@@ -222,7 +222,7 @@ func (s *offerStorage) invalidateOne(offerId string) {
 // Walker or when the end of the offer list is reached. Expired offers are
 // never passed to a Walker.
 func (s *offerStorage) Walk(w Walker) error {
-	for offerId := range s.offers.Contains() {
+	for offerId := range s.offers.ContainedIDs() {
 		offer, ok := s.Get(offerId)
 		if !ok {
 			// offer disappeared...
@@ -324,7 +324,7 @@ func (s *offerStorage) notifyListeners() {
 		log.Warningf("unexpected listener object %v", obj)
 	}
 	// notify if we find an acceptable offer
-	for id := range s.offers.Contains() {
+	for id := range s.offers.ContainedIDs() {
 		var offer PerishableOffer
 		if offer, ok = s.Get(id); !ok || offer.HasExpired() {
 			continue

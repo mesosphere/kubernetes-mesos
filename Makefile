@@ -10,7 +10,8 @@ KUBE_GO_PACKAGE	?= github.com/GoogleCloudPlatform/kubernetes
 
 K8S_CMD		:= \
                    ${KUBE_GO_PACKAGE}/cmd/kubecfg		\
-                   ${KUBE_GO_PACKAGE}/cmd/proxy
+                   ${KUBE_GO_PACKAGE}/cmd/kubectl		\
+                   ${KUBE_GO_PACKAGE}/cmd/kube-proxy
 FRAMEWORK_CMD	:= \
                    github.com/mesosphere/kubernetes-mesos/controller-manager		\
                    github.com/mesosphere/kubernetes-mesos/kubernetes-mesos		\
@@ -57,6 +58,16 @@ WITH_MESOS_CGO_FLAGS :=  \
 
 endif
 
+FRAMEWORK_FLAGS := -v -x -tags '$(TAGS)'
+
+ifneq ($(STATIC),)
+FRAMEWORK_FLAGS += --ldflags '-extldflags "-static"'
+endif
+
+ifneq ($(WITH_RACE),)
+FRAMEWORK_FLAGS += -race
+endif
+
 export SHELL
 export KUBE_GO_PACKAGE
 
@@ -78,7 +89,7 @@ proxy: require-godep $(KUBE_GIT_VERSION_FILE)
 require-vendor:
 
 framework: require-godep
-	env $(WITH_MESOS_CGO_FLAGS) go install -v -x -tags '$(TAGS)' $${WITH_RACE:+-race} $(FRAMEWORK_CMD)
+	env $(WITH_MESOS_CGO_FLAGS) go install $(FRAMEWORK_FLAGS) $(FRAMEWORK_CMD)
 
 format: require-gopath
 	go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)

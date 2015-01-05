@@ -52,11 +52,13 @@ Want a quick-and-dirty development environment to start hacking?
 
 Need to build the project, but from a forked git repo?
 
-    $ docker run --rm -v /tmp/target:/target -e GIT_REPO=https://github.com/whoami/kubernetes-mesos jdef/kubernetes-mesos:build-latest
+    $ docker run --rm -v /tmp/target:/target -e GIT_REPO=https://github.com/whoami/kubernetes-mesos \
+        jdef/kubernetes-mesos:build-latest
 
 To hack in your currently checked out repo mount the root of the github repo to `/snapshot`:
 
-    $ docker run -ti -v /tmp/target:/target -v /home/jdef/kubernetes-mesos:/snapshot jdef/kubernetes-mesos:build-latest bash
+    $ docker run -ti -v /tmp/target:/target -v /home/jdef/kubernetes-mesos:/snapshot \
+        jdef/kubernetes-mesos:build-latest bash
 
 ## Profiling
 

@@ -19,8 +19,8 @@ const (
 )
 
 type kuberTask struct {
-	mesosTaskInfo     *mesos.TaskInfo
-	containerManifest *api.ContainerManifest
+	mesosTaskInfo *mesos.TaskInfo
+	podName       string
 }
 
 // KubernetesExecutor is an mesos executor that runs pods
@@ -31,9 +31,9 @@ type KubernetesExecutor struct {
 	driver     mesos.ExecutorDriver
 	registered bool
 	tasks      map[string]*kuberTask
-	pods       map[string]*kubelet.Pod
+	pods       map[string]*api.BoundPod
 	lock       sync.RWMutex
-	namespace  string
+	sourcename string
 }
 
 // New creates a new kubernetes executor.
@@ -44,8 +44,8 @@ func New(driver mesos.ExecutorDriver, kl *kubelet.Kubelet, ch chan<- interface{}
 		driver:     driver,
 		registered: false,
 		tasks:      make(map[string]*kuberTask),
-		pods:       make(map[string]*kubelet.Pod),
-		namespace:  ns,
+		pods:       make(map[string]*api.BoundPod),
+		sourcename: ns,
 	}
 }
 
@@ -91,36 +91,32 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 		// may be duplicated messages or duplicated task id.
 		return
 	}
-	// Get the container manifest from the taskInfo.
-	var manifest api.ContainerManifest
-	if err := yaml.Unmarshal(taskInfo.GetData(), &manifest); err != nil {
+	// Get the bound pod spec from the taskInfo.
+	var pod api.BoundPod
+	if err := yaml.Unmarshal(taskInfo.GetData(), &pod); err != nil {
 		log.Warningf("Failed to extract yaml data from the taskInfo.data %v\n", err)
 		k.sendStatusUpdate(taskInfo.GetTaskId(),
 			mesos.TaskState_TASK_FAILED, "Failed to extract yaml data")
 		return
 	}
 
-	// TODO(nnielsen): Verify this assumption. Manifest ID's has been marked
-	// to be deprecated.
-	podID := manifest.ID
-	uuid := manifest.UUID
+	podFullName := kubelet.GetPodFullName(&api.BoundPod{
+		ObjectMeta: api.ObjectMeta{
+			Name:        pod.Name,
+			Namespace:   pod.Namespace,
+			Annotations: map[string]string{kubelet.ConfigSourceAnnotationKey: k.sourcename},
+		},
+	})
 
 	// Add the task.
 	k.tasks[taskId] = &kuberTask{
-		mesosTaskInfo:     taskInfo,
-		containerManifest: &manifest,
+		mesosTaskInfo: taskInfo,
+		podName:       podFullName,
 	}
-
-	pod := kubelet.Pod{
-		Name:      podID,
-		Namespace: k.namespace,
-		Manifest:  manifest,
-	}
-	k.pods[podID] = &pod
+	k.pods[podFullName] = &pod
 
 	getPidInfo := func(name string) (api.PodInfo, error) {
-		podFullName := kubelet.GetPodFullName(&kubelet.Pod{Name: name, Namespace: k.namespace})
-		return k.kl.GetPodInfo(podFullName, uuid)
+		return k.kl.GetPodInfo(name, "")
 	}
 
 	// TODO(nnielsen): Fail if container is already running.
@@ -147,8 +143,13 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 			// there is no existing event / push model for this.
 			time.Sleep(containerPollTime)
 
-			info, err := getPidInfo(podID)
+			info, err := getPidInfo(podFullName)
 			if err != nil {
+				continue
+			}
+
+			// avoid sending back a running status while pod networking is down
+			if podnet, ok := info["net"]; !ok || podnet.State.Running == nil {
 				continue
 			}
 
@@ -158,7 +159,7 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 			statusUpdate := &mesos.TaskStatus{
 				TaskId:  taskInfo.GetTaskId(),
 				State:   mesos.NewTaskState(mesos.TaskState_TASK_RUNNING),
-				Message: proto.String("Pod '" + podID + "' is running"),
+				Message: proto.String("Pod '" + podFullName + "' is running"),
 				Data:    data,
 			}
 
@@ -171,7 +172,7 @@ func (k *KubernetesExecutor) LaunchTask(driver mesos.ExecutorDriver, taskInfo *m
 			// What if the docker daemon is restarting and we can't connect, but it's
 			// going to bring the pods back online as soon as it restarts?
 			knownPod := func() bool {
-				_, err := getPidInfo(podID)
+				_, err := getPidInfo(podFullName)
 				return err == nil
 			}
 			go func() {
@@ -247,9 +248,7 @@ func (k *KubernetesExecutor) killPodForTask(tid, reason string) {
 	}
 	delete(k.tasks, tid)
 
-	// TODO(nnielsen): Verify this assumption. Manifest ID's has been marked
-	// to be deprecated.
-	pid := task.containerManifest.ID
+	pid := task.podName
 	if _, found := k.pods[pid]; !found {
 		log.Warningf("Cannot remove Unknown pod %v for task %v", pid, tid)
 	} else {
@@ -278,9 +277,7 @@ func (k *KubernetesExecutor) reportLostTask(tid, reason string) {
 	}
 	delete(k.tasks, tid)
 
-	// TODO(nnielsen): Verify this assumption. Manifest ID's has been marked
-	// to be deprecated.
-	pid := task.containerManifest.ID
+	pid := task.podName
 	if _, found := k.pods[pid]; !found {
 		log.Warningf("Cannot remove Unknown pod %v for lost task %v", pid, tid)
 	} else {
