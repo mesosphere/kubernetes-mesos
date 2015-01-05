@@ -21,6 +21,7 @@ FRAMEWORK_LIB	:= \
 		   github.com/mesosphere/kubernetes-mesos/scheduler	\
 		   github.com/mesosphere/kubernetes-mesos/service	\
 		   github.com/mesosphere/kubernetes-mesos/executor	\
+		   github.com/mesosphere/kubernetes-mesos/profile	\
 		   github.com/mesosphere/kubernetes-mesos/queue
 
 KUBE_GIT_VERSION_FILE := $(current_dir)/.kube-version
