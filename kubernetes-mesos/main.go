@@ -38,6 +38,7 @@ import (
 	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
+	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
 	_ "github.com/mesosphere/kubernetes-mesos/profile"
 	kmscheduler "github.com/mesosphere/kubernetes-mesos/scheduler"
 )
@@ -49,7 +50,6 @@ var (
 	etcdConfigFile      = flag.String("etcd_config", "", "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
 	clientConfig        = &client.Config{}
 	allowPrivileged     = flag.Bool("allow_privileged", false, "If true, allow privileged containers. Default false.")
-	mesosMaster         = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master. Default localhost:5050.")
 	executorPath        = flag.String("executor_path", "", "Location of the kubernetes executor executable")
 	proxyPath           = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
 	mesosUser           = flag.String("mesos_user", "", "Mesos user for this framework, defaults to the username that owns the framework process.")
@@ -155,8 +155,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Misconfigured mesos framework: %v", err)
 	}
+	masterUri := kmcloud.MasterURI()
 	driver := &mesos.MesosSchedulerDriver{
-		Master:    *mesosMaster,
+		Master:    masterUri,
 		Framework: *info,
 		Scheduler: mesosPodScheduler,
 		Cred:      cred,

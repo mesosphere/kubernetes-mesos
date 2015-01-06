@@ -31,7 +31,9 @@ import (
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/controller"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
+	minionControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider/controller"
+	replicationControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/controller"
 	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	kendpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
@@ -75,8 +77,12 @@ func main() {
 	endpoints := createEndpointController(kubeClient)
 	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, time.Second*10)
 
-	controllerManager := controller.NewReplicationManager(kubeClient)
+	controllerManager := replicationControllerPkg.NewReplicationManager(kubeClient)
 	controllerManager.Run(10 * time.Second)
+
+	cloud := cloudprovider.InitCloudProvider("mesos", "")
+	minionController := minionControllerPkg.NewMinionController(cloud, "", nil, nil, kubeClient)
+	minionController.Run(10 * time.Second)
 
 	select {}
 }

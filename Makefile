@@ -21,6 +21,7 @@ FRAMEWORK_LIB	:= \
 		   github.com/mesosphere/kubernetes-mesos/scheduler	\
 		   github.com/mesosphere/kubernetes-mesos/service	\
 		   github.com/mesosphere/kubernetes-mesos/executor	\
+		   github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos \
 		   github.com/mesosphere/kubernetes-mesos/profile	\
 		   github.com/mesosphere/kubernetes-mesos/queue
 
