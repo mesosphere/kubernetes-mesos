@@ -66,6 +66,7 @@ const (
 
 func init() {
 	flag.Var(&address, "address", "The IP address on to serve on (set to 0.0.0.0 for all interfaces). Default 127.0.0.1.")
+	flag.Var(&etcdServerList, "etcd_servers", "List of etcd servers to watch (http://ip:port), comma separated. Mutually exclusive with -etcd_config")
 	client.BindClientConfigFlags(flag.CommandLine, clientConfig)
 }
 
