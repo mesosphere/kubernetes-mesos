@@ -92,7 +92,7 @@ $ ./bin/kube-apiserver \
   -port=8888 \
   -cloud_provider=mesos
 
-$ ./bin/kubernetes-mesos \
+$ ./bin/k8sm-scheduler \
   -address=${servicehost} \
   -mesos_master=${servicehost}:5050 \
   -etcd_servers=http://${servicehost}:4001 \
@@ -109,7 +109,7 @@ $ export KUBERNETES_MASTER=http://${servicehost}:8888
 
 To enable replication control, start a kubernetes replication controller instance:
 ```shell
-$ ./bin/controller-manager \
+$ ./bin/k8sm-controller-manager \
   -master=$servicehost:8888 \
   -mesos_master=$servicehost:5050
 ```
