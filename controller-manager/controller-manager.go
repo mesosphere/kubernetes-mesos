@@ -81,7 +81,7 @@ func main() {
 	controllerManager.Run(10 * time.Second)
 
 	cloud := cloudprovider.InitCloudProvider("mesos", "")
-	minionController := minionControllerPkg.NewMinionController(cloud, "", nil, nil, kubeClient)
+	minionController := minionControllerPkg.NewMinionController(cloud, "^.*$", nil, nil, kubeClient)
 	minionController.Run(10 * time.Second)
 
 	select {}

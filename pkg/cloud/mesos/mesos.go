@@ -83,10 +83,20 @@ func (c *MesosCloud) IPAddress(name string) (net.IP, error) {
 
 // List lists instances that match 'filter' which is a regular expression
 // which must match the entire instance name (fqdn).
-func (c *MesosCloud) List(filter string) ([]string, error) {
+func (c *MesosCloud) List(filter string) (slaves []string, err error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	return c.client.EnlistedSlaves(ctx)
+	slaves, err = c.client.EnlistedSlaves(ctx)
+	if err == nil {
+		if len(slaves) == 0 {
+			log.V(2).Info("no enlisted slaves found, are any running?")
+		} else {
+			log.V(2).Infof("slaves=%v", slaves)
+		}
+	} else {
+		log.Warning(err)
+	}
+	return
 }
 
 // GetNodeResources gets the resources for a particular node

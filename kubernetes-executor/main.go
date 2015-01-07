@@ -92,13 +92,16 @@ func getHostname() string {
 }
 
 func getApiserverClient() (*client.Client, error) {
-	authInfo, err := clientauth.LoadFromFile(*authPath)
-	if err != nil {
-		return nil, err
-	}
-	clientConfig, err := authInfo.MergeWithConfig(client.Config{})
-	if err != nil {
-		return nil, err
+	clientConfig := client.Config{}
+	if *authPath != "" {
+		authInfo, err := clientauth.LoadFromFile(*authPath)
+		if err != nil {
+			return nil, err
+		}
+		clientConfig, err = authInfo.MergeWithConfig(clientConfig)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// TODO: adapt Kube client to support LB over several servers
 	if len(apiServerList) > 1 {

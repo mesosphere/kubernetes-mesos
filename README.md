@@ -84,14 +84,22 @@ $ sudo docker run -d --net=host coreos/etcd go-wrapper run \
 Assuming your mesos cluster is started, and that the mesos-master and etcd are running on `${servicehost}`, then:
 
 ```shell
+$ ./bin/kube-apiserver \
+  -address=${servicehost} \
+  -mesos_master=${servicehost}:5050 \
+  -etcd_servers=http://${servicehost}:4001 \
+  -portal_net=10.10.10.0/24 \
+  -port=8888 \
+  -cloud_provider=mesos
+
 $ ./bin/kubernetes-mesos \
   -address=${servicehost} \
   -mesos_master=${servicehost}:5050 \
   -etcd_servers=http://${servicehost}:4001 \
   -executor_path=$(pwd)/bin/kubernetes-executor \
   -proxy_path=$(pwd)/bin/kube-proxy \
-  -portal_net=10.10.10.0/24 \
-  -mesos_user=root
+  -mesos_user=root \
+  -api_servers=$servicehost:8888
 ```
 
 For simpler execution of `kubecfg`:
@@ -101,7 +109,9 @@ $ export KUBERNETES_MASTER=http://${servicehost}:8888
 
 To enable replication control, start a kubernetes replication controller instance:
 ```shell
-$ ./bin/controller-manager -master=${KUBERNETES_MASTER#http://*}
+$ ./bin/controller-manager \
+  -master=$servicehost:8888 \
+  -mesos_master=$servicehost:5050
 ```
 
 You can increase logging for both the framework and the controller by including, for example, `-v=2`.

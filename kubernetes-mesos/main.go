@@ -32,6 +32,7 @@ import (
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/clientauth"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
@@ -44,12 +45,14 @@ import (
 )
 
 var (
-	port                = flag.Int("port", ports.SchedulerPort, "The port that the scheduler's http service runs on")
-	address             = util.IP(net.ParseIP("127.0.0.1"))
-	etcdServerList      util.StringList
-	etcdConfigFile      = flag.String("etcd_config", "", "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
-	clientConfig        = &client.Config{}
-	allowPrivileged     = flag.Bool("allow_privileged", false, "If true, allow privileged containers. Default false.")
+	port            = flag.Int("port", ports.SchedulerPort, "The port that the scheduler's http service runs on")
+	address         = util.IP(net.ParseIP("127.0.0.1"))
+	etcdServerList  util.StringList
+	etcdConfigFile  = flag.String("etcd_config", "", "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
+	allowPrivileged = flag.Bool("allow_privileged", false, "If true, allow privileged containers. Default false.")
+	authPath        = flag.String("auth_path", "", "Path to .kubernetes_auth file, specifying how to authenticate to API server.")
+	apiServerList   util.StringList
+
 	executorPath        = flag.String("executor_path", "", "Location of the kubernetes executor executable")
 	proxyPath           = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
 	mesosUser           = flag.String("mesos_user", "", "Mesos user for this framework, defaults to the username that owns the framework process.")
@@ -67,7 +70,7 @@ const (
 func init() {
 	flag.Var(&address, "address", "The IP address on to serve on (set to 0.0.0.0 for all interfaces). Default 127.0.0.1.")
 	flag.Var(&etcdServerList, "etcd_servers", "List of etcd servers to watch (http://ip:port), comma separated. Mutually exclusive with -etcd_config")
-	client.BindClientConfigFlags(flag.CommandLine, clientConfig)
+	flag.Var(&apiServerList, "api_servers", "List of Kubernetes API servers to publish events to. (ip:port), comma separated.")
 }
 
 // returns (downloadURI, basename(path))
@@ -104,7 +107,8 @@ func prepareExecutorInfo() *mesos.ExecutorInfo {
 	//TODO(jdef): provide some way (env var?) for user's to customize executor config
 	//TODO(jdef): set -hostname_override and -address to 127.0.0.1 if `address` is 127.0.0.1
 	//TODO(jdef): kubelet can publish events to the api server, we should probably tell it our IP address
-	executorCommand := fmt.Sprintf("./%s -v=2 -hostname_override=0.0.0.0 -allow_privileged=%t", executorCmd, *allowPrivileged)
+	apiServerArgs := strings.Join(apiServerList, ",")
+	executorCommand := fmt.Sprintf("./%s -v=2 -hostname_override=0.0.0.0 -allow_privileged=%t -api_servers=%s", executorCmd, *allowPrivileged, apiServerArgs)
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
 		executorCommand = fmt.Sprintf("%s -etcd_servers=%s", executorCommand, etcdServerArguments)
@@ -112,6 +116,12 @@ func prepareExecutorInfo() *mesos.ExecutorInfo {
 		uri, basename := serveExecutorArtifact(*etcdConfigFile)
 		executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri})
 		executorCommand = fmt.Sprintf("%s -etcd_config=./%s", executorCommand, basename)
+	}
+
+	if *authPath != "" {
+		uri, basename := serveExecutorArtifact(*authPath)
+		executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri})
+		executorCommand = fmt.Sprintf("%s -auth_path=%s", executorCommand, basename)
 	}
 
 	go http.ListenAndServe(fmt.Sprintf("%s:%d", address.String(), artifactPort), nil)
@@ -129,6 +139,31 @@ func prepareExecutorInfo() *mesos.ExecutorInfo {
 	}
 }
 
+// hacked in from kubelet
+func getApiserverClient() (*client.Client, error) {
+	clientConfig := client.Config{}
+	if *authPath != "" {
+		authInfo, err := clientauth.LoadFromFile(*authPath)
+		if err != nil {
+			return nil, err
+		}
+		clientConfig, err = authInfo.MergeWithConfig(clientConfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// TODO(k8s): adapt client to support LB over several servers
+	if len(apiServerList) > 1 {
+		log.Infof("Mulitple api servers specified.  Picking first one")
+	}
+	clientConfig.Host = apiServerList[0]
+	if c, err := client.New(&clientConfig); err != nil {
+		return nil, err
+	} else {
+		return c, nil
+	}
+}
+
 // Copied from cmd/apiserver.go
 func main() {
 	flag.Parse()
@@ -142,11 +177,16 @@ func main() {
 		log.Fatalf("specify either -etcd_servers or -etcd_config")
 	}
 
-	client, err := client.New(clientConfig)
-	if err != nil {
-		log.Fatalf("Invalid API configuration: %v", err)
+	if len(apiServerList) < 1 {
+		log.Fatal("No api servers specified.")
 	}
 
+	client, err := getApiserverClient()
+	if err != nil {
+		log.Fatalf("Unable to make apiserver client: %v", err)
+	}
+
+	// Send events to APIserver if there is a client.
 	record.StartRecording(client.Events(""), "scheduler")
 
 	// Create mesos scheduler driver.

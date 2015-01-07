@@ -96,6 +96,8 @@ func (k *KubernetesScheduler) prepareTaskForLaunch(ctx api.Context, machine stri
 	for ix, container := range boundPod.Spec.Containers {
 		boundPod.Spec.Containers[ix].Env = append(container.Env, envVars...)
 	}
+	// Make a dummy self link so that references to this bound pod will work.
+	boundPod.SelfLink = "/api/v1beta1/boundPods/" + boundPod.Name
 
 	// update the boundPod here to pick up things like environment variables that
 	// pod containers will use for service discovery. the kubelet-executor uses this
@@ -257,7 +259,7 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 					// "pod" now refers to a Pod instance that is not pointed to by the PodTask, so update our records
 					task.Pod = pod
 					if added := k.podQueue.Readd(podKey, &Pod{pod}, queue.POP_EVENT); !added {
-						log.V(2).Info("failed to readd pod %v, did someone else change it?", podKey)
+						log.V(2).Infof("failed to readd pod %v, did someone else change it?", podKey)
 					}
 				} else {
 					// this state shouldn't really be possible, so I'm warning if we ever see it
@@ -279,7 +281,9 @@ func (k *KubernetesScheduler) monitorPodEvents() {
 			continue
 		}
 		pod := entry.Value().(*Pod)
-		log.Error(k.handlePodDeleted(pod))
+		if err := k.handlePodDeleted(pod); err != nil {
+			log.Error(err)
+		}
 	}
 }
 

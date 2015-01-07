@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"net/http"
 
+	log "github.com/golang/glog"
 	"golang.org/x/net/context"
 )
 
@@ -40,10 +41,15 @@ func (c *mesosClient) EnlistedSlaves(ctx context.Context) ([]string, error) {
 			return err
 		}
 		defer res.Body.Close()
-		blob, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return err
+		if res.StatusCode != 200 {
+			return fmt.Errorf("HTTP request failed with code %d: %v", res.StatusCode, res.Status)
 		}
+		//TODO(jdef): remove debug logging once this is working
+		blob, err1 := ioutil.ReadAll(res.Body)
+		if err1 != nil {
+			return err1
+		}
+		log.V(2).Infof("Got mesos state, content length %v", len(blob))
 		state := &State{}
 		err = json.Unmarshal(blob, state)
 		if err != nil {
@@ -57,7 +63,7 @@ func (c *mesosClient) EnlistedSlaves(ctx context.Context) ([]string, error) {
 		}
 		return nil
 	})
-	return hosts, nil
+	return hosts, err
 }
 
 type responseHandler func(*http.Response, error) error
@@ -78,7 +84,7 @@ func (c *mesosClient) httpDo(ctx context.Context, req *http.Request, f responseH
 }
 
 type State struct {
-	slaves []*Slave
+	slaves []Slave
 }
 
 type Slave struct {
