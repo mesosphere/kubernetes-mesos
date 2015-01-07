@@ -61,15 +61,18 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 	}
 
 	if err = k.prepareTaskForLaunch(ctx, binding.Host, task); err == nil {
-		log.V(2).Infof("Launching task : %v", task)
-		taskList := []*mesos.TaskInfo{task.TaskInfo}
-		if err = k.driver.LaunchTasks(task.Offer.Details().Id, taskList, nil); err == nil {
-			// we *intentionally* do not record our binding to etcd since we're not using bindings
-			// to manage pod lifecycle
-			task.Pod.Status.Host = binding.Host
-			task.Launched = true
-			k.offers.Invalidate(offerId)
-			return nil
+		log.V(2).Infof("Attempting to bind %v to %v", binding.PodID, binding.Host)
+		if err = k.client.Post().Namespace(api.Namespace(ctx)).Path("bindings").Body(binding).Do().Error(); err == nil {
+			log.V(2).Infof("Launching task : %v", task)
+			taskList := []*mesos.TaskInfo{task.TaskInfo}
+			if err = k.driver.LaunchTasks(task.Offer.Details().Id, taskList, nil); err == nil {
+				// we *intentionally* do not record our binding to etcd since we're not using bindings
+				// to manage pod lifecycle
+				task.Pod.Status.Host = binding.Host
+				task.Launched = true
+				k.offers.Invalidate(offerId)
+				return nil
+			}
 		}
 	}
 	task.Offer.Release()
@@ -293,6 +296,8 @@ func (k *KubernetesScheduler) handlePodDeleted(pod *Pod) error {
 	if err != nil {
 		return err
 	}
+
+	log.V(2).Infof("pod deleted: %v", podKey)
 
 	k.Lock()
 	defer k.Unlock()

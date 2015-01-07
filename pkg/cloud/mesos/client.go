@@ -50,15 +50,22 @@ func (c *mesosClient) EnlistedSlaves(ctx context.Context) ([]string, error) {
 			return err1
 		}
 		log.V(2).Infof("Got mesos state, content length %v", len(blob))
+		type State struct {
+			Slaves []*struct {
+				Id       string `json:"id"`       // ex: 20150106-162714-3815890698-5050-2453-S2
+				Pid      string `json:"pid"`      // ex: slave(1)@10.22.211.18:5051
+				Hostname string `json:"hostname"` // ex: 10.22.211.18
+			} `json:"slaves"`
+		}
 		state := &State{}
 		err = json.Unmarshal(blob, state)
 		if err != nil {
 			return err
 		}
 		//TODO(jdef): filter slaves according to those running the executor/kubelet
-		for _, slave := range state.slaves {
-			if slave.hostname != "" {
-				hosts = append(hosts, slave.hostname)
+		for _, slave := range state.Slaves {
+			if slave.Hostname != "" {
+				hosts = append(hosts, slave.Hostname)
 			}
 		}
 		return nil
@@ -81,14 +88,4 @@ func (c *mesosClient) httpDo(ctx context.Context, req *http.Request, f responseH
 	case err := <-ch:
 		return err
 	}
-}
-
-type State struct {
-	slaves []Slave
-}
-
-type Slave struct {
-	id       string // ex: 20150106-162714-3815890698-5050-2453-S2
-	pid      string // ex: slave(1)@10.22.211.18:5051
-	hostname string // ex: 10.22.211.18
 }
