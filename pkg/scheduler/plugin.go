@@ -254,6 +254,7 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 		}
 		if pod.Status.Host == "" {
 			// ensure that the pod hasn't been deleted while we were trying to schedule it
+			log.V(3).Infof("ensure that the pod hasn't been deleted while we're trying to reschedule it: %v", podKey)
 			k.Lock()
 			defer k.Unlock()
 
@@ -261,8 +262,10 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 				if task, ok := k.pendingTasks[taskId]; ok && !task.hasAcceptedOffer() {
 					// "pod" now refers to a Pod instance that is not pointed to by the PodTask, so update our records
 					task.Pod = pod
-					if added := k.podQueue.Readd(podKey, &Pod{pod}, queue.POP_EVENT); !added {
-						log.V(2).Infof("failed to readd pod %v, did someone else change it?", podKey)
+					if added := k.podQueue.Readd(podKey, &Pod{pod}, queue.POP_EVENT|queue.ADD_EVENT|queue.UPDATE_EVENT); !added {
+						log.V(2).Infof("failed to readd pod %v, did someone delete it?", podKey)
+					} else {
+						log.V(3).Infof("readded pod %v", podKey)
 					}
 				} else {
 					// this state shouldn't really be possible, so I'm warning if we ever see it
@@ -271,6 +274,8 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 			} else {
 				log.Infof("Scheduler detected deleted pod: %v, will not re-queue", podKey)
 			}
+		} else {
+			log.Warningf("Pod already rescheduled? Aborting %+v", pod)
 		}
 	}()
 }
@@ -280,10 +285,12 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 func (k *KubernetesScheduler) monitorPodEvents() {
 	for {
 		entry := <-k.updates
+		log.V(3).Infof("Received pod entry: %+v", entry)
+
+		pod := entry.Value().(*Pod)
 		if !entry.Is(queue.DELETE_EVENT) {
 			continue
 		}
-		pod := entry.Value().(*Pod)
 		if err := k.handlePodDeleted(pod); err != nil {
 			log.Error(err)
 		}

@@ -182,10 +182,11 @@ func (f *HistoricalFIFO) Readd(id string, v interface{}, t EventType) bool {
 		} else if entry.Is(DELETE_EVENT | POP_EVENT) {
 			f.queue = append(f.queue, id)
 		}
+		notifications = f.merge(id, obj)
+		f.cond.Broadcast()
+		return true
 	}
-	notifications = f.merge(id, obj)
-	f.cond.Broadcast()
-	return true
+	return false
 }
 
 // Delete removes an item. It doesn't add it to the queue, because
