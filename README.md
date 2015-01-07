@@ -55,9 +55,8 @@ $ cd $GOPATH # If you don't have one, create directory and set GOPATH accordingl
 $ mkdir -p src/github.com/mesosphere/kubernetes-mesos
 $ git clone https://github.com/mesosphere/kubernetes-mesos.git src/github.com/mesosphere/kubernetes-mesos
 $ cd src/github.com/mesosphere/kubernetes-mesos && godep restore
-$ go install github.com/GoogleCloudPlatform/kubernetes/cmd/{kube-proxy,kubecfg,kubectl}
-$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
-$ go install github.com/mesosphere/kubernetes-mesos/controller-manager
+$ go install github.com/GoogleCloudPlatform/kubernetes/cmd/{kube-proxy,kube-apiserver,kubecfg,kubectl}
+$ go install github.com/mesosphere/kubernetes-mesos/cmd/k8sm-{scheduler,executor,controller-manager}
 ```
 
 ### Start the framework
@@ -96,7 +95,7 @@ $ ./bin/k8sm-scheduler \
   -address=${servicehost} \
   -mesos_master=${servicehost}:5050 \
   -etcd_servers=http://${servicehost}:4001 \
-  -executor_path=$(pwd)/bin/kubernetes-executor \
+  -executor_path=$(pwd)/bin/k8sm-executor \
   -proxy_path=$(pwd)/bin/kube-proxy \
   -mesos_user=root \
   -api_servers=$servicehost:8888
