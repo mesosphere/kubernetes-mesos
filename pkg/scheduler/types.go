@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"errors"
+	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 )
@@ -37,4 +38,6 @@ var (
 // wrapper for the k8s pod type so that we can define additional methods on a "pod"
 type Pod struct {
 	*api.Pod
+	deadline *time.Time
+	delay    *time.Duration
 }

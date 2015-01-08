@@ -199,91 +199,87 @@ func (k *KubernetesScheduler) enqueuePods() {
 				// TODO(jdef): we should probably send update messages to the executor task
 				continue
 			}
-			k.podQueue.Add(pod.GetUID(), pod)
+			now := time.Now()
+			pod.deadline = &now
+			k.podQueue.Offer(pod.GetUID(), pod)
 		}
 	}, 1*time.Second)
 }
 
 // implementation of scheduling plugin's NextPod func; see plugin/pkg/scheduler
 func (k *KubernetesScheduler) yield() *api.Pod {
-	return k.podQueue.Pop().(*Pod)
+	kpod := k.podQueue.Pop().(*Pod)
+	return kpod.Pod
 }
 
 // implementation of scheduling plugin's Error func; see plugin/pkg/scheduler
 func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *api.Pod, err error) {
 	log.Infof("Error scheduling %v: %v; retrying", pod.Name, err)
+	defer util.HandleCrash()
+
 	backoff.gc()
 
-	// Retry asynchronously.
-	// Note that this is extremely rudimentary and we need a more real error handling path.
-	go func() {
-		defer util.HandleCrash()
-		ctx := api.WithNamespace(api.NewDefaultContext(), pod.Namespace)
-
-		// default upstream scheduler passes pod.Name as binding.PodID
-		podKey, err := makePodKey(ctx, pod.Name)
-		if err != nil {
-			log.Errorf("Failed to build pod key, will not attempt to reschedule pod %v: %v", pod.Name, err)
-			return
-		}
-		// did we error out because if non-matching offers? if so, register an offer
-		// listener to be notified if/when a matching offer comes in.
-		var offersAvailable <-chan empty
-		if err == noSuitableOffersErr {
-			offersAvailable = k.offers.Listen(podKey, func(offer *mesos.Offer) bool {
-				k.RLock()
-				defer k.RUnlock()
-				if taskId, ok := k.podToTask[podKey]; ok {
-					switch task, state := k.getTask(taskId); state {
-					case statePending:
-						return task.AcceptOffer(offer)
+	delay := 10 * time.Second
+	k.podQueue.Add(pod.UID, &Pod{Pod: pod, delay: &delay}) //TODO(jdef) use backoff here
+	/*
+		// Retry asynchronously.
+		// Note that this is extremely rudimentary and we need a more real error handling path.
+		go func() {
+			// did we error out because if non-matching offers? if so, register an offer
+			// listener to be notified if/when a matching offer comes in.
+			var offersAvailable <-chan empty
+			if err == noSuitableOffersErr {
+				offersAvailable = k.offers.Listen(podKey, func(offer *mesos.Offer) bool {
+					k.RLock()
+					defer k.RUnlock()
+					if taskId, ok := k.podToTask[podKey]; ok {
+						switch task, state := k.getTask(taskId); state {
+						case statePending:
+							return task.AcceptOffer(offer)
+						}
 					}
-				}
-				return false
-			})
-		}
-		backoff.wait(podKey, offersAvailable)
-
-		// Get the pod again; it may have changed/been scheduled already.
-		pod, err = k.client.Pods(pod.Namespace).Get(pod.Name)
-		if err != nil {
-			log.Warningf("Failed to get pod %v for retry: %v; abandoning", podKey, err)
-
-			// avoid potential pod leak..
-			k.Lock()
-			defer k.Unlock()
-			if taskId, exists := k.podToTask[podKey]; exists {
-				delete(k.pendingTasks, taskId)
-				delete(k.podToTask, podKey)
+					return false
+				})
 			}
-			return
-		}
-		if pod.Status.Host == "" {
-			// ensure that the pod hasn't been deleted while we were trying to schedule it
-			log.V(3).Infof("ensure that the pod hasn't been deleted while we're trying to reschedule it: %v", podKey)
-			k.Lock()
-			defer k.Unlock()
+			backoff.wait(podKey, offersAvailable)
 
-			if taskId, exists := k.podToTask[podKey]; exists {
-				if task, ok := k.pendingTasks[taskId]; ok && !task.hasAcceptedOffer() {
-					// "pod" now refers to a Pod instance that is not pointed to by the PodTask, so update our records
-					task.Pod = pod
-					if added := k.podStore.Readd(podKey, &Pod{pod}, queue.POP_EVENT|queue.ADD_EVENT|queue.UPDATE_EVENT); !added {
-						log.V(2).Infof("failed to readd pod %v, did someone delete it?", podKey)
+			// Get the pod again; it may have changed/been scheduled already.
+			pod, err = k.client.Pods(pod.Namespace).Get(pod.Name)
+			if err != nil {
+				log.Warningf("Failed to get pod %v for retry: %v; abandoning", podKey, err)
+
+				// avoid potential pod leak..
+				k.Lock()
+				defer k.Unlock()
+				if taskId, exists := k.podToTask[podKey]; exists {
+					delete(k.pendingTasks, taskId)
+					delete(k.podToTask, podKey)
+				}
+				return
+			}
+			if pod.Status.Host == "" {
+				// ensure that the pod hasn't been deleted while we were trying to schedule it
+				log.V(3).Infof("ensure that the pod hasn't been deleted while we're trying to reschedule it: %v", podKey)
+				k.Lock()
+				defer k.Unlock()
+
+				if taskId, exists := k.podToTask[podKey]; exists {
+					if task, ok := k.pendingTasks[taskId]; ok && !task.hasAcceptedOffer() {
+						// "pod" now refers to a Pod instance that is not pointed to by the PodTask, so update our records
+						task.Pod = pod
+						k.podQueue.Add(pod.UID, &delayPod{pod, 5*time.Second}) //TODO(jdef) use backoff here
 					} else {
-						log.V(3).Infof("readded pod %v", podKey)
+						// this state shouldn't really be possible, so I'm warning if we ever see it
+						log.Errorf("Scheduler detected pod no longer pending: %v, will not re-queue; possible offer leak", podKey)
 					}
 				} else {
-					// this state shouldn't really be possible, so I'm warning if we ever see it
-					log.Errorf("Scheduler detected pod no longer pending: %v, will not re-queue; possible offer leak", podKey)
+					log.Infof("Scheduler detected deleted pod: %v, will not re-queue", podKey)
 				}
 			} else {
-				log.Infof("Scheduler detected deleted pod: %v, will not re-queue", podKey)
+				log.Warningf("Pod already rescheduled? Aborting %+v", pod)
 			}
-		} else {
-			log.Warningf("Pod already rescheduled? Aborting %+v", pod)
-		}
-	}()
+		}()
+	*/
 }
 
 // currently monitors for "pod deleted" events, upon which handlePodDeleted()
@@ -427,12 +423,12 @@ type podStoreAdapter struct {
 
 func (psa *podStoreAdapter) Add(id string, obj interface{}) {
 	pod := obj.(*api.Pod)
-	psa.HistoricalFIFO.Add(id, &Pod{pod})
+	psa.HistoricalFIFO.Add(id, &Pod{Pod: pod})
 }
 
 func (psa *podStoreAdapter) Update(id string, obj interface{}) {
 	pod := obj.(*api.Pod)
-	psa.HistoricalFIFO.Update(id, &Pod{pod})
+	psa.HistoricalFIFO.Update(id, &Pod{Pod: pod})
 }
 
 // Replace will delete the contents of the store, using instead the
@@ -441,7 +437,7 @@ func (psa *podStoreAdapter) Replace(idToObj map[string]interface{}) {
 	newmap := map[string]interface{}{}
 	for k, v := range idToObj {
 		pod := v.(*api.Pod)
-		newmap[k] = &Pod{pod}
+		newmap[k] = &Pod{Pod: pod}
 	}
 	psa.HistoricalFIFO.Replace(newmap)
 }
@@ -452,9 +448,23 @@ func (p *Pod) Copy() queue.Copyable {
 	}
 	//TODO(jdef) we may need a better "deep-copy" implementation
 	pod := *(p.Pod)
-	return &Pod{&pod}
+	return &Pod{Pod: &pod}
 }
 
 func (p *Pod) GetUID() string {
 	return p.UID
+}
+
+func (dp *Pod) Deadline() (time.Time, bool) {
+	if dp.deadline != nil {
+		return *(dp.deadline), true
+	}
+	return time.Time{}, false
+}
+
+func (dp *Pod) GetDelay() time.Duration {
+	if dp.delay != nil {
+		return *(dp.delay)
+	}
+	return 0
 }

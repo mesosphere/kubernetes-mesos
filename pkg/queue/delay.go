@@ -13,6 +13,11 @@ type Delayed interface {
 	GetDelay() time.Duration
 }
 
+type Deadlined interface {
+	// when ok, returns the time when this object should be activated/executed/evaluated
+	Deadline() (deadline time.Time, ok bool)
+}
+
 type BreakChan <-chan struct{}
 
 // an optional interface to be implemented by Delayed objects; returning a nil
@@ -26,6 +31,7 @@ type qitem struct {
 	value    interface{}
 	priority time.Time
 	index    int
+	readd    func(item *qitem) // re-add the value of the item to the queue
 }
 
 // A priorityQueue implements heap.Interface and holds qitems.
@@ -81,14 +87,36 @@ func (q *DelayQueue) Add(d Delayed) {
 	heap.Push(&q.queue, &qitem{
 		value:    d,
 		priority: deadline,
+		readd: func(qp *qitem) {
+			q.Add(qp.value.(Delayed))
+		},
 	})
 	q.cond.Broadcast()
+}
+
+// If there's a deadline reported by d.Deadline() then `d` is added to the
+// queue and this func returns true.
+func (q *DelayQueue) Offer(d Deadlined) bool {
+	deadline, ok := d.Deadline()
+	if ok {
+		q.lock.Lock()
+		defer q.lock.Unlock()
+		heap.Push(&q.queue, &qitem{
+			value:    d,
+			priority: deadline,
+			readd: func(qp *qitem) {
+				q.Offer(qp.value.(Deadlined))
+			},
+		})
+		q.cond.Broadcast()
+	}
+	return ok
 }
 
 // wait for the delay of the next item in the queue to expire, blocking if
 // there are no items in the queue. does not guarantee first-come-first-serve
 // ordering with respect to clients.
-func (q *DelayQueue) Pop() Delayed {
+func (q *DelayQueue) Pop() interface{} {
 	return q.pop(func() *qitem {
 		q.lock.Lock()
 		defer q.lock.Unlock()
@@ -101,7 +129,7 @@ func (q *DelayQueue) Pop() Delayed {
 	})
 }
 
-func (q *DelayQueue) pop(next func() *qitem) Delayed {
+func (q *DelayQueue) pop(next func() *qitem) interface{} {
 	type empty struct{}
 	var ch chan empty
 	for {
@@ -110,7 +138,7 @@ func (q *DelayQueue) pop(next func() *qitem) Delayed {
 		if breakout, ok := item.value.(Breakout); ok {
 			breaker = breakout.Breaker()
 		}
-		x := item.value.(Delayed)
+		x := item.value
 		waitingPeriod := item.priority.Sub(time.Now())
 		if waitingPeriod >= 0 {
 			// listen for calls to Add() while we're waiting for the deadline
@@ -128,7 +156,7 @@ func (q *DelayQueue) pop(next func() *qitem) Delayed {
 				return x
 			case <-ch:
 				// we may no longer have the earliest deadline, re-try
-				q.Add(x)
+				item.readd(item)
 				continue
 			case <-breaker:
 				return x
@@ -138,6 +166,13 @@ func (q *DelayQueue) pop(next func() *qitem) Delayed {
 	}
 }
 
+type DeadlinePolicy int
+
+const (
+	PreferLatest DeadlinePolicy = iota
+	PreferEarliest
+)
+
 // FIFO receives adds and updates from a Reflector, and puts them in a queue for
 // FIFO order processing. If multiple adds/updates of a single item happen while
 // an item is in the queue before it has been processed, it will only be
@@ -146,12 +181,18 @@ func (q *DelayQueue) pop(next func() *qitem) Delayed {
 type DelayFIFO struct {
 	*DelayQueue
 	// We depend on the property that items in the set are in the queue and vice versa.
-	items map[string]*qitem
+	items          map[string]*qitem
+	deadlinePolicy DeadlinePolicy
 }
 
 type UniqueDelayed interface {
 	UniqueID
 	Delayed
+}
+
+type UniqueDeadlined interface {
+	UniqueID
+	Deadlined
 }
 
 // Add inserts an item, and puts it in the queue. The item is only enqueued
@@ -165,6 +206,9 @@ func (q *DelayFIFO) Add(id string, d UniqueDelayed) {
 		item = &qitem{
 			value:    d,
 			priority: deadline,
+			readd: func(qp *qitem) {
+				q.Add(id, qp.value.(UniqueDelayed))
+			},
 		}
 		heap.Push(&q.queue, item)
 		q.items[id] = item
@@ -177,9 +221,50 @@ func (q *DelayFIFO) Add(id string, d UniqueDelayed) {
 	q.cond.Broadcast()
 }
 
-// Update is the same as Add in this implementation.
-func (f *DelayFIFO) Update(id string, obj UniqueDelayed) {
-	f.Add(id, obj)
+func (q *DelayFIFO) Offer(id string, d UniqueDeadlined) bool {
+	deadline, ok := d.Deadline()
+	if ok {
+		q.lock.Lock()
+		defer q.lock.Unlock()
+		if item, exists := q.items[id]; !exists {
+			item = &qitem{
+				value:    d,
+				priority: deadline,
+				readd: func(qp *qitem) {
+					q.Offer(id, qp.value.(UniqueDeadlined))
+				},
+			}
+			heap.Push(&q.queue, item)
+			q.items[id] = item
+		} else {
+			// this is an update of an existing item
+			item.value = d
+			item.priority = deadline
+			heap.Fix(&q.queue, item.index)
+		}
+		q.cond.Broadcast()
+	}
+	return ok
+}
+
+func (q *DelayFIFO) nextDeadline(a, b time.Time) (result time.Time) {
+	switch q.deadlinePolicy {
+	case PreferEarliest:
+		if a.Before(b) {
+			result = a
+		} else {
+			result = b
+		}
+	case PreferLatest:
+		fallthrough
+	default:
+		if a.After(b) {
+			result = a
+		} else {
+			result = b
+		}
+	}
+	return
 }
 
 // Delete removes an item. It doesn't add it to the queue, because
@@ -192,10 +277,10 @@ func (f *DelayFIFO) Delete(id string) {
 }
 
 // List returns a list of all the items.
-func (f *DelayFIFO) List() []UniqueDelayed {
+func (f *DelayFIFO) List() []UniqueID {
 	f.lock.RLock()
 	defer f.lock.RUnlock()
-	list := make([]UniqueDelayed, 0, len(f.items))
+	list := make([]UniqueID, 0, len(f.items))
 	for _, item := range f.items {
 		list = append(list, item.value.(UniqueDelayed))
 	}
@@ -216,17 +301,17 @@ func (c *DelayFIFO) ContainedIDs() util.StringSet {
 }
 
 // Get returns the requested item, or sets exists=false.
-func (f *DelayFIFO) Get(id string) (UniqueDelayed, bool) {
+func (f *DelayFIFO) Get(id string) (UniqueID, bool) {
 	f.lock.RLock()
 	defer f.lock.RUnlock()
 	if item, exists := f.items[id]; exists {
-		return item.value.(UniqueDelayed), true
+		return item.value.(UniqueID), true
 	}
 	return nil, false
 }
 
 // Variant of DelayQueue.Pop() for UniqueDelayed items
-func (q *DelayFIFO) Pop() UniqueDelayed {
+func (q *DelayFIFO) Pop() UniqueID {
 	return q.pop(func() *qitem {
 		q.lock.Lock()
 		defer q.lock.Unlock()
@@ -238,7 +323,7 @@ func (q *DelayFIFO) Pop() UniqueDelayed {
 		unique := item.value.(UniqueID)
 		delete(q.items, unique.GetUID())
 		return item
-	}).(UniqueDelayed)
+	}).(UniqueID)
 }
 
 func NewDelayFIFO() *DelayFIFO {
