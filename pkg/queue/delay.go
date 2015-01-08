@@ -11,6 +11,15 @@ type Delayed interface {
 	GetDelay() time.Duration
 }
 
+type BreakChan <-chan struct{}
+
+// an optional interface to be implemented by Delayed objects; returning a nil
+// channel from Breaker() results in waiting the full delay duration
+type Breakout interface {
+	// return a channel that signals early departure from a blocking delay
+	Breaker() BreakChan
+}
+
 type qitem struct {
 	value    interface{}
 	priority time.Time
@@ -94,6 +103,12 @@ func (q *DelayQueue) Pop() Delayed {
 	var ch chan empty
 	for {
 		item := q.next()
+
+		var breaker BreakChan
+		if breakout, ok := item.value.(Breakout); ok {
+			breaker = breakout.Breaker()
+		}
+
 		x := item.value.(Delayed)
 		waitingPeriod := item.priority.Sub(time.Now())
 		if waitingPeriod >= 0 {
@@ -114,6 +129,8 @@ func (q *DelayQueue) Pop() Delayed {
 				// we may no longer have the earliest deadline, re-try
 				q.Add(x)
 				continue
+			case <-breaker:
+				return x
 			}
 		}
 		return x
