@@ -41,7 +41,8 @@ func rangeResource(name string, ports []uint64) *mesos.Resource {
 func NewRanges(ports []uint64) *mesos.Value_Ranges {
 	r := make([]*mesos.Value_Range, 0)
 	for _, port := range ports {
-		r = append(r, &mesos.Value_Range{Begin: &port, End: &port})
+		x := proto.Uint64(port)
+		r = append(r, &mesos.Value_Range{Begin: x, End: x})
 	}
 	return &mesos.Value_Ranges{Range: r}
 }
