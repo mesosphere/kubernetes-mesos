@@ -4,6 +4,8 @@ import (
 	"container/heap"
 	"sync"
 	"time"
+
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 )
 
 type Delayed interface {
@@ -61,7 +63,7 @@ func (pq *priorityQueue) Pop() interface{} {
 // delay period has expired.
 type DelayQueue struct {
 	queue priorityQueue
-	lock  sync.Mutex
+	lock  sync.RWMutex
 	cond  sync.Cond
 }
 
@@ -83,32 +85,31 @@ func (q *DelayQueue) Add(d Delayed) {
 	q.cond.Broadcast()
 }
 
-func (q *DelayQueue) next() *qitem {
-	q.lock.Lock()
-	defer q.lock.Unlock()
-	for q.queue.Len() == 0 {
-		q.cond.Wait()
-	}
-	x := heap.Pop(&q.queue)
-	item := x.(*qitem)
-	return item
-}
-
-type empty struct{}
-
 // wait for the delay of the next item in the queue to expire, blocking if
 // there are no items in the queue. does not guarantee first-come-first-serve
 // ordering with respect to clients.
 func (q *DelayQueue) Pop() Delayed {
+	return q.pop(func() *qitem {
+		q.lock.Lock()
+		defer q.lock.Unlock()
+		for q.queue.Len() == 0 {
+			q.cond.Wait()
+		}
+		x := heap.Pop(&q.queue)
+		item := x.(*qitem)
+		return item
+	})
+}
+
+func (q *DelayQueue) pop(next func() *qitem) Delayed {
+	type empty struct{}
 	var ch chan empty
 	for {
-		item := q.next()
-
+		item := next()
 		var breaker BreakChan
 		if breakout, ok := item.value.(Breakout); ok {
 			breaker = breakout.Breaker()
 		}
-
 		x := item.value.(Delayed)
 		waitingPeriod := item.priority.Sub(time.Now())
 		if waitingPeriod >= 0 {
@@ -135,4 +136,115 @@ func (q *DelayQueue) Pop() Delayed {
 		}
 		return x
 	}
+}
+
+// FIFO receives adds and updates from a Reflector, and puts them in a queue for
+// FIFO order processing. If multiple adds/updates of a single item happen while
+// an item is in the queue before it has been processed, it will only be
+// processed once, and when it is processed, the most recent version will be
+// processed. This can't be done with a channel.
+type DelayFIFO struct {
+	*DelayQueue
+	// We depend on the property that items in the set are in the queue and vice versa.
+	items map[string]*qitem
+}
+
+type UniqueDelayed interface {
+	UniqueID
+	Delayed
+}
+
+// Add inserts an item, and puts it in the queue. The item is only enqueued
+// if it doesn't already exist in the set.
+func (q *DelayFIFO) Add(id string, d UniqueDelayed) {
+	deadline := time.Now().Add(d.GetDelay())
+
+	q.lock.Lock()
+	defer q.lock.Unlock()
+	if item, exists := q.items[id]; !exists {
+		item = &qitem{
+			value:    d,
+			priority: deadline,
+		}
+		heap.Push(&q.queue, item)
+		q.items[id] = item
+	} else {
+		// this is an update of an existing item
+		item.value = d
+		item.priority = deadline
+		heap.Fix(&q.queue, item.index)
+	}
+	q.cond.Broadcast()
+}
+
+// Update is the same as Add in this implementation.
+func (f *DelayFIFO) Update(id string, obj UniqueDelayed) {
+	f.Add(id, obj)
+}
+
+// Delete removes an item. It doesn't add it to the queue, because
+// this implementation assumes the consumer only cares about the objects,
+// not their priority order.
+func (f *DelayFIFO) Delete(id string) {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+	delete(f.items, id)
+}
+
+// List returns a list of all the items.
+func (f *DelayFIFO) List() []UniqueDelayed {
+	f.lock.RLock()
+	defer f.lock.RUnlock()
+	list := make([]UniqueDelayed, 0, len(f.items))
+	for _, item := range f.items {
+		list = append(list, item.value.(UniqueDelayed))
+	}
+	return list
+}
+
+// ContainedIDs returns a util.StringSet containing all IDs of the stored items.
+// This is a snapshot of a moment in time, and one should keep in mind that
+// other go routines can add or remove items after you call this.
+func (c *DelayFIFO) ContainedIDs() util.StringSet {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+	set := util.StringSet{}
+	for id := range c.items {
+		set.Insert(id)
+	}
+	return set
+}
+
+// Get returns the requested item, or sets exists=false.
+func (f *DelayFIFO) Get(id string) (UniqueDelayed, bool) {
+	f.lock.RLock()
+	defer f.lock.RUnlock()
+	if item, exists := f.items[id]; exists {
+		return item.value.(UniqueDelayed), true
+	}
+	return nil, false
+}
+
+// Variant of DelayQueue.Pop() for UniqueDelayed items
+func (q *DelayFIFO) Pop() UniqueDelayed {
+	return q.pop(func() *qitem {
+		q.lock.Lock()
+		defer q.lock.Unlock()
+		for q.queue.Len() == 0 {
+			q.cond.Wait()
+		}
+		x := heap.Pop(&q.queue)
+		item := x.(*qitem)
+		unique := item.value.(UniqueID)
+		delete(q.items, unique.GetUID())
+		return item
+	}).(UniqueDelayed)
+}
+
+func NewDelayFIFO() *DelayFIFO {
+	f := &DelayFIFO{
+		DelayQueue: NewDelayQueue(),
+		items:      map[string]*qitem{},
+	}
+	return f
 }

@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"fmt"
+	"time"
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
@@ -188,19 +189,24 @@ func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
 	}
 }
 
+// watch for unscheduled pods and queue them up for scheduling
+func (k *KubernetesScheduler) enqueuePods() {
+	go util.Forever(func() {
+		for {
+			pod := k.podStore.Pop().(*Pod)
+			if pod.Status.Host != "" {
+				// skip updates for pods that are already scheduled
+				// TODO(jdef): we should probably send update messages to the executor task
+				continue
+			}
+			k.podQueue.Add(pod.GetUID(), pod)
+		}
+	}, 1*time.Second)
+}
+
 // implementation of scheduling plugin's NextPod func; see plugin/pkg/scheduler
 func (k *KubernetesScheduler) yield() *api.Pod {
-	// blocking...
-	for {
-		pod := k.podQueue.Pop().(*Pod)
-		if pod.Status.Host != "" {
-			// skip updates for pods that are already scheduled
-			// TODO(jdef): we should probably send update messages to the executor task
-			continue
-		}
-		log.V(2).Infof("About to try and schedule pod %v\n", pod.Name)
-		return pod.Pod
-	}
+	return k.podQueue.Pop().(*Pod)
 }
 
 // implementation of scheduling plugin's Error func; see plugin/pkg/scheduler
@@ -262,7 +268,7 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 				if task, ok := k.pendingTasks[taskId]; ok && !task.hasAcceptedOffer() {
 					// "pod" now refers to a Pod instance that is not pointed to by the PodTask, so update our records
 					task.Pod = pod
-					if added := k.podQueue.Readd(podKey, &Pod{pod}, queue.POP_EVENT|queue.ADD_EVENT|queue.UPDATE_EVENT); !added {
+					if added := k.podStore.Readd(podKey, &Pod{pod}, queue.POP_EVENT|queue.ADD_EVENT|queue.UPDATE_EVENT); !added {
 						log.V(2).Infof("failed to readd pod %v, did someone delete it?", podKey)
 					} else {
 						log.V(3).Infof("readded pod %v", podKey)
@@ -313,7 +319,7 @@ func (k *KubernetesScheduler) handlePodDeleted(pod *Pod) error {
 	// it's concurrently being scheduled (somewhere between pod scheduling and
 	// binding) - if so, then we'll end up removing it from pendingTasks which
 	// will abort Bind()ing
-	k.podQueue.Delete(podKey)
+	k.podQueue.Delete(pod.GetUID())
 
 	taskId, exists := k.podToTask[podKey]
 	if !exists {
@@ -352,7 +358,12 @@ func (k *KubernetesScheduler) handlePodDeleted(pod *Pod) error {
 func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
 
 	// Watch and queue pods that need scheduling.
-	cache.NewReflector(k.createAllPodsLW(), &api.Pod{}, k.podQueue).Run()
+	cache.NewReflector(k.createAllPodsLW(), &api.Pod{}, k.podStore).Run()
+	k.enqueuePods()
+
+	go util.Forever(func() {
+		k.monitorPodEvents()
+	}, 1*time.Second)
 
 	podBackoff := podBackoff{
 		perPodBackoff: map[string]*backoffEntry{},

@@ -9,7 +9,6 @@ import (
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
@@ -71,7 +70,8 @@ type KubernetesScheduler struct {
 	scheduleFunc PodScheduleFunc
 
 	client   *client.Client
-	podQueue queue.FIFO
+	podStore queue.FIFO
+	podQueue *queue.DelayFIFO
 	updates  <-chan queue.Entry
 }
 
@@ -99,7 +99,8 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 		podToTask:     make(map[string]string),
 		scheduleFunc:  scheduleFunc,
 		client:        client,
-		podQueue:      &podStoreAdapter{queue.NewFIFO(updates)},
+		podStore:      &podStoreAdapter{queue.NewFIFO(updates)},
+		podQueue:      queue.NewDelayFIFO(),
 		updates:       updates,
 	}
 	return k
@@ -122,9 +123,6 @@ func (k *KubernetesScheduler) getTask(taskId string) (*PodTask, stateType) {
 func (k *KubernetesScheduler) Init(d mesos.SchedulerDriver) {
 	k.driver = d
 	k.offers.Init()
-	go util.Forever(func() {
-		k.monitorPodEvents()
-	}, 1*time.Second)
 }
 
 // Registered is called when the scheduler registered with the master successfully.
