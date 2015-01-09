@@ -105,6 +105,8 @@ type FIFO interface {
 	// for the object in the store whose event type matches that given, and then
 	// only enqueued if it doesn't already exist in the set. Returns true if added.
 	Readd(id string, v interface{}, t EventType) bool
+	// Is there an entry for the id that matches the event mask?
+	Poll(id string, t EventType) bool
 }
 
 // HistoricalFIFO receives adds and updates from a Reflector, and puts them in a queue for
@@ -251,6 +253,14 @@ func (f *HistoricalFIFO) Get(id string) (interface{}, bool) {
 		return entry.Value().Copy(), true
 	}
 	return nil, false
+}
+
+// Get returns the requested item, or sets exists=false.
+func (f *HistoricalFIFO) Poll(id string, t EventType) bool {
+	f.lock.RLock()
+	defer f.lock.RUnlock()
+	entry, exists := f.items[id]
+	return exists && entry.Is(t)
 }
 
 func (f *HistoricalFIFO) Pop() interface{} {

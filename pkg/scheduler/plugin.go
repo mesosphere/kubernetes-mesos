@@ -217,10 +217,23 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 	log.Infof("Error scheduling %v: %v; retrying", pod.Name, err)
 	defer util.HandleCrash()
 
-	backoff.gc()
+	ctx := api.WithNamespace(api.NewDefaultContext(), pod.Namespace)
+	// default upstream scheduler passes pod.Name as binding.PodID
+	podKey, err := makePodKey(ctx, pod.Name)
+	if err != nil {
+		log.Errorf("Failed to construct pod key, aborting scheduling for pod %v: %v", pod.Name, err)
+		return
+	}
 
-	delay := 10 * time.Second
-	k.podQueue.Add(pod.UID, &Pod{Pod: pod, delay: &delay}) //TODO(jdef) use backoff here
+	//TODO(jdef): implement a real backoff duration here
+	backoff.gc()
+	delay := 7 * time.Second
+
+	//TODO(jdef): looks suspiciously racy, re-think this...
+	if !k.podStore.Poll(podKey, queue.DELETE_EVENT) {
+		k.podQueue.Add(pod.UID, &Pod{Pod: pod, delay: &delay})
+	}
+
 	/*
 		// Retry asynchronously.
 		// Note that this is extremely rudimentary and we need a more real error handling path.
