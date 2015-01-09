@@ -45,12 +45,11 @@ func (c *mesosClient) enumerateSlaves(ctx context.Context) ([]string, error) {
 		if res.StatusCode != 200 {
 			return fmt.Errorf("HTTP request failed with code %d: %v", res.StatusCode, res.Status)
 		}
-		//TODO(jdef): remove debug logging once this is working
 		blob, err1 := ioutil.ReadAll(res.Body)
 		if err1 != nil {
 			return err1
 		}
-		log.V(2).Infof("Got mesos state, content length %v", len(blob))
+		log.V(3).Infof("Got mesos state, content length %v", len(blob))
 		type State struct {
 			Slaves []*struct {
 				Id       string `json:"id"`       // ex: 20150106-162714-3815890698-5050-2453-S2
@@ -115,12 +114,11 @@ func (c *mesosClient) slaveRunningKubeletExecutor(ctx context.Context, slaveHost
 		if res.StatusCode != 200 {
 			return fmt.Errorf("HTTP request failed with code %d: %v", res.StatusCode, res.Status)
 		}
-		//TODO(jdef): remove debug logging once this is working
 		blob, err1 := ioutil.ReadAll(res.Body)
 		if err1 != nil {
 			return err1
 		}
-		log.V(2).Infof("Got mesos slave state, content length %v", len(blob))
+		log.V(3).Infof("Got mesos slave state, content length %v", len(blob))
 		type State struct {
 			Frameworks []*struct {
 				Executors []*struct {
