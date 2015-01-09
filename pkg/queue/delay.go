@@ -166,11 +166,25 @@ func (q *DelayQueue) pop(next func() *qitem) interface{} {
 	}
 }
 
+// Decide whether a pre-existing deadline for an item in a delay-queue should be
+// updated if an attempt is made to offer/add a new deadline for said item. Whether
+// the deadline changes or not has zero impact on the data blob associated with the
+// entry in the queue.
 type DeadlinePolicy int
 
 const (
 	PreferLatest DeadlinePolicy = iota
 	PreferEarliest
+)
+
+// Decide whether a pre-existing data blob in a delay-queue should be replaced if an
+// an attempt is made to add/offer a new data blob in its place. Whether the data is
+// replaced has no bearing on the deadline (priority) of the item in the queue.
+type ReplacementPolicy int
+
+const (
+	KeepExisting ReplacementPolicy = iota
+	ReplaceExisting
 )
 
 // FIFO receives adds and updates from a Reflector, and puts them in a queue for
@@ -197,7 +211,7 @@ type UniqueDeadlined interface {
 
 // Add inserts an item, and puts it in the queue. The item is only enqueued
 // if it doesn't already exist in the set.
-func (q *DelayFIFO) Add(id string, d UniqueDelayed) {
+func (q *DelayFIFO) Add(id string, d UniqueDelayed, rp ReplacementPolicy) {
 	deadline := time.Now().Add(d.GetDelay())
 
 	q.lock.Lock()
@@ -207,21 +221,21 @@ func (q *DelayFIFO) Add(id string, d UniqueDelayed) {
 			value:    d,
 			priority: deadline,
 			readd: func(qp *qitem) {
-				q.Add(id, qp.value.(UniqueDelayed))
+				q.Add(id, qp.value.(UniqueDelayed), KeepExisting)
 			},
 		}
 		heap.Push(&q.queue, item)
 		q.items[id] = item
 	} else {
 		// this is an update of an existing item
-		item.value = d
-		item.priority = deadline
+		item.value = rp.replacementValue(item.value, d)
+		item.priority = q.deadlinePolicy.nextDeadline(item.priority, deadline)
 		heap.Fix(&q.queue, item.index)
 	}
 	q.cond.Broadcast()
 }
 
-func (q *DelayFIFO) Offer(id string, d UniqueDeadlined) bool {
+func (q *DelayFIFO) Offer(id string, d UniqueDeadlined, rp ReplacementPolicy) bool {
 	deadline, ok := d.Deadline()
 	if ok {
 		q.lock.Lock()
@@ -231,15 +245,15 @@ func (q *DelayFIFO) Offer(id string, d UniqueDeadlined) bool {
 				value:    d,
 				priority: deadline,
 				readd: func(qp *qitem) {
-					q.Offer(id, qp.value.(UniqueDeadlined))
+					q.Offer(id, qp.value.(UniqueDeadlined), KeepExisting)
 				},
 			}
 			heap.Push(&q.queue, item)
 			q.items[id] = item
 		} else {
 			// this is an update of an existing item
-			item.value = d
-			item.priority = deadline
+			item.value = rp.replacementValue(item.value, d)
+			item.priority = q.deadlinePolicy.nextDeadline(item.priority, deadline)
 			heap.Fix(&q.queue, item.index)
 		}
 		q.cond.Broadcast()
@@ -247,8 +261,20 @@ func (q *DelayFIFO) Offer(id string, d UniqueDeadlined) bool {
 	return ok
 }
 
-func (q *DelayFIFO) nextDeadline(a, b time.Time) (result time.Time) {
-	switch q.deadlinePolicy {
+func (rp ReplacementPolicy) replacementValue(original, replacement interface{}) (result interface{}) {
+	switch rp {
+	case KeepExisting:
+		result = original
+	case ReplaceExisting:
+		fallthrough
+	default:
+		result = replacement
+	}
+	return
+}
+
+func (dp DeadlinePolicy) nextDeadline(a, b time.Time) (result time.Time) {
+	switch dp {
 	case PreferEarliest:
 		if a.Before(b) {
 			result = a

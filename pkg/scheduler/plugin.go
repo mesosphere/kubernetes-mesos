@@ -67,11 +67,9 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 			log.V(2).Infof("Launching task : %v", task)
 			taskList := []*mesos.TaskInfo{task.TaskInfo}
 			if err = k.driver.LaunchTasks(task.Offer.Details().Id, taskList, nil); err == nil {
-				// we *intentionally* do not record our binding to etcd since we're not using bindings
-				// to manage pod lifecycle
+				k.offers.Invalidate(offerId)
 				task.Pod.Status.Host = binding.Host
 				task.Launched = true
-				k.offers.Invalidate(offerId)
 				return nil
 			}
 		}
@@ -164,6 +162,8 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionListe
 			// TODO(jdef): this is quite exceptional: we should avoid requeueing the pod for
 			// scheduling in the error handler if we see an error like this.
 			return "", fmt.Errorf("Task %s is not pending, nothing to schedule", taskID)
+		} else if task.Launched {
+			return "", fmt.Errorf("Task %s has already been launched, aborting schedule", taskID)
 		} else {
 			return k.doSchedule(task)
 		}
@@ -201,7 +201,8 @@ func (k *KubernetesScheduler) enqueuePods() {
 			}
 			now := time.Now()
 			pod.deadline = &now
-			k.podQueue.Offer(pod.GetUID(), pod)
+			// use ReplaceExisting because we are always pushing the latest state
+			k.podQueue.Offer(pod.GetUID(), pod, queue.ReplaceExisting)
 		}
 	}, 1*time.Second)
 }
@@ -225,15 +226,31 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 		return
 	}
 
-	//TODO(jdef): implement a real backoff duration here
 	backoff.gc()
-	delay := 7 * time.Second
 
-	//TODO(jdef): looks suspiciously racy, re-think this...
-	if !k.podStore.Poll(podKey, queue.DELETE_EVENT) {
-		//TODO(jdef): it would be nice to avoid overwriting a (potentially) newer pod
-		//record with this one. what is the best way to compare resourceVersions?
-		k.podQueue.Add(pod.UID, &Pod{Pod: pod, delay: &delay})
+	k.RLock()
+	defer k.RUnlock()
+
+	taskId, exists := k.podToTask[podKey]
+	if !exists {
+		// if we don't have a mapping here any more then someone deleted the pod
+		log.V(2).Infof("Could not resolve pod to task, aborting pod reschdule: %s", podKey)
+		return
+	}
+
+	switch task, state := k.getTask(taskId); state {
+	case statePending:
+		if task.Launched {
+			log.V(2).Infof("Skipping re-scheduling for already-launched pod %v", podKey)
+			return
+		}
+		//TODO(jdef): implement a real backoff duration here
+		delay := 7 * time.Second
+		// use KeepExisting in case the pod has already been updated (can happen if binding fails
+		// due to constraint voilations); we don't want to overwrite a newer entry with stale data.
+		k.podQueue.Add(pod.UID, &Pod{Pod: pod, delay: &delay}, queue.KeepExisting)
+	default:
+		log.V(2).Infof("Task is no longer pending, aborting reschedule for pod %v", podKey)
 	}
 
 	/*
