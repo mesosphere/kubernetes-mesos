@@ -6,6 +6,7 @@ import (
 
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/meta"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/envvars"
@@ -37,12 +38,16 @@ func (k *KubernetesScheduler) Bind(binding *api.Binding) error {
 
 	taskId, exists := k.podToTask[podKey]
 	if !exists {
-		return fmt.Errorf("Could not resolve pod '%s' to task id", podKey)
+		log.Infof("Could not resolve pod %s to task id", podKey)
+		return noSuchPodErr
 	}
 
 	task, exists := k.pendingTasks[taskId]
 	if !exists {
-		return fmt.Errorf("Pod Task does not exist %v\n", taskId)
+		// in this case it's likely that the pod has been deleted between Schedule
+		// and Bind calls
+		log.Infof("No pending task for pod %s", podKey)
+		return noSuchPodErr
 	}
 
 	// sanity check: ensure that the task hasAcceptedOffer(), it's possible that between
@@ -137,19 +142,24 @@ func (k *KubernetesScheduler) Schedule(pod api.Pod, unused algorithm.MinionListe
 		return "", err
 	}
 
-	// TODO(jdef): there's a bit of a race here, a pod could have been yielded() but
-	// and then before we get *here* it could be deleted. Unwittingly we'd end up
-	// rescheduling it because there's no way to tell that it had recently been deleted.
-	// Should we implement a lingering/delay-queueish thing here, like we have for offers,
-	// so that we can avoid rescheduling deleted things?
-
-	// TODO(jdef): once we detect the above condition, we'll error out - but we need to
-	// avoid requeueing the pod for scheduling for this particular error
-
 	k.Lock()
 	defer k.Unlock()
 
 	if taskID, ok := k.podToTask[podKey]; !ok {
+		// There's a bit of a potential race here, a pod could have been yielded() but
+		// and then before we get *here* it could be deleted. We use meta to index the pod
+		// in the store since that's what k8s client/cache/reflector does.
+		meta, err := meta.Accessor(&pod)
+		if err != nil {
+			log.Warningf("aborting Schedule(), unable to understand pod object %+v", &pod)
+			return "", noSuchPodErr
+		}
+		if deleted := k.podStore.Poll(meta.Name(), queue.DELETE_EVENT); deleted {
+			// avoid scheduling a pod that's been deleted between yield() and Schedule()
+			log.Infof("aborting Schedule(), pod has been deleted %+v", &pod)
+			return "", noSuchPodErr
+		}
+
 		task, err := newPodTask(ctx, &pod, k.executor)
 		if err != nil {
 			return "", err
@@ -215,6 +225,12 @@ func (k *KubernetesScheduler) yield() *api.Pod {
 
 // implementation of scheduling plugin's Error func; see plugin/pkg/scheduler
 func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *api.Pod, err error) {
+
+	if err == noSuchPodErr {
+		log.V(2).Infof("Not rescheduling non-existent pod %v", pod.Name)
+		return
+	}
+
 	log.Infof("Error scheduling %v: %v; retrying", pod.Name, err)
 	defer util.HandleCrash()
 
@@ -384,6 +400,9 @@ func (k *KubernetesScheduler) handlePodDeleted(pod *Pod) error {
 
 // Create creates a scheduler and all support functions.
 func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
+
+	// TODO(jdef) when we start up there may already be pods in the registry
+	// that we don't have tasks created for -- need to reconcile these.
 
 	// Watch and queue pods that need scheduling.
 	cache.NewReflector(k.createAllPodsLW(), &api.Pod{}, k.podStore).Run()

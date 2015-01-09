@@ -33,6 +33,7 @@ const (
 
 var (
 	noSuitableOffersErr = errors.New("No suitable offers for pod/task")
+	noSuchPodErr        = errors.New("No such pod exists")
 )
 
 // wrapper for the k8s pod type so that we can define additional methods on a "pod"
