@@ -231,6 +231,8 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 
 	//TODO(jdef): looks suspiciously racy, re-think this...
 	if !k.podStore.Poll(podKey, queue.DELETE_EVENT) {
+		//TODO(jdef): it would be nice to avoid overwriting a (potentially) newer pod
+		//record with this one. what is the best way to compare resourceVersions?
 		k.podQueue.Add(pod.UID, &Pod{Pod: pod, delay: &delay})
 	}
 
