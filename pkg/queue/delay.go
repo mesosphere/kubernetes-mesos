@@ -315,14 +315,21 @@ func (q *DelayFIFO) Pop() UniqueID {
 	return q.pop(func() *qitem {
 		q.lock.Lock()
 		defer q.lock.Unlock()
-		for q.queue.Len() == 0 {
-			q.cond.Wait()
+		for {
+			for q.queue.Len() == 0 {
+				q.cond.Wait()
+			}
+			x := heap.Pop(&q.queue)
+			item := x.(*qitem)
+			unique := item.value.(UniqueID)
+			uid := unique.GetUID()
+			if _, ok := q.items[uid]; !ok {
+				// item was deleted, keep looking
+				continue
+			}
+			delete(q.items, uid)
+			return item
 		}
-		x := heap.Pop(&q.queue)
-		item := x.(*qitem)
-		unique := item.value.(UniqueID)
-		delete(q.items, unique.GetUID())
-		return item
 	}).(UniqueID)
 }
 
