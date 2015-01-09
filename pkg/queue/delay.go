@@ -18,6 +18,10 @@ type Deadlined interface {
 	Deadline() (deadline time.Time, ok bool)
 }
 
+// No objects are ever expected to be sent over this channel. References to BreakChan
+// instances may be nil (always blocking). Signalling over this channel is performed by
+// closing the channel. As such there can only ever be a single signal sent over the
+// lifetime of the channel.
 type BreakChan <-chan struct{}
 
 // an optional interface to be implemented by Delayed objects; returning a nil
@@ -27,9 +31,14 @@ type Breakout interface {
 	Breaker() BreakChan
 }
 
+type Priority struct {
+	ts     time.Time // timestamp
+	notify BreakChan // notification channel
+}
+
 type qitem struct {
 	value    interface{}
-	priority time.Time
+	priority Priority
 	index    int
 	readd    func(item *qitem) // re-add the value of the item to the queue
 }
@@ -40,7 +49,7 @@ type priorityQueue []*qitem
 func (pq priorityQueue) Len() int { return len(pq) }
 
 func (pq priorityQueue) Less(i, j int) bool {
-	return pq[i].priority.Before(pq[j].priority)
+	return pq[i].priority.ts.Before(pq[j].priority.ts)
 }
 
 func (pq priorityQueue) Swap(i, j int) {
@@ -80,7 +89,7 @@ func NewDelayQueue() *DelayQueue {
 }
 
 func (q *DelayQueue) Add(d Delayed) {
-	deadline := time.Now().Add(d.GetDelay())
+	deadline := extractFromDelayed(d)
 
 	q.lock.Lock()
 	defer q.lock.Unlock()
@@ -97,7 +106,7 @@ func (q *DelayQueue) Add(d Delayed) {
 // If there's a deadline reported by d.Deadline() then `d` is added to the
 // queue and this func returns true.
 func (q *DelayQueue) Offer(d Deadlined) bool {
-	deadline, ok := d.Deadline()
+	deadline, ok := extractFromDeadlined(d)
 	if ok {
 		q.lock.Lock()
 		defer q.lock.Unlock()
@@ -134,12 +143,8 @@ func (q *DelayQueue) pop(next func() *qitem) interface{} {
 	var ch chan empty
 	for {
 		item := next()
-		var breaker BreakChan
-		if breakout, ok := item.value.(Breakout); ok {
-			breaker = breakout.Breaker()
-		}
 		x := item.value
-		waitingPeriod := item.priority.Sub(time.Now())
+		waitingPeriod := item.priority.ts.Sub(time.Now())
 		if waitingPeriod >= 0 {
 			// listen for calls to Add() while we're waiting for the deadline
 			if ch == nil {
@@ -158,7 +163,7 @@ func (q *DelayQueue) pop(next func() *qitem) interface{} {
 				// we may no longer have the earliest deadline, re-try
 				item.readd(item)
 				continue
-			case <-breaker:
+			case <-item.priority.notify:
 				return x
 			}
 		}
@@ -212,7 +217,7 @@ type UniqueDeadlined interface {
 // Add inserts an item, and puts it in the queue. The item is only enqueued
 // if it doesn't already exist in the set.
 func (q *DelayFIFO) Add(id string, d UniqueDelayed, rp ReplacementPolicy) {
-	deadline := time.Now().Add(d.GetDelay())
+	deadline := extractFromDelayed(d)
 
 	q.lock.Lock()
 	defer q.lock.Unlock()
@@ -236,7 +241,7 @@ func (q *DelayFIFO) Add(id string, d UniqueDelayed, rp ReplacementPolicy) {
 }
 
 func (q *DelayFIFO) Offer(id string, d UniqueDeadlined, rp ReplacementPolicy) bool {
-	deadline, ok := d.Deadline()
+	deadline, ok := extractFromDeadlined(d)
 	if ok {
 		q.lock.Lock()
 		defer q.lock.Unlock()
@@ -261,6 +266,32 @@ func (q *DelayFIFO) Offer(id string, d UniqueDeadlined, rp ReplacementPolicy) bo
 	return ok
 }
 
+func extractFromDelayed(d Delayed) Priority {
+	deadline := time.Now().Add(d.GetDelay())
+	breaker := BreakChan(nil)
+	if breakout, good := d.(Breakout); good {
+		breaker = breakout.Breaker()
+	}
+	return Priority{
+		ts:     deadline,
+		notify: breaker,
+	}
+}
+
+func extractFromDeadlined(d Deadlined) (Priority, bool) {
+	if ts, ok := d.Deadline(); ok {
+		breaker := BreakChan(nil)
+		if breakout, good := d.(Breakout); good {
+			breaker = breakout.Breaker()
+		}
+		return Priority{
+			ts:     ts,
+			notify: breaker,
+		}, true
+	}
+	return Priority{}, false
+}
+
 func (rp ReplacementPolicy) replacementValue(original, replacement interface{}) (result interface{}) {
 	switch rp {
 	case KeepExisting:
@@ -273,10 +304,10 @@ func (rp ReplacementPolicy) replacementValue(original, replacement interface{}) 
 	return
 }
 
-func (dp DeadlinePolicy) nextDeadline(a, b time.Time) (result time.Time) {
+func (dp DeadlinePolicy) nextDeadline(a, b Priority) (result Priority) {
 	switch dp {
 	case PreferEarliest:
-		if a.Before(b) {
+		if a.ts.Before(b.ts) {
 			result = a
 		} else {
 			result = b
@@ -284,7 +315,7 @@ func (dp DeadlinePolicy) nextDeadline(a, b time.Time) (result time.Time) {
 	case PreferLatest:
 		fallthrough
 	default:
-		if a.After(b) {
+		if a.ts.After(b.ts) {
 			result = a
 		} else {
 			result = b

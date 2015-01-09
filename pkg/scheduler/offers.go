@@ -26,7 +26,7 @@ type OfferRegistry interface {
 	// Listen for arriving offers that are acceptable to the filter, sending
 	// a signal on (by closing) the returned channel. A listener will only
 	// ever be notified once, if at all.
-	Listen(id string, f OfferFilter) <-chan empty
+	Listen(id string, f OfferFilter) <-chan struct{}
 
 	// invoked when offers are rescinded or expired
 	Delete(string)
@@ -275,17 +275,17 @@ func (s *offerStorage) Get(id string) (PerishableOffer, bool) {
 type offerListener struct {
 	id      string
 	accepts OfferFilter
-	notify  chan<- empty
+	notify  chan<- struct{}
 	age     int
 }
 
 // register a listener for new offers, whom we'll notify upon receiving such.
 // notification is delivered in the form of closing the channel, nothing is ever sent.
-func (s *offerStorage) Listen(id string, f OfferFilter) <-chan empty {
+func (s *offerStorage) Listen(id string, f OfferFilter) <-chan struct{} {
 	if f == nil {
 		return nil
 	}
-	ch := make(chan empty)
+	ch := make(chan struct{})
 	listen := &offerListener{
 		id:      id,
 		accepts: f,

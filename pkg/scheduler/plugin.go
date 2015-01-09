@@ -224,18 +224,18 @@ func (k *KubernetesScheduler) yield() *api.Pod {
 }
 
 // implementation of scheduling plugin's Error func; see plugin/pkg/scheduler
-func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *api.Pod, err error) {
+func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *api.Pod, schedulingErr error) {
 
-	if err == noSuchPodErr {
+	if schedulingErr == noSuchPodErr {
 		log.V(2).Infof("Not rescheduling non-existent pod %v", pod.Name)
 		return
 	}
 
-	log.Infof("Error scheduling %v: %v; retrying", pod.Name, err)
+	log.Infof("Error scheduling %v: %v; retrying", pod.Name, schedulingErr)
 	defer util.HandleCrash()
 
-	ctx := api.WithNamespace(api.NewDefaultContext(), pod.Namespace)
 	// default upstream scheduler passes pod.Name as binding.PodID
+	ctx := api.WithNamespace(api.NewDefaultContext(), pod.Namespace)
 	podKey, err := makePodKey(ctx, pod.Name)
 	if err != nil {
 		log.Errorf("Failed to construct pod key, aborting scheduling for pod %v: %v", pod.Name, err)
@@ -243,7 +243,6 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 	}
 
 	backoff.gc()
-
 	k.RLock()
 	defer k.RUnlock()
 
@@ -260,74 +259,27 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 			log.V(2).Infof("Skipping re-scheduling for already-launched pod %v", podKey)
 			return
 		}
-		//TODO(jdef): implement a real backoff duration here
-		delay := 7 * time.Second
+		offersAvailable := queue.BreakChan(nil)
+		if schedulingErr == noSuitableOffersErr {
+			log.V(3).Infof("adding backoff breakout handler for pod %v", podKey)
+			offersAvailable = queue.BreakChan(k.offers.Listen(podKey, func(offer *mesos.Offer) bool {
+				k.RLock()
+				defer k.RUnlock()
+				switch task, state := k.getTask(taskId); state {
+				case statePending:
+					return !task.Launched && task.AcceptOffer(offer)
+				}
+				return false
+			}))
+		}
+		delay := backoff.getBackoff(podKey)
+
 		// use KeepExisting in case the pod has already been updated (can happen if binding fails
 		// due to constraint voilations); we don't want to overwrite a newer entry with stale data.
-		k.podQueue.Add(pod.UID, &Pod{Pod: pod, delay: &delay}, queue.KeepExisting)
+		k.podQueue.Add(pod.UID, &Pod{Pod: pod, delay: &delay, notify: offersAvailable}, queue.KeepExisting)
 	default:
 		log.V(2).Infof("Task is no longer pending, aborting reschedule for pod %v", podKey)
 	}
-
-	/*
-		// Retry asynchronously.
-		// Note that this is extremely rudimentary and we need a more real error handling path.
-		go func() {
-			// did we error out because if non-matching offers? if so, register an offer
-			// listener to be notified if/when a matching offer comes in.
-			var offersAvailable <-chan empty
-			if err == noSuitableOffersErr {
-				offersAvailable = k.offers.Listen(podKey, func(offer *mesos.Offer) bool {
-					k.RLock()
-					defer k.RUnlock()
-					if taskId, ok := k.podToTask[podKey]; ok {
-						switch task, state := k.getTask(taskId); state {
-						case statePending:
-							return task.AcceptOffer(offer)
-						}
-					}
-					return false
-				})
-			}
-			backoff.wait(podKey, offersAvailable)
-
-			// Get the pod again; it may have changed/been scheduled already.
-			pod, err = k.client.Pods(pod.Namespace).Get(pod.Name)
-			if err != nil {
-				log.Warningf("Failed to get pod %v for retry: %v; abandoning", podKey, err)
-
-				// avoid potential pod leak..
-				k.Lock()
-				defer k.Unlock()
-				if taskId, exists := k.podToTask[podKey]; exists {
-					delete(k.pendingTasks, taskId)
-					delete(k.podToTask, podKey)
-				}
-				return
-			}
-			if pod.Status.Host == "" {
-				// ensure that the pod hasn't been deleted while we were trying to schedule it
-				log.V(3).Infof("ensure that the pod hasn't been deleted while we're trying to reschedule it: %v", podKey)
-				k.Lock()
-				defer k.Unlock()
-
-				if taskId, exists := k.podToTask[podKey]; exists {
-					if task, ok := k.pendingTasks[taskId]; ok && !task.hasAcceptedOffer() {
-						// "pod" now refers to a Pod instance that is not pointed to by the PodTask, so update our records
-						task.Pod = pod
-						k.podQueue.Add(pod.UID, &delayPod{pod, 5*time.Second}) //TODO(jdef) use backoff here
-					} else {
-						// this state shouldn't really be possible, so I'm warning if we ever see it
-						log.Errorf("Scheduler detected pod no longer pending: %v, will not re-queue; possible offer leak", podKey)
-					}
-				} else {
-					log.Infof("Scheduler detected deleted pod: %v, will not re-queue", podKey)
-				}
-			} else {
-				log.Warningf("Pod already rescheduled? Aborting %+v", pod)
-			}
-		}()
-	*/
 }
 
 // currently monitors for "pod deleted" events, upon which handlePodDeleted()
@@ -518,4 +470,8 @@ func (dp *Pod) GetDelay() time.Duration {
 		return *(dp.delay)
 	}
 	return 0
+}
+
+func (p *Pod) Breaker() queue.BreakChan {
+	return p.notify
 }
