@@ -91,7 +91,7 @@ $ make TAGS=profile
 Profiling, when enabled, is supported for both the `kubernetes-mesos` (framework) and `kubernetes-executor` binaries:
 ```shell
 $ ts=$(date +'%Y%m%d%H%M%S')
-$ curl http://${servicehost}:9000/debug/pprof/heap >framework.heap.$ts
+$ curl http://${servicehost}:10251/debug/pprof/heap >framework.heap.$ts
 $ curl http://10.132.189.${slave}:10250/debug/pprof/heap >${slave}.heap.$ts
 ```
 
