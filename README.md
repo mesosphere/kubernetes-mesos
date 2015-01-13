@@ -89,7 +89,8 @@ $ ./bin/kube-apiserver \
   -etcd_servers=http://${servicehost}:4001 \
   -portal_net=10.10.10.0/24 \
   -port=8888 \
-  -cloud_provider=mesos
+  -cloud_provider=mesos \
+  -health_check_minions=false
 
 $ ./bin/k8sm-scheduler \
   -address=${servicehost} \
