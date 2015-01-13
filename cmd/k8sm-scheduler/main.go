@@ -62,7 +62,6 @@ var (
 )
 
 const (
-	artifactPort     = 9000             // port of the service that services mesos artifacts (executor); TODO(jdef): make this configurable
 	httpReadTimeout  = 10 * time.Second // k8s api server config: maximum duration before timing out read of the request
 	httpWriteTimeout = 10 * time.Second // k8s api server config: maximum duration before timing out write of the response
 )
@@ -91,7 +90,7 @@ func serveExecutorArtifact(path string) (*string, string) {
 	}
 	serveFile("/"+base, path)
 
-	hostURI := fmt.Sprintf("http://%s:%d/%s", address.String(), artifactPort, base)
+	hostURI := fmt.Sprintf("http://%s:%d/%s", address.String(), *port, base)
 	log.V(2).Infof("Hosting artifact '%s' at '%s'", path, hostURI)
 
 	return &hostURI, base
@@ -123,9 +122,6 @@ func prepareExecutorInfo() *mesos.ExecutorInfo {
 		executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri})
 		executorCommand = fmt.Sprintf("%s -auth_path=%s", executorCommand, basename)
 	}
-
-	go http.ListenAndServe(fmt.Sprintf("%s:%d", address.String(), artifactPort), nil)
-	log.V(2).Info("Serving executor artifacts...")
 
 	// Create mesos scheduler driver.
 	return &mesos.ExecutorInfo{
@@ -223,7 +219,7 @@ func main() {
 		}
 	}()
 
-	go http.ListenAndServe(net.JoinHostPort(address.String(), strconv.Itoa(*port)), nil)
+	go log.Fatal(http.ListenAndServe(net.JoinHostPort(address.String(), strconv.Itoa(*port)), nil))
 	plugin.New(mesosPodScheduler.NewPluginConfig()).Run()
 
 	select {}
