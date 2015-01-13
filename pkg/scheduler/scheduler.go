@@ -155,8 +155,7 @@ func (k *KubernetesScheduler) Disconnected(driver mesos.SchedulerDriver) {
 
 // ResourceOffers is called when the scheduler receives some offers from the master.
 func (k *KubernetesScheduler) ResourceOffers(driver mesos.SchedulerDriver, offers []*mesos.Offer) {
-	log.Infof("Received offers\n")
-	log.V(2).Infof("%v\n", offers)
+	log.V(2).Infof("Received offers %+v", offers)
 
 	k.Lock()
 	defer k.Unlock()

@@ -72,12 +72,12 @@ func (e *endpointController) SyncServiceEndpoints() error {
 			// HACK(jdef): looks up a HostPort in the container, either by port-name or matching HostPort
 			port, err := findPort(&pod, service.Spec.ContainerPort)
 			if err != nil {
-				glog.Errorf("Failed to find port for service: %v, %v", service, err)
+				glog.Errorf("Failed to find port for service: %+v, %v", service, err)
 				continue
 			}
 			// HACK(jdef): use HostIP instead of pod.CurrentState.PodIP for generic mesos compat
 			if len(pod.Status.HostIP) == 0 {
-				glog.Errorf("Failed to find a host IP for pod: %v", pod)
+				glog.Errorf("Failed to find a host IP for pod: %+v", pod)
 				continue
 			}
 			endpoints = append(endpoints, net.JoinHostPort(pod.Status.HostIP, strconv.Itoa(port)))

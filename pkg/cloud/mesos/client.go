@@ -29,7 +29,7 @@ func newMesosClient() *mesosClient {
 }
 
 // return an array of host:port strings, each of which points to a mesos slave service
-func (c *mesosClient) enumerateSlaves(ctx context.Context) ([]string, error) {
+func (c *mesosClient) EnumerateSlaves(ctx context.Context) ([]string, error) {
 	//TODO(jdef) probably should not assume that mesosMaster is a host:port
 	uri := fmt.Sprintf("http://%s/state.json", c.mesosMaster)
 	req, err := http.NewRequest("GET", uri, nil)
@@ -78,7 +78,7 @@ func (c *mesosClient) enumerateSlaves(ctx context.Context) ([]string, error) {
 
 // return a list of slaves running a k8sm kubelet/executor
 func (c *mesosClient) EnlistedSlaves(ctx context.Context) ([]string, error) {
-	slaves, err := c.enumerateSlaves(ctx)
+	slaves, err := c.EnumerateSlaves(ctx)
 	if err != nil {
 		return nil, err
 	}

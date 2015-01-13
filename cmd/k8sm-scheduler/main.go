@@ -30,9 +30,11 @@ import (
 	"time"
 
 	"code.google.com/p/goprotobuf/proto"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/clientauth"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
@@ -105,7 +107,6 @@ func prepareExecutorInfo() *mesos.ExecutorInfo {
 
 	//TODO(jdef): provide some way (env var?) for user's to customize executor config
 	//TODO(jdef): set -hostname_override and -address to 127.0.0.1 if `address` is 127.0.0.1
-	//TODO(jdef): kubelet can publish events to the api server, we should probably tell it our IP address
 	apiServerArgs := strings.Join(apiServerList, ",")
 	executorCommand := fmt.Sprintf("./%s -v=2 -hostname_override=0.0.0.0 -allow_privileged=%t -api_servers=%s", executorCmd, *allowPrivileged, apiServerArgs)
 	if len(etcdServerList) > 0 {
@@ -219,7 +220,16 @@ func main() {
 		}
 	}()
 
-	go log.Fatal(http.ListenAndServe(net.JoinHostPort(address.String(), strconv.Itoa(*port)), nil))
+	//TODO(jdef) we need real task reconciliation at some point
+	log.V(1).Info("Clearing old pods from the registry")
+	clearOldPods(client)
+
+	go util.Forever(func() {
+		log.V(1).Info("Starting HTTP interface")
+		log.Error(http.ListenAndServe(net.JoinHostPort(address.String(), strconv.Itoa(*port)), nil))
+	}, 5*time.Second)
+
+	log.V(1).Info("Spinning up scheduling loop")
 	plugin.New(mesosPodScheduler.NewPluginConfig()).Run()
 
 	select {}
@@ -264,4 +274,19 @@ func getUsername() (username string, err error) {
 		}
 	}
 	return
+}
+
+func clearOldPods(c *client.Client) {
+	ctx := api.NewDefaultContext()
+	podList, err := c.Pods(api.Namespace(ctx)).List(labels.Everything())
+	if err != nil {
+		log.Warningf("failed to clear pod registry, madness may ensue: %v", err)
+		return
+	}
+	for _, pod := range podList.Items {
+		err := c.Pods(pod.Namespace).Delete(pod.Name)
+		if err != nil {
+			log.Warning("failed to delete pod %v: %v", pod.Name, err)
+		}
+	}
 }

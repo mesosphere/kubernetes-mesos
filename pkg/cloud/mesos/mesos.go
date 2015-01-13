@@ -83,20 +83,29 @@ func (c *MesosCloud) IPAddress(name string) (net.IP, error) {
 
 // List lists instances that match 'filter' which is a regular expression
 // which must match the entire instance name (fqdn).
-func (c *MesosCloud) List(filter string) (slaves []string, err error) {
+func (c *MesosCloud) List(filter string) ([]string, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	slaves, err = c.client.EnlistedSlaves(ctx)
+	// TODO(jdef) listing all slaves for now, until EnlistedSlaves scales better
+	// Because of this, minion health checks should be disabled on the apiserver
+	addr, err := c.client.EnumerateSlaves(ctx)
 	if err == nil {
-		if len(slaves) == 0 {
-			log.V(2).Info("no enlisted slaves found, are any running?")
-		} else {
-			log.V(2).Infof("slaves=%v", slaves)
+		if len(addr) == 0 {
+			log.V(2).Info("no slaves found, are any running?")
 		}
 	} else {
 		log.Warning(err)
 	}
-	return
+	slaves := []string{}
+	for _, a := range addr {
+		host, _, err := net.SplitHostPort(a)
+		if err != nil {
+			log.Warning(err)
+			continue
+		}
+		slaves = append(slaves, host)
+	}
+	return slaves, nil
 }
 
 // GetNodeResources gets the resources for a particular node

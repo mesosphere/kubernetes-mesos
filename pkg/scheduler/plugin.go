@@ -202,6 +202,7 @@ func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
 // watch for unscheduled pods and queue them up for scheduling
 func (k *KubernetesScheduler) enqueuePods() {
 	go util.Forever(func() {
+		log.Info("Watching for newly created pods")
 		for {
 			pod := k.podStore.Pop().(*Pod)
 			if pod.Status.Host != "" {
@@ -213,6 +214,7 @@ func (k *KubernetesScheduler) enqueuePods() {
 			pod.deadline = &now
 			// use ReplaceExisting because we are always pushing the latest state
 			k.podQueue.Offer(pod.GetUID(), pod, queue.ReplaceExisting)
+			log.V(3).Infof("queued pod for scheduling: %v", pod.Pod.Name)
 		}
 	}, 1*time.Second)
 }
