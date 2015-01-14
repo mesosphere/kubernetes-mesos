@@ -48,15 +48,19 @@ Building the project is greatly simplified by using godep.
 * To install godep, see [github.com/tools/godep][5]
 * See the [development][1] page for sample environment setup steps.
 
-Once the [prerequisites][7] have been installed you can build the project:
+Once the [prerequisites][7] have been installed you can build the project.
+Kubernetes-Mesos is built using a Makefile to simplify the process of patching the vanilla Kubernetes code.
+At this time it is **highly recommended** to use the Makefile instead of building components manually using `go build`.
 ```shell
 $ cd $GOPATH # If you don't have one, create directory and set GOPATH accordingly.
 
 $ mkdir -p src/github.com/mesosphere/kubernetes-mesos
 $ git clone https://github.com/mesosphere/kubernetes-mesos.git src/github.com/mesosphere/kubernetes-mesos
-$ cd src/github.com/mesosphere/kubernetes-mesos && godep restore
-$ go install github.com/GoogleCloudPlatform/kubernetes/cmd/{kube-proxy,kube-apiserver,kubecfg,kubectl}
-$ go install github.com/mesosphere/kubernetes-mesos/cmd/k8sm-{scheduler,executor,controller-manager}
+$ cd src/github.com/mesosphere/kubernetes-mesos
+$ make bootstrap                   # downloads dependencies using godep
+$ make                             # compile the binaries
+$ make test                        # execute unit tests
+$ make install DESTDIR=$(pwd)/bin  # install to ./bin
 ```
 
 ### Start the framework
@@ -80,7 +84,8 @@ $ sudo docker run -d --net=host coreos/etcd go-wrapper run \
    -listen-peer-urls=http://${servicehost}:7001
 ```
 
-Assuming your mesos cluster is started, and that the mesos-master and etcd are running on `${servicehost}`, then:
+Ensure that your mesos cluster is started.
+Assuming that the mesos-master and etcd are running on `${servicehost}`, then:
 
 ```shell
 $ ./bin/kube-apiserver \
