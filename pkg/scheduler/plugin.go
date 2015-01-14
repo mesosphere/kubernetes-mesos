@@ -24,7 +24,7 @@ import (
 )
 
 // scheduler abstraction to allow for easier unit testing
-type K8smScheduler interface {
+type SchedulerInterface interface {
 	sync.Locker
 	RLocker() sync.Locker
 	SlaveIndex
@@ -67,7 +67,7 @@ func (k *k8smScheduler) taskForPod(podID string) (taskID string, ok bool) {
 }
 
 func (k *k8smScheduler) createPodTask(ctx api.Context, pod *api.Pod) (*PodTask, error) {
-	return newPodTask(ctx, pod, k.KubernetesScheduler.executor)
+	return newPodTask(ctx, pod, k.executor)
 }
 
 func (k *k8smScheduler) registerPodTask(task *PodTask, err error) (*PodTask, error) {
@@ -91,7 +91,7 @@ func (k *k8smScheduler) unregisterPodTask(task *PodTask) {
 }
 
 type binder struct {
-	api K8smScheduler
+	api SchedulerInterface
 }
 
 // implements binding.Registry, launches the pod-associated-task in mesos
@@ -207,7 +207,7 @@ func (b *binder) getServiceEnvironmentVariables(ctx api.Context) (result []api.E
 }
 
 type kubeScheduler struct {
-	api      K8smScheduler
+	api      SchedulerInterface
 	podStore queue.FIFO
 }
 
@@ -356,7 +356,7 @@ func (q *queuer) yield() (pod *api.Pod) {
 }
 
 type errorHandler struct {
-	api      K8smScheduler
+	api      SchedulerInterface
 	backoff  *podBackoff
 	podQueue *queue.DelayFIFO
 }
@@ -421,7 +421,7 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 }
 
 type deleter struct {
-	api      K8smScheduler
+	api      SchedulerInterface
 	podQueue *queue.DelayFIFO
 }
 
