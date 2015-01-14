@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"code.google.com/p/goprotobuf/proto"
@@ -200,29 +201,75 @@ func (k *KubernetesScheduler) doSchedule(task *PodTask) (string, error) {
 }
 
 // watch for unscheduled pods and queue them up for scheduling
-func (k *KubernetesScheduler) enqueuePods() {
+func (k *KubernetesScheduler) enqueuePods(lock sync.Locker) {
+	enqueuePod := func() {
+		sleepTime := 0 * time.Second
+		defer func() { time.Sleep(sleepTime) }()
+
+		lock.Lock()
+		defer lock.Unlock()
+
+		// limit blocking here for short intervals so that scheduling
+		// may proceed even if there have been no recent pod changes
+		p := k.podStore.Await(200 * time.Millisecond)
+		if p == nil {
+			sleepTime = 1 * time.Second
+			return
+		}
+
+		pod := p.(*Pod)
+		if pod.Status.Host != "" {
+			k.podQueue.Delete(pod.GetUID())
+		} else {
+			// use ReplaceExisting because we are always pushing the latest state
+			now := time.Now()
+			pod.deadline = &now
+			k.podQueue.Offer(pod.GetUID(), pod, queue.ReplaceExisting)
+			log.V(3).Infof("queued pod for scheduling: %v", pod.Pod.Name)
+		}
+	}
 	go util.Forever(func() {
 		log.Info("Watching for newly created pods")
 		for {
-			pod := k.podStore.Pop().(*Pod)
-			if pod.Status.Host != "" {
-				// skip updates for pods that are already scheduled
-				// TODO(jdef): we should probably send update messages to the executor task
-				continue
-			}
-			now := time.Now()
-			pod.deadline = &now
-			// use ReplaceExisting because we are always pushing the latest state
-			k.podQueue.Offer(pod.GetUID(), pod, queue.ReplaceExisting)
-			log.V(3).Infof("queued pod for scheduling: %v", pod.Pod.Name)
+			enqueuePod()
 		}
 	}, 1*time.Second)
 }
 
 // implementation of scheduling plugin's NextPod func; see plugin/pkg/scheduler
-func (k *KubernetesScheduler) yield() *api.Pod {
-	kpod := k.podQueue.Pop().(*Pod)
-	return kpod.Pod
+func (k *KubernetesScheduler) yield(lock sync.Locker) (pod *api.Pod) {
+	log.V(2).Info("attempting to yield a pod")
+	pop := func() (found bool) {
+		sleepTime := 0 * time.Second
+		defer func() { time.Sleep(sleepTime) }()
+
+		lock.Lock()
+		defer lock.Unlock()
+
+		// limit blocking here to short intervals so that enqueuePods
+		// can feed us pods for scheduling
+		kpod := k.podQueue.Await(200 * time.Millisecond)
+		if kpod == nil {
+			sleepTime = 1 * time.Second
+			return
+		}
+
+		pod = kpod.(*Pod).Pod
+		if meta, err := meta.Accessor(pod); err != nil {
+			log.Warningf("yield unable to understand pod object %+v, will skip", pod)
+		} else if !k.podStore.Poll(meta.Name(), queue.POP_EVENT) {
+			log.V(1).Infof("yield popped a transitioning pod, skipping: %+v", pod)
+		} else if pod.Status.Host != "" {
+			// should never happen if enqueuePods is filtering properly
+			log.Warningf("yield popped an already-scheduled pod, skipping: %+v", pod)
+		} else {
+			found = true
+		}
+		return
+	}
+	for !pop() {
+	}
+	return
 }
 
 // implementation of scheduling plugin's Error func; see plugin/pkg/scheduler
@@ -287,18 +334,18 @@ func (k *KubernetesScheduler) handleSchedulingError(backoff *podBackoff, pod *ap
 // currently monitors for "pod deleted" events, upon which handlePodDeleted()
 // is invoked.
 func (k *KubernetesScheduler) monitorPodEvents() {
-	for {
-		entry := <-k.updates
-		log.V(3).Infof("Received pod entry: %+v", entry)
-
-		pod := entry.Value().(*Pod)
-		if !entry.Is(queue.DELETE_EVENT) {
-			continue
+	go util.Forever(func() {
+		for {
+			entry := <-k.updates
+			pod := entry.Value().(*Pod)
+			if !entry.Is(queue.DELETE_EVENT) {
+				continue
+			}
+			if err := k.handlePodDeleted(pod); err != nil {
+				log.Error(err)
+			}
 		}
-		if err := k.handlePodDeleted(pod); err != nil {
-			log.Error(err)
-		}
-	}
+	}, 1*time.Second)
 }
 
 func (k *KubernetesScheduler) handlePodDeleted(pod *Pod) error {
@@ -310,6 +357,10 @@ func (k *KubernetesScheduler) handlePodDeleted(pod *Pod) error {
 
 	log.V(2).Infof("pod deleted: %v", podKey)
 
+	// order is important here: we want to make sure we have the lock before
+	// removing the pod from the scheduling queue. this makes the concurrent
+	// execution of scheduler-error-handling and delete-handling easier to
+	// reason about.
 	k.Lock()
 	defer k.Unlock()
 
@@ -355,16 +406,16 @@ func (k *KubernetesScheduler) handlePodDeleted(pod *Pod) error {
 // Create creates a scheduler and all support functions.
 func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
 
-	// TODO(jdef) when we start up there may already be pods in the registry
-	// that we don't have tasks created for -- need to reconcile these.
-
 	// Watch and queue pods that need scheduling.
 	cache.NewReflector(k.createAllPodsLW(), &api.Pod{}, k.podStore).Run()
-	k.enqueuePods()
 
-	go util.Forever(func() {
-		k.monitorPodEvents()
-	}, 1*time.Second)
+	// lock that guards critial sections that involve transferring pods from
+	// the store (cache) to the scheduling queue; its purpose is to maintain
+	// an ordering (vs interleaving) of operations that's easier to reason about.
+	var transferLock sync.Mutex
+
+	k.enqueuePods(&transferLock)
+	k.monitorPodEvents()
 
 	podBackoff := podBackoff{
 		perPodBackoff: map[string]*backoffEntry{},
@@ -375,7 +426,7 @@ func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
 		Algorithm:    k,
 		Binder:       k,
 		NextPod: func() *api.Pod {
-			return k.yield()
+			return k.yield(&transferLock)
 		},
 		Error: func(pod *api.Pod, err error) {
 			k.handleSchedulingError(&podBackoff, pod, err)

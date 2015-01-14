@@ -36,6 +36,10 @@ type Priority struct {
 	notify BreakChan // notification channel
 }
 
+func (p Priority) Equal(other Priority) bool {
+	return p.ts.Equal(other.ts) && p.notify == other.notify
+}
+
 type qitem struct {
 	value    interface{}
 	priority Priority
@@ -126,6 +130,7 @@ func (q *DelayQueue) Offer(d Deadlined) bool {
 // there are no items in the queue. does not guarantee first-come-first-serve
 // ordering with respect to clients.
 func (q *DelayQueue) Pop() interface{} {
+	// doesn't implement cancellation, will always return a non-nil value
 	return q.pop(func() *qitem {
 		q.lock.Lock()
 		defer q.lock.Unlock()
@@ -135,36 +140,44 @@ func (q *DelayQueue) Pop() interface{} {
 		x := heap.Pop(&q.queue)
 		item := x.(*qitem)
 		return item
-	})
+	}, nil)
 }
 
-func (q *DelayQueue) pop(next func() *qitem) interface{} {
-	type empty struct{}
-	var ch chan empty
+// returns a non-nil value from the queue, or else nil if/when cancelled; if cancel
+// is nil then cancellation is disabled and this func must return a non-nil value.
+func (q *DelayQueue) pop(next func() *qitem, cancel <-chan struct{}) interface{} {
+	var ch chan struct{}
 	for {
 		item := next()
+		if item == nil {
+			// cancelled
+			return nil
+		}
 		x := item.value
 		waitingPeriod := item.priority.ts.Sub(time.Now())
 		if waitingPeriod >= 0 {
 			// listen for calls to Add() while we're waiting for the deadline
 			if ch == nil {
-				ch = make(chan empty, 1)
+				ch = make(chan struct{}, 1)
 			}
 			go func() {
 				q.lock.Lock()
 				defer q.lock.Unlock()
 				q.cond.Wait()
-				ch <- empty{}
+				ch <- struct{}{}
 			}()
 			select {
-			case <-time.After(waitingPeriod):
-				return x
+			case <-cancel:
+				item.readd(item)
+				return nil
 			case <-ch:
 				// we may no longer have the earliest deadline, re-try
 				item.readd(item)
 				continue
+			case <-time.After(waitingPeriod):
+				// noop
 			case <-item.priority.notify:
-				return x
+				// noop
 			}
 		}
 		return x
@@ -368,13 +381,53 @@ func (f *DelayFIFO) Get(id string) (UniqueID, bool) {
 }
 
 // Variant of DelayQueue.Pop() for UniqueDelayed items
+func (q *DelayFIFO) Await(timeout time.Duration) UniqueID {
+	cancel := make(chan struct{})
+	ch := make(chan interface{}, 1)
+	go func() { ch <- q.pop(cancel) }()
+	var x interface{}
+	select {
+	case <-time.After(timeout):
+		close(cancel)
+		x = <-ch
+	case x = <-ch:
+		// noop
+	}
+	if x != nil {
+		return x.(UniqueID)
+	}
+	return nil
+}
+
+// Variant of DelayQueue.Pop() for UniqueDelayed items
 func (q *DelayFIFO) Pop() UniqueID {
-	return q.pop(func() *qitem {
+	return q.pop(nil).(UniqueID)
+}
+
+// variant of DelayQueue.Pop that implements optional cancellation
+func (q *DelayFIFO) pop(cancel chan struct{}) interface{} {
+	next := func() *qitem {
 		q.lock.Lock()
 		defer q.lock.Unlock()
 		for {
 			for q.queue.Len() == 0 {
-				q.cond.Wait()
+				signal := make(chan struct{})
+				go func() {
+					q.cond.Wait()
+					close(signal)
+				}()
+				select {
+				case <-cancel:
+					// we may not have the lock yet, so
+					// broadcast to abort Wait, then
+					// return after lock re-acquisition
+					q.cond.Broadcast()
+					<-signal
+					return nil
+				case <-signal:
+					// we have the lock, re-check
+					// the queue for data...
+				}
 			}
 			x := heap.Pop(&q.queue)
 			item := x.(*qitem)
@@ -387,7 +440,8 @@ func (q *DelayFIFO) Pop() UniqueID {
 			delete(q.items, uid)
 			return item
 		}
-	}).(UniqueID)
+	}
+	return q.DelayQueue.pop(next, cancel)
 }
 
 func NewDelayFIFO() *DelayFIFO {

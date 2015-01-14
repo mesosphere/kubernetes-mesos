@@ -101,6 +101,9 @@ type FIFO interface {
 	// so if you don't succesfully process it, you need to add it back with Add()
 	// or Readd().
 	Pop() interface{}
+	// Await attempts to Pop within the given interval; upon success the non-nil
+	// item is returned, otherwise nil
+	Await(timeout time.Duration) interface{}
 	// Add the item to the store, but only if there exists a prior entry for
 	// for the object in the store whose event type matches that given, and then
 	// only enqueued if it doesn't already exist in the set. Returns true if added.
@@ -263,7 +266,24 @@ func (f *HistoricalFIFO) Poll(id string, t EventType) bool {
 	return exists && entry.Is(t)
 }
 
+// Variant of DelayQueue.Pop() for UniqueDelayed items
+func (q *HistoricalFIFO) Await(timeout time.Duration) interface{} {
+	cancel := make(chan struct{})
+	ch := make(chan interface{}, 1)
+	go func() { ch <- q.pop(cancel) }()
+	select {
+	case <-time.After(timeout):
+		close(cancel)
+		return <-ch
+	case x := <-ch:
+		return x
+	}
+}
 func (f *HistoricalFIFO) Pop() interface{} {
+	return f.pop(nil)
+}
+
+func (f *HistoricalFIFO) pop(cancel chan struct{}) interface{} {
 	popEvent := (Entry)(nil)
 	defer func() {
 		f.carrier(popEvent)
@@ -273,7 +293,23 @@ func (f *HistoricalFIFO) Pop() interface{} {
 	defer f.lock.Unlock()
 	for {
 		for len(f.queue) == 0 {
-			f.cond.Wait()
+			signal := make(chan struct{})
+			go func() {
+				f.cond.Wait()
+				close(signal)
+			}()
+			select {
+			case <-cancel:
+				// we may not have the lock yet, so
+				// broadcast to abort Wait, then
+				// return after lock re-acquisition
+				f.cond.Broadcast()
+				<-signal
+				return nil
+			case <-signal:
+				// we have the lock, re-check
+				// the queue for data...
+			}
 		}
 		id := f.queue[0]
 		f.queue = f.queue[1:]
