@@ -30,6 +30,11 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
 - [ ] Use resource shapes to schedule pods
 - [ ] Even smarter (Marathon-like) scheduling
 
+### Tutorial
+
+Mesosphere maintains a tutorial for running [Kubernetes-Mesos on GCE][10], which is periodically updated to coincide with releases of this project.
+Please use a release from the [0.3.x series][11] for the best experience with the tutorial.
+
 ### Build
 
 For a binary-only install of the Kubernetes-Mesos framework you can use the Docker-based builder:
@@ -396,3 +401,5 @@ $ go test github.com/mesosphere/kubernetes-mesos/kubernetes-mesos -v
 [7]: DEVELOP.md#prerequisites
 [8]: http://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing
 [9]: https://github.com/GoogleCloudPlatform/kubernetes/releases/tag/v0.5
+[10]: https://mesosphere.com/docs/tutorials/kubernetes-mesos-gcp/
+[11]: https://github.com/mesosphere/kubernetes-mesos/releases
