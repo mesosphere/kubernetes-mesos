@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 )
 
@@ -18,7 +19,7 @@ import (
 // details.
 //
 // See the FCFSScheduleFunc for example.
-type PodScheduleFunc func(r OfferRegistry, slaves map[string]*Slave, task *PodTask) (PerishableOffer, error)
+type PodScheduleFunc func(r OfferRegistry, slaves SlaveIndex, task *PodTask) (PerishableOffer, error)
 
 // A minimal placeholder
 type empty struct{}
@@ -43,4 +44,15 @@ type Pod struct {
 	deadline *time.Time
 	delay    *time.Duration
 	notify   queue.BreakChan
+}
+
+// adapter for k8s pkg/scheduler/Scheduler interface
+type SchedulerFunc func(api.Pod, algorithm.MinionLister) (selectedMachine string, err error)
+
+func (f SchedulerFunc) Schedule(pod api.Pod, lister algorithm.MinionLister) (string, error) {
+	return f(pod, lister)
+}
+
+type SlaveIndex interface {
+	slaveFor(id string) (*Slave, bool)
 }

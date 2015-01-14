@@ -11,7 +11,6 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
-	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 )
 
 const (
@@ -69,16 +68,12 @@ type KubernetesScheduler struct {
 	// The function that does scheduling.
 	scheduleFunc PodScheduleFunc
 
-	client   *client.Client
-	podStore queue.FIFO
-	podQueue *queue.DelayFIFO
-	updates  <-chan queue.Entry
+	client *client.Client
 }
 
 // New create a new KubernetesScheduler
 func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client) *KubernetesScheduler {
 	var k *KubernetesScheduler
-	updates := make(chan queue.Entry, defaultUpdatesBacklog)
 	k = &KubernetesScheduler{
 		RWMutex:  new(sync.RWMutex),
 		executor: executor,
@@ -99,9 +94,6 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 		podToTask:     make(map[string]string),
 		scheduleFunc:  scheduleFunc,
 		client:        client,
-		podStore:      &podStoreAdapter{queue.NewFIFO(updates)},
-		podQueue:      queue.NewDelayFIFO(),
-		updates:       updates,
 	}
 	return k
 }

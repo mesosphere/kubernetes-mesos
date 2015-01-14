@@ -6,7 +6,7 @@ import (
 )
 
 // A first-come-first-serve scheduler: acquires the first offer that can support the task
-func FCFSScheduleFunc(r OfferRegistry, slaves map[string]*Slave, task *PodTask) (PerishableOffer, error) {
+func FCFSScheduleFunc(r OfferRegistry, unused SlaveIndex, task *PodTask) (PerishableOffer, error) {
 	if task.hasAcceptedOffer() {
 		// verify that the offer is still on the table
 		offerId := task.GetOfferId()
