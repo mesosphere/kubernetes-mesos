@@ -74,7 +74,7 @@ Next, [start the framework](https://github.com/mesosphere/kubernetes-mesos/#star
 Once the framework and executors are up and running you can start capturing heaps:
 
     $ ts=$(date +'%Y%m%d%H%M%S')
-    $ curl http://${servicehost}:9000/debug/pprof/heap >framework.heap.$ts
+    $ curl http://${servicehost}:10251/debug/pprof/heap >framework.heap.$ts
     $ for slave in 240 242 243; do
           curl http://10.132.189.${slave}:10250/debug/pprof/heap >${slave}.heap.$ts;
       done
