@@ -48,7 +48,7 @@ func NewRanges(ports []uint64) *mesos.Value_Ranges {
 }
 
 func (t *PodTask) hasAcceptedOffer() bool {
-	return t.TaskInfo.TaskId != nil
+	return t.TaskInfo != nil && t.TaskInfo.TaskId != nil
 }
 
 func (t *PodTask) GetOfferId() string {

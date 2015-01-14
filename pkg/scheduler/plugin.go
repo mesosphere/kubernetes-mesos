@@ -307,7 +307,7 @@ func (q *queuer) Run() {
 			// use ReplaceExisting because we are always pushing the latest state
 			now := time.Now()
 			pod.deadline = &now
-			q.podQueue.Offer(pod.GetUID(), pod, queue.ReplaceExisting)
+			q.podQueue.Offer(pod, queue.ReplaceExisting)
 			log.V(3).Infof("queued pod for scheduling: %v", pod.Pod.Name)
 		}
 	}
@@ -414,7 +414,7 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 
 		// use KeepExisting in case the pod has already been updated (can happen if binding fails
 		// due to constraint voilations); we don't want to overwrite a newer entry with stale data.
-		k.podQueue.Add(pod.UID, &Pod{Pod: pod, delay: &delay, notify: offersAvailable}, queue.KeepExisting)
+		k.podQueue.Add(&Pod{Pod: pod, delay: &delay, notify: offersAvailable}, queue.KeepExisting)
 	default:
 		log.V(2).Infof("Task is no longer pending, aborting reschedule for pod %v", podKey)
 	}
@@ -433,7 +433,7 @@ func (k *deleter) Run(updates <-chan queue.Entry) {
 			entry := <-updates
 			pod := entry.Value().(*Pod)
 			if entry.Is(queue.DELETE_EVENT) {
-				if err := k.handle(pod); err != nil {
+				if err := k.deleteOne(pod); err != nil {
 					log.Error(err)
 				}
 			}
@@ -441,7 +441,7 @@ func (k *deleter) Run(updates <-chan queue.Entry) {
 	}, 1*time.Second)
 }
 
-func (k *deleter) handle(pod *Pod) error {
+func (k *deleter) deleteOne(pod *Pod) error {
 	ctx := api.WithNamespace(api.NewDefaultContext(), pod.Namespace)
 	podKey, err := makePodKey(ctx, pod.Name)
 	if err != nil {
@@ -465,7 +465,8 @@ func (k *deleter) handle(pod *Pod) error {
 
 	taskId, exists := k.api.taskForPod(podKey)
 	if !exists {
-		return fmt.Errorf("Could not resolve pod '%s' to task id", podKey)
+		log.V(2).Infof("Could not resolve pod '%s' to task id", podKey)
+		return noSuchPodErr
 	}
 
 	// determine if the task has already been launched to mesos, if not then

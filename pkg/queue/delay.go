@@ -229,8 +229,9 @@ type UniqueDeadlined interface {
 
 // Add inserts an item, and puts it in the queue. The item is only enqueued
 // if it doesn't already exist in the set.
-func (q *DelayFIFO) Add(id string, d UniqueDelayed, rp ReplacementPolicy) {
+func (q *DelayFIFO) Add(d UniqueDelayed, rp ReplacementPolicy) {
 	deadline := extractFromDelayed(d)
+	id := d.GetUID()
 
 	q.lock.Lock()
 	defer q.lock.Unlock()
@@ -239,7 +240,7 @@ func (q *DelayFIFO) Add(id string, d UniqueDelayed, rp ReplacementPolicy) {
 			value:    d,
 			priority: deadline,
 			readd: func(qp *qitem) {
-				q.Add(id, qp.value.(UniqueDelayed), KeepExisting)
+				q.Add(qp.value.(UniqueDelayed), KeepExisting)
 			},
 		}
 		heap.Push(&q.queue, item)
@@ -253,8 +254,9 @@ func (q *DelayFIFO) Add(id string, d UniqueDelayed, rp ReplacementPolicy) {
 	q.cond.Broadcast()
 }
 
-func (q *DelayFIFO) Offer(id string, d UniqueDeadlined, rp ReplacementPolicy) bool {
+func (q *DelayFIFO) Offer(d UniqueDeadlined, rp ReplacementPolicy) bool {
 	deadline, ok := extractFromDeadlined(d)
+	id := d.GetUID()
 	if ok {
 		q.lock.Lock()
 		defer q.lock.Unlock()
@@ -263,7 +265,7 @@ func (q *DelayFIFO) Offer(id string, d UniqueDeadlined, rp ReplacementPolicy) bo
 				value:    d,
 				priority: deadline,
 				readd: func(qp *qitem) {
-					q.Offer(id, qp.value.(UniqueDeadlined), KeepExisting)
+					q.Offer(qp.value.(UniqueDeadlined), KeepExisting)
 				},
 			}
 			heap.Push(&q.queue, item)
