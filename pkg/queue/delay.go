@@ -8,38 +8,6 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 )
 
-type Delayed interface {
-	// return the remaining delay; a non-positive value indicates no delay
-	GetDelay() time.Duration
-}
-
-type Deadlined interface {
-	// when ok, returns the time when this object should be activated/executed/evaluated
-	Deadline() (deadline time.Time, ok bool)
-}
-
-// No objects are ever expected to be sent over this channel. References to BreakChan
-// instances may be nil (always blocking). Signalling over this channel is performed by
-// closing the channel. As such there can only ever be a single signal sent over the
-// lifetime of the channel.
-type BreakChan <-chan struct{}
-
-// an optional interface to be implemented by Delayed objects; returning a nil
-// channel from Breaker() results in waiting the full delay duration
-type Breakout interface {
-	// return a channel that signals early departure from a blocking delay
-	Breaker() BreakChan
-}
-
-type Priority struct {
-	ts     time.Time // timestamp
-	notify BreakChan // notification channel
-}
-
-func (p Priority) Equal(other Priority) bool {
-	return p.ts.Equal(other.ts) && p.notify == other.notify
-}
-
 type qitem struct {
 	value    interface{}
 	priority Priority
@@ -184,47 +152,41 @@ func (q *DelayQueue) pop(next func() *qitem, cancel <-chan struct{}) interface{}
 	}
 }
 
-// Decide whether a pre-existing deadline for an item in a delay-queue should be
-// updated if an attempt is made to offer/add a new deadline for said item. Whether
-// the deadline changes or not has zero impact on the data blob associated with the
-// entry in the queue.
-type DeadlinePolicy int
-
-const (
-	PreferLatest DeadlinePolicy = iota
-	PreferEarliest
-)
-
-// Decide whether a pre-existing data blob in a delay-queue should be replaced if an
-// an attempt is made to add/offer a new data blob in its place. Whether the data is
-// replaced has no bearing on the deadline (priority) of the item in the queue.
-type ReplacementPolicy int
-
-const (
-	KeepExisting ReplacementPolicy = iota
-	ReplaceExisting
-)
-
-// FIFO receives adds and updates from a Reflector, and puts them in a queue for
-// FIFO order processing. If multiple adds/updates of a single item happen while
-// an item is in the queue before it has been processed, it will only be
-// processed once, and when it is processed, the most recent version will be
-// processed. This can't be done with a channel.
+// If multiple adds/updates of a single item happen while an item is in the
+// queue before it has been processed, it will only be processed once, and
+// when it is processed, the most recent version will be processed. Items are
+// popped in order of their priority, currently controlled by a delay or
+// deadline assigned to each item in the queue.
 type DelayFIFO struct {
-	*DelayQueue
+	// internal deadline-based priority queue
+	delegate *DelayQueue
 	// We depend on the property that items in the set are in the queue and vice versa.
 	items          map[string]*qitem
 	deadlinePolicy DeadlinePolicy
 }
 
-type UniqueDelayed interface {
-	UniqueID
-	Delayed
+func (q *DelayFIFO) lock() {
+	q.delegate.lock.Lock()
 }
 
-type UniqueDeadlined interface {
-	UniqueID
-	Deadlined
+func (q *DelayFIFO) unlock() {
+	q.delegate.lock.Unlock()
+}
+
+func (q *DelayFIFO) rlock() {
+	q.delegate.lock.RLock()
+}
+
+func (q *DelayFIFO) runlock() {
+	q.delegate.lock.RUnlock()
+}
+
+func (q *DelayFIFO) queue() *priorityQueue {
+	return &q.delegate.queue
+}
+
+func (q *DelayFIFO) cond() *sync.Cond {
+	return &q.delegate.cond
 }
 
 // Add inserts an item, and puts it in the queue. The item is only enqueued
@@ -232,126 +194,51 @@ type UniqueDeadlined interface {
 func (q *DelayFIFO) Add(d UniqueDelayed, rp ReplacementPolicy) {
 	deadline := extractFromDelayed(d)
 	id := d.GetUID()
-
-	q.lock.Lock()
-	defer q.lock.Unlock()
-	if item, exists := q.items[id]; !exists {
-		item = &qitem{
-			value:    d,
-			priority: deadline,
-			readd: func(qp *qitem) {
-				q.Add(qp.value.(UniqueDelayed), KeepExisting)
-			},
-		}
-		heap.Push(&q.queue, item)
-		q.items[id] = item
-	} else {
-		// this is an update of an existing item
-		item.value = rp.replacementValue(item.value, d)
-		item.priority = q.deadlinePolicy.nextDeadline(item.priority, deadline)
-		heap.Fix(&q.queue, item.index)
-	}
-	q.cond.Broadcast()
+	q.add(id, deadline, d, rp, func(qp *qitem) { q.Add(qp.value.(UniqueDelayed), KeepExisting) })
 }
 
 func (q *DelayFIFO) Offer(d UniqueDeadlined, rp ReplacementPolicy) bool {
-	deadline, ok := extractFromDeadlined(d)
-	id := d.GetUID()
-	if ok {
-		q.lock.Lock()
-		defer q.lock.Unlock()
-		if item, exists := q.items[id]; !exists {
-			item = &qitem{
-				value:    d,
-				priority: deadline,
-				readd: func(qp *qitem) {
-					q.Offer(qp.value.(UniqueDeadlined), KeepExisting)
-				},
-			}
-			heap.Push(&q.queue, item)
-			q.items[id] = item
-		} else {
-			// this is an update of an existing item
-			item.value = rp.replacementValue(item.value, d)
-			item.priority = q.deadlinePolicy.nextDeadline(item.priority, deadline)
-			heap.Fix(&q.queue, item.index)
-		}
-		q.cond.Broadcast()
+	if deadline, ok := extractFromDeadlined(d); ok {
+		id := d.GetUID()
+		q.add(id, deadline, d, rp, func(qp *qitem) { q.Offer(qp.value.(UniqueDeadlined), KeepExisting) })
+		return true
 	}
-	return ok
+	return false
 }
 
-func extractFromDelayed(d Delayed) Priority {
-	deadline := time.Now().Add(d.GetDelay())
-	breaker := BreakChan(nil)
-	if breakout, good := d.(Breakout); good {
-		breaker = breakout.Breaker()
-	}
-	return Priority{
-		ts:     deadline,
-		notify: breaker,
-	}
-}
-
-func extractFromDeadlined(d Deadlined) (Priority, bool) {
-	if ts, ok := d.Deadline(); ok {
-		breaker := BreakChan(nil)
-		if breakout, good := d.(Breakout); good {
-			breaker = breakout.Breaker()
+func (q *DelayFIFO) add(id string, deadline Priority, value interface{}, rp ReplacementPolicy, adder func(*qitem)) {
+	q.lock()
+	defer q.unlock()
+	if item, exists := q.items[id]; !exists {
+		item = &qitem{
+			value:    value,
+			priority: deadline,
+			readd:    adder,
 		}
-		return Priority{
-			ts:     ts,
-			notify: breaker,
-		}, true
+		heap.Push(q.queue(), item)
+		q.items[id] = item
+	} else {
+		// this is an update of an existing item
+		item.value = rp.replacementValue(item.value, value)
+		item.priority = q.deadlinePolicy.nextDeadline(item.priority, deadline)
+		heap.Fix(q.queue(), item.index)
 	}
-	return Priority{}, false
-}
-
-func (rp ReplacementPolicy) replacementValue(original, replacement interface{}) (result interface{}) {
-	switch rp {
-	case KeepExisting:
-		result = original
-	case ReplaceExisting:
-		fallthrough
-	default:
-		result = replacement
-	}
-	return
-}
-
-func (dp DeadlinePolicy) nextDeadline(a, b Priority) (result Priority) {
-	switch dp {
-	case PreferEarliest:
-		if a.ts.Before(b.ts) {
-			result = a
-		} else {
-			result = b
-		}
-	case PreferLatest:
-		fallthrough
-	default:
-		if a.ts.After(b.ts) {
-			result = a
-		} else {
-			result = b
-		}
-	}
-	return
+	q.cond().Broadcast()
 }
 
 // Delete removes an item. It doesn't add it to the queue, because
 // this implementation assumes the consumer only cares about the objects,
 // not their priority order.
 func (f *DelayFIFO) Delete(id string) {
-	f.lock.Lock()
-	defer f.lock.Unlock()
+	f.lock()
+	defer f.unlock()
 	delete(f.items, id)
 }
 
 // List returns a list of all the items.
 func (f *DelayFIFO) List() []UniqueID {
-	f.lock.RLock()
-	defer f.lock.RUnlock()
+	f.rlock()
+	defer f.runlock()
 	list := make([]UniqueID, 0, len(f.items))
 	for _, item := range f.items {
 		list = append(list, item.value.(UniqueDelayed))
@@ -363,8 +250,8 @@ func (f *DelayFIFO) List() []UniqueID {
 // This is a snapshot of a moment in time, and one should keep in mind that
 // other go routines can add or remove items after you call this.
 func (c *DelayFIFO) ContainedIDs() util.StringSet {
-	c.lock.RLock()
-	defer c.lock.RUnlock()
+	c.rlock()
+	defer c.runlock()
 	set := util.StringSet{}
 	for id := range c.items {
 		set.Insert(id)
@@ -374,8 +261,8 @@ func (c *DelayFIFO) ContainedIDs() util.StringSet {
 
 // Get returns the requested item, or sets exists=false.
 func (f *DelayFIFO) Get(id string) (UniqueID, bool) {
-	f.lock.RLock()
-	defer f.lock.RUnlock()
+	f.rlock()
+	defer f.runlock()
 	if item, exists := f.items[id]; exists {
 		return item.value.(UniqueID), true
 	}
@@ -409,13 +296,13 @@ func (q *DelayFIFO) Pop() UniqueID {
 // variant of DelayQueue.Pop that implements optional cancellation
 func (q *DelayFIFO) pop(cancel chan struct{}) interface{} {
 	next := func() *qitem {
-		q.lock.Lock()
-		defer q.lock.Unlock()
+		q.lock()
+		defer q.unlock()
 		for {
-			for q.queue.Len() == 0 {
+			for q.queue().Len() == 0 {
 				signal := make(chan struct{})
 				go func() {
-					q.cond.Wait()
+					q.cond().Wait()
 					close(signal)
 				}()
 				select {
@@ -423,7 +310,7 @@ func (q *DelayFIFO) pop(cancel chan struct{}) interface{} {
 					// we may not have the lock yet, so
 					// broadcast to abort Wait, then
 					// return after lock re-acquisition
-					q.cond.Broadcast()
+					q.cond().Broadcast()
 					<-signal
 					return nil
 				case <-signal:
@@ -431,7 +318,7 @@ func (q *DelayFIFO) pop(cancel chan struct{}) interface{} {
 					// the queue for data...
 				}
 			}
-			x := heap.Pop(&q.queue)
+			x := heap.Pop(q.queue())
 			item := x.(*qitem)
 			unique := item.value.(UniqueID)
 			uid := unique.GetUID()
@@ -443,13 +330,13 @@ func (q *DelayFIFO) pop(cancel chan struct{}) interface{} {
 			return item
 		}
 	}
-	return q.DelayQueue.pop(next, cancel)
+	return q.delegate.pop(next, cancel)
 }
 
 func NewDelayFIFO() *DelayFIFO {
 	f := &DelayFIFO{
-		DelayQueue: NewDelayQueue(),
-		items:      map[string]*qitem{},
+		delegate: NewDelayQueue(),
+		items:    map[string]*qitem{},
 	}
 	return f
 }

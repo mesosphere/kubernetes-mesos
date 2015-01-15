@@ -11,7 +11,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// evolution of: https://github.com/GoogleCloudPlatform/kubernetes/blob/release-0.6/pkg/client/cache/fifo.go
+// evolution of: github.com/GoogleCloudPlatform/kubernetes/blob/release-0.6/pkg/client/cache/fifo.go
 package queue
 
 import (
@@ -20,25 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 )
-
-type EventType int
-
-const (
-	ADD_EVENT EventType = 1 << iota
-	UPDATE_EVENT
-	DELETE_EVENT
-	POP_EVENT
-)
-
-type Entry interface {
-	Copyable
-	Value() UniqueCopyable
-	// types is a logically OR'd combination of EventType, e.g. ADD_EVENT|UPDATE_EVENT
-	Is(types EventType) bool
-}
 
 type entry struct {
 	value UniqueCopyable
@@ -48,20 +31,6 @@ type entry struct {
 type deletedEntry struct {
 	*entry
 	expiration time.Time
-}
-
-type Copyable interface {
-	// return an independent copy (deep clone) of the current object
-	Copy() Copyable
-}
-
-type UniqueID interface {
-	GetUID() string
-}
-
-type UniqueCopyable interface {
-	Copyable
-	UniqueID
 }
 
 func (e *entry) Value() UniqueCopyable {
@@ -91,25 +60,6 @@ type pigeon func(msg Entry)
 
 func dead(msg Entry) {
 	// intentionally blank
-}
-
-type FIFO interface {
-	cache.Store
-	// Pop waits until an item is ready and returns it. If multiple items are
-	// ready, they are returned in the order in which they were added/updated.
-	// The item is removed from the queue (and the store) before it is returned,
-	// so if you don't succesfully process it, you need to add it back with Add()
-	// or Readd().
-	Pop() interface{}
-	// Await attempts to Pop within the given interval; upon success the non-nil
-	// item is returned, otherwise nil
-	Await(timeout time.Duration) interface{}
-	// Add the item to the store, but only if there exists a prior entry for
-	// for the object in the store whose event type matches that given, and then
-	// only enqueued if it doesn't already exist in the set. Returns true if added.
-	Readd(id string, v interface{}, t EventType) bool
-	// Is there an entry for the id that matches the event mask?
-	Poll(id string, t EventType) bool
 }
 
 // HistoricalFIFO receives adds and updates from a Reflector, and puts them in a queue for
@@ -164,34 +114,6 @@ func (f *HistoricalFIFO) Add(id string, v interface{}) {
 // Update is the same as Add in this implementation.
 func (f *HistoricalFIFO) Update(id string, obj interface{}) {
 	f.Add(id, obj)
-}
-
-// Add the item to the store, but only if there exists a prior entry for
-// for the object in the store whose event type matches that given, and then
-// only enqueued if it doesn't already exist in the set. Returns true if added.
-func (f *HistoricalFIFO) Readd(id string, v interface{}, t EventType) bool {
-	obj := checkType(v)
-	notifications := []Entry(nil)
-	defer func() {
-		for _, e := range notifications {
-			f.carrier(e)
-		}
-	}()
-
-	f.lock.Lock()
-	defer f.lock.Unlock()
-
-	if entry, exists := f.items[id]; exists {
-		if !entry.Is(t) {
-			return false
-		} else if entry.Is(DELETE_EVENT | POP_EVENT) {
-			f.queue = append(f.queue, id)
-		}
-		notifications = f.merge(id, obj)
-		f.cond.Broadcast()
-		return true
-	}
-	return false
 }
 
 // Delete removes an item. It doesn't add it to the queue, because
@@ -421,10 +343,10 @@ func (f *HistoricalFIFO) merge(id string, obj UniqueCopyable) (notifications []E
 	return
 }
 
-// NewFIFO returns a Store which can be used to queue up items to
+// NewHistorical returns a Store which can be used to queue up items to
 // process. If a non-nil Mux is provided, then modifications to the
 // the FIFO are delivered on a channel specific to this fifo.
-func NewFIFO(ch chan<- Entry) *HistoricalFIFO {
+func NewHistorical(ch chan<- Entry) FIFO {
 	carrier := dead
 	if ch != nil {
 		carrier = func(msg Entry) {

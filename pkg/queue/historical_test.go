@@ -40,7 +40,7 @@ func (i _uint) GetUID() string {
 }
 
 func TestFIFO_basic(t *testing.T) {
-	f := NewFIFO(nil)
+	f := NewHistorical(nil)
 	const amount = 500
 	go func() {
 		for i := 0; i < amount; i++ {
@@ -75,7 +75,7 @@ func TestFIFO_basic(t *testing.T) {
 }
 
 func TestFIFO_addUpdate(t *testing.T) {
-	f := NewFIFO(nil)
+	f := NewHistorical(nil)
 	f.Add("foo", _int(10))
 	f.Update("foo", _int(15))
 	got := make(chan _int, 2)
@@ -101,7 +101,7 @@ func TestFIFO_addUpdate(t *testing.T) {
 }
 
 func TestFIFO_addReplace(t *testing.T) {
-	f := NewFIFO(nil)
+	f := NewHistorical(nil)
 	f.Add("foo", _int(10))
 	f.Replace(map[string]interface{}{"foo": _int(15)})
 	got := make(chan _int, 2)
@@ -127,7 +127,7 @@ func TestFIFO_addReplace(t *testing.T) {
 }
 
 func TestFIFO_detectLineJumpers(t *testing.T) {
-	f := NewFIFO(nil)
+	f := NewHistorical(nil)
 
 	f.Add("foo", _int(10))
 	f.Add("bar", _int(1))

@@ -502,7 +502,7 @@ func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
 
 	// Watch and queue pods that need scheduling.
 	updates := make(chan queue.Entry, defaultUpdatesBacklog)
-	podStore := &podStoreAdapter{queue.NewFIFO(updates)}
+	podStore := &podStoreAdapter{queue.NewHistorical(updates)}
 	cache.NewReflector(createAllPodsLW(k.client), &api.Pod{}, podStore).Run()
 
 	// lock that guards critial sections that involve transferring pods from
@@ -585,17 +585,17 @@ func createAllPodsLW(cl *client.Client) *listWatch {
 // hackish since the object type going in is different than the object type
 // coming out -- you've been warned.
 type podStoreAdapter struct {
-	*queue.HistoricalFIFO
+	queue.FIFO
 }
 
 func (psa *podStoreAdapter) Add(id string, obj interface{}) {
 	pod := obj.(*api.Pod)
-	psa.HistoricalFIFO.Add(id, &Pod{Pod: pod})
+	psa.FIFO.Add(id, &Pod{Pod: pod})
 }
 
 func (psa *podStoreAdapter) Update(id string, obj interface{}) {
 	pod := obj.(*api.Pod)
-	psa.HistoricalFIFO.Update(id, &Pod{Pod: pod})
+	psa.FIFO.Update(id, &Pod{Pod: pod})
 }
 
 // Replace will delete the contents of the store, using instead the
@@ -606,9 +606,10 @@ func (psa *podStoreAdapter) Replace(idToObj map[string]interface{}) {
 		pod := v.(*api.Pod)
 		newmap[k] = &Pod{Pod: pod}
 	}
-	psa.HistoricalFIFO.Replace(newmap)
+	psa.FIFO.Replace(newmap)
 }
 
+// implements Copyable
 func (p *Pod) Copy() queue.Copyable {
 	if p == nil {
 		return nil
@@ -618,10 +619,12 @@ func (p *Pod) Copy() queue.Copyable {
 	return &Pod{Pod: &pod}
 }
 
+// implements Unique
 func (p *Pod) GetUID() string {
 	return p.UID
 }
 
+// implements Deadlined
 func (dp *Pod) Deadline() (time.Time, bool) {
 	if dp.deadline != nil {
 		return *(dp.deadline), true
