@@ -20,8 +20,9 @@ type PodTask struct {
 	ID       string
 	Pod      *api.Pod
 	TaskInfo *mesos.TaskInfo
-	Launched bool
 	Offer    PerishableOffer
+	launched bool
+	deleted  bool
 	podKey   string
 }
 
@@ -173,7 +174,6 @@ func newPodTask(ctx api.Context, pod *api.Pod, executor *mesos.ExecutorInfo) (*P
 		ID:       taskId,
 		Pod:      pod,
 		TaskInfo: new(mesos.TaskInfo),
-		Launched: false,
 		podKey:   key,
 	}
 	task.TaskInfo.Name = proto.String("PodTask")

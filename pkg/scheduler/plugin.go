@@ -146,12 +146,12 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *PodTask) (err
 	if err = b.prepareTaskForLaunch(ctx, binding.Host, task); err == nil {
 		log.V(2).Infof("Attempting to bind %v to %v", binding.PodID, binding.Host)
 		if err = b.api.client().Post().Namespace(api.Namespace(ctx)).Path("bindings").Body(binding).Do().Error(); err == nil {
-			log.V(2).Infof("Launching task : %v", task)
+			log.V(2).Infof("launching task : %v", task)
 			taskList := []*mesos.TaskInfo{task.TaskInfo}
 			if err = b.api.driver().LaunchTasks(task.Offer.Details().Id, taskList, nil); err == nil {
 				b.api.offers().Invalidate(offerId)
 				task.Pod.Status.Host = binding.Host
-				task.Launched = true
+				task.launched = true
 				return
 			}
 		}
@@ -244,7 +244,7 @@ func (k *kubeScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (st
 	} else {
 		switch task, state := k.api.getTask(taskID); state {
 		case statePending:
-			if task.Launched {
+			if task.launched {
 				return "", fmt.Errorf("task %s has already been launched, aborting schedule", taskID)
 			} else {
 				return k.doSchedule(task, nil)
@@ -393,7 +393,7 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 
 	switch task, state := k.api.getTask(taskId); state {
 	case statePending:
-		if task.Launched {
+		if task.launched {
 			log.V(2).Infof("Skipping re-scheduling for already-launched pod %v", podKey)
 			return
 		}
@@ -405,7 +405,7 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 				defer k.api.RLocker().Unlock()
 				switch task, state := k.api.getTask(taskId); state {
 				case statePending:
-					return !task.Launched && task.AcceptOffer(offer)
+					return !task.launched && task.AcceptOffer(offer)
 				}
 				return false
 			}))
@@ -476,7 +476,7 @@ func (k *deleter) deleteOne(pod *Pod) error {
 
 	switch state {
 	case statePending:
-		if !task.Launched {
+		if !task.launched {
 			// we've been invoked in between Schedule() and Bind()
 			if task.hasAcceptedOffer() {
 				task.Offer.Release()
@@ -492,6 +492,7 @@ func (k *deleter) deleteOne(pod *Pod) error {
 		return fmt.Errorf("Cannot kill pod '%s': pod not found", podKey)
 	}
 	// signal to watchers that the related pod is going down
+	task.deleted = true
 	task.Pod.Status.Host = ""
 	return k.api.driver().KillTask(killTaskId)
 }

@@ -3,6 +3,7 @@ package scheduler
 import (
 	"container/ring"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -306,7 +307,7 @@ func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 	switch task, state := k.getTask(taskId); state {
 	case statePending:
 		delete(k.pendingTasks, taskId)
-		delete(k.podToTask, task.podKey)
+		fallthrough
 	case stateRunning:
 		delete(k.runningTasks, taskId)
 		delete(k.podToTask, task.podKey)
@@ -314,13 +315,23 @@ func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 }
 
 func (k *KubernetesScheduler) handleTaskKilled(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Task killed: '%v'", taskStatus)
-	taskId := taskStatus.GetTaskId().GetValue()
+	var task *PodTask
+	defer func() {
+		msg := fmt.Sprintf("task killed: '%v', task %+v", taskStatus, task)
+		if task != nil && task.deleted {
+			// we were expecting this, nothing out of the ordinary
+			log.V(2).Infoln(msg)
+		} else {
+			log.Errorln(msg)
+		}
+	}()
 
-	switch task, state := k.getTask(taskId); state {
+	taskId := taskStatus.GetTaskId().GetValue()
+	task, state := k.getTask(taskId)
+	switch state {
 	case statePending:
 		delete(k.pendingTasks, taskId)
-		delete(k.podToTask, task.podKey)
+		fallthrough
 	case stateRunning:
 		delete(k.runningTasks, taskId)
 		delete(k.podToTask, task.podKey)
@@ -334,7 +345,7 @@ func (k *KubernetesScheduler) handleTaskLost(taskStatus *mesos.TaskStatus) {
 	switch task, state := k.getTask(taskId); state {
 	case statePending:
 		delete(k.pendingTasks, taskId)
-		delete(k.podToTask, task.podKey)
+		fallthrough
 	case stateRunning:
 		delete(k.runningTasks, taskId)
 		delete(k.podToTask, task.podKey)
