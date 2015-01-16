@@ -489,7 +489,8 @@ func (k *deleter) deleteOne(pod *Pod) error {
 	case stateRunning:
 		killTaskId = &mesos.TaskID{Value: proto.String(task.ID)}
 	default:
-		return fmt.Errorf("Cannot kill pod '%s': pod not found", podKey)
+		log.Warningf("cannot kill pod '%s': task not found %v", podKey, taskId)
+		return noSuchTaskErr
 	}
 	// signal to watchers that the related pod is going down
 	task.deleted = true
