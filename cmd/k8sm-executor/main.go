@@ -263,6 +263,9 @@ func main() {
 	go util.Forever(func() { kl.Run(cfg.Updates()) }, 0)
 
 	log.Infof("Starting kubelet server...")
+	//TODO(jdef) when migrating to release 0.8+ the 10s re-try interval below is specified as
+	// zero seconds in pkg/standalone/startKubelet. We don't want 0s because if we can't get
+	// the port right away then we generate **tons** of logging and fill up the disk.
 	go util.Forever(func() {
 		// TODO(nnielsen): Don't hardwire port, but use port from resource offer.
 		log.Error(executor.ListenAndServeKubeletServer(kl, net.IP(address), *port, *enableDebuggingHandlers, MESOS_CFG_SOURCE))
