@@ -266,7 +266,7 @@ func main() {
 	go util.Forever(func() {
 		// TODO(nnielsen): Don't hardwire port, but use port from resource offer.
 		log.Error(executor.ListenAndServeKubeletServer(kl, net.IP(address), *port, *enableDebuggingHandlers, MESOS_CFG_SOURCE))
-	}, 0)
+	}, 10*time.Second)
 
 	go runProxyService()
 
