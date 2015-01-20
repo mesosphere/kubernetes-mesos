@@ -14,9 +14,10 @@ func TestDeleteOne_NonexistentPod(t *testing.T) {
 	assert := assert.New(t)
 	obj := &MockScheduler{}
 	obj.On("taskForPod", "/pods/default/foo").Return("", false)
+	qr := newQueuer(nil)
 	d := &deleter{
-		api:      obj,
-		podQueue: queue.NewDelayFIFO(),
+		api: obj,
+		qr:  qr,
 	}
 	pod := &Pod{Pod: &api.Pod{
 		ObjectMeta: api.ObjectMeta{

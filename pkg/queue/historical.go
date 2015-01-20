@@ -217,8 +217,8 @@ func (f *HistoricalFIFO) pop(cancel chan struct{}) interface{} {
 		for len(f.queue) == 0 {
 			signal := make(chan struct{})
 			go func() {
+				defer close(signal)
 				f.cond.Wait()
-				close(signal)
 			}()
 			select {
 			case <-cancel:

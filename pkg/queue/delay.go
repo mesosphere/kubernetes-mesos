@@ -302,8 +302,8 @@ func (q *DelayFIFO) pop(cancel chan struct{}) interface{} {
 			for q.queue().Len() == 0 {
 				signal := make(chan struct{})
 				go func() {
+					defer close(signal)
 					q.cond().Wait()
-					close(signal)
 				}()
 				select {
 				case <-cancel:

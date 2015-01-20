@@ -278,66 +278,120 @@ func (k *kubeScheduler) doSchedule(task *PodTask, err error) (string, error) {
 }
 
 type queuer struct {
-	lock     sync.Mutex
-	podStore queue.FIFO
-	podQueue *queue.DelayFIFO
+	lock            sync.Mutex       // shared by condition variables of this struct
+	podStore        queue.FIFO       // cache of pod updates to be processed
+	podQueue        *queue.DelayFIFO // queue of pods to be scheduled
+	deltaCond       sync.Cond        // pod changes are available for processing
+	unscheduledCond sync.Cond        // there are unscheduled pods for processing
 }
 
-// watch for unscheduled pods and queue them up for scheduling
-func (q *queuer) Run() {
-	enqueuePod := func() {
-		sleepTime := 0 * time.Second
-		defer func() { time.Sleep(sleepTime) }()
+func newQueuer(store queue.FIFO) *queuer {
+	q := &queuer{
+		podQueue: queue.NewDelayFIFO(),
+		podStore: store,
+	}
+	q.deltaCond.L = &q.lock
+	q.unscheduledCond.L = &q.lock
+	return q
+}
 
+// signal that there are probably pod updates waiting to be processed
+func (q *queuer) updatesAvailable() {
+	q.deltaCond.Broadcast()
+}
+
+// delete a pod from the to-be-scheduled queue
+func (q *queuer) dequeue(id string) {
+	q.podQueue.Delete(id)
+}
+
+// re-add a pod to the to-be-scheduled queue, will not overwrite existing pod data (that
+// may have already changed).
+func (q *queuer) requeue(pod *Pod) {
+	// use KeepExisting in case the pod has already been updated (can happen if binding fails
+	// due to constraint voilations); we don't want to overwrite a newer entry with stale data.
+	q.podQueue.Add(pod, queue.KeepExisting)
+	q.unscheduledCond.Broadcast()
+}
+
+// spawns a go-routine to watch for unscheduled pods and queue them up
+// for scheduling. returns immediately.
+func (q *queuer) Run() {
+	go util.Forever(func() {
+		log.Info("Watching for newly created pods")
 		q.lock.Lock()
 		defer q.lock.Unlock()
 
-		// limit blocking here for short intervals so that scheduling
-		// may proceed even if there have been no recent pod changes
-		p := q.podStore.Await(200 * time.Millisecond)
-		if p == nil {
-			sleepTime = 1 * time.Second
-			return
-		}
-
-		pod := p.(*Pod)
-		if pod.Status.Host != "" {
-			q.podQueue.Delete(pod.GetUID())
-		} else {
-			// use ReplaceExisting because we are always pushing the latest state
-			now := time.Now()
-			pod.deadline = &now
-			q.podQueue.Offer(pod, queue.ReplaceExisting)
-			log.V(3).Infof("queued pod for scheduling: %v", pod.Pod.Name)
-		}
-	}
-	go util.Forever(func() {
-		log.Info("Watching for newly created pods")
 		for {
-			enqueuePod()
+			// limit blocking here for short intervals so that scheduling
+			// may proceed even if there have been no recent pod changes
+			p := q.podStore.Await(200 * time.Millisecond) // TODO(jdef) extract constant
+			if p == nil {
+				signalled := make(chan struct{})
+				go func() {
+					defer close(signalled)
+					q.deltaCond.Wait()
+				}()
+				// we've yielded the lock
+				select {
+				case <-time.After(3 * time.Second): // TODO(jdef) extract constant
+					q.deltaCond.Broadcast() // abort Wait()
+					<-signalled             // wait for lock re-acquisition
+					log.V(4).Infoln("timed out waiting for a pod update")
+				case <-signalled:
+					// we've acquired the lock and there may be
+					// changes for us to process now
+				}
+				continue
+			}
+
+			pod := p.(*Pod)
+			if pod.Status.Host != "" {
+				q.dequeue(pod.GetUID())
+			} else {
+				// use ReplaceExisting because we are always pushing the latest state
+				now := time.Now()
+				pod.deadline = &now
+				q.podQueue.Offer(pod, queue.ReplaceExisting)
+				q.unscheduledCond.Broadcast()
+				log.V(3).Infof("queued pod for scheduling: %v", pod.Pod.Name)
+			}
 		}
 	}, 1*time.Second)
 }
 
 // implementation of scheduling plugin's NextPod func; see k8s plugin/pkg/scheduler
-func (q *queuer) yield() (pod *api.Pod) {
+func (q *queuer) yield() *api.Pod {
 	log.V(2).Info("attempting to yield a pod")
-	pop := func() (found bool) {
-		sleepTime := 0 * time.Second
-		defer func() { time.Sleep(sleepTime) }()
+	q.lock.Lock()
+	defer q.lock.Unlock()
 
-		q.lock.Lock()
-		defer q.lock.Unlock()
-
-		// limit blocking here to short intervals so that enqueuePods
-		// can feed us pods for scheduling
-		kpod := q.podQueue.Await(200 * time.Millisecond)
+	for {
+		// limit blocking here to short intervals so that we don't block the
+		// enqueuer Run() routine for very long
+		kpod := q.podQueue.Await(200 * time.Millisecond) // TODO(jdef) extract constant
 		if kpod == nil {
-			sleepTime = 1 * time.Second
-			return
+			signalled := make(chan struct{})
+			go func() {
+				defer close(signalled)
+				q.unscheduledCond.Wait()
+			}()
+
+			// lock is yielded at this point and we're going to wait for either
+			// a timeout, or a signal that there's data
+			select {
+			case <-time.After(3 * time.Second): // TODO(jdef) extract constant
+				q.unscheduledCond.Broadcast() // abort Wait()
+				<-signalled                   // wait for the go-routine, and the lock
+				log.V(4).Infoln("timed out waiting for a pod to yield")
+			case <-signalled:
+				// we have acquired the lock, and there
+				// may be a pod for us to pop now
+			}
+			continue
 		}
 
-		pod = kpod.(*Pod).Pod
+		pod := kpod.(*Pod).Pod
 		if meta, err := meta.Accessor(pod); err != nil {
 			log.Warningf("yield unable to understand pod object %+v, will skip", pod)
 		} else if !q.podStore.Poll(meta.Name(), queue.POP_EVENT) {
@@ -346,19 +400,15 @@ func (q *queuer) yield() (pod *api.Pod) {
 			// should never happen if enqueuePods is filtering properly
 			log.Warningf("yield popped an already-scheduled pod, skipping: %+v", pod)
 		} else {
-			found = true
+			return pod
 		}
-		return
 	}
-	for !pop() {
-	}
-	return
 }
 
 type errorHandler struct {
-	api      SchedulerInterface
-	backoff  *podBackoff
-	podQueue *queue.DelayFIFO
+	api     SchedulerInterface
+	backoff *podBackoff
+	qr      *queuer
 }
 
 // implementation of scheduling plugin's Error func; see plugin/pkg/scheduler
@@ -411,18 +461,15 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 			}))
 		}
 		delay := k.backoff.getBackoff(podKey)
-
-		// use KeepExisting in case the pod has already been updated (can happen if binding fails
-		// due to constraint voilations); we don't want to overwrite a newer entry with stale data.
-		k.podQueue.Add(&Pod{Pod: pod, delay: &delay, notify: offersAvailable}, queue.KeepExisting)
+		k.qr.requeue(&Pod{Pod: pod, delay: &delay, notify: offersAvailable})
 	default:
 		log.V(2).Infof("Task is no longer pending, aborting reschedule for pod %v", podKey)
 	}
 }
 
 type deleter struct {
-	api      SchedulerInterface
-	podQueue *queue.DelayFIFO
+	api SchedulerInterface
+	qr  *queuer
 }
 
 // currently monitors for "pod deleted" events, upon which handle()
@@ -436,6 +483,8 @@ func (k *deleter) Run(updates <-chan queue.Entry) {
 				if err := k.deleteOne(pod); err != nil {
 					log.Error(err)
 				}
+			} else if !entry.Is(queue.POP_EVENT) {
+				k.qr.updatesAvailable()
 			}
 		}
 	}, 1*time.Second)
@@ -461,7 +510,7 @@ func (k *deleter) deleteOne(pod *Pod) error {
 	// it's concurrently being scheduled (somewhere between pod scheduling and
 	// binding) - if so, then we'll end up removing it from pendingTasks which
 	// will abort Bind()ing
-	k.podQueue.Delete(pod.GetUID())
+	k.qr.dequeue(pod.GetUID())
 
 	taskId, exists := k.api.taskForPod(podKey)
 	if !exists {
@@ -509,19 +558,13 @@ func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
 	// lock that guards critial sections that involve transferring pods from
 	// the store (cache) to the scheduling queue; its purpose is to maintain
 	// an ordering (vs interleaving) of operations that's easier to reason about.
-	podQueue := queue.NewDelayFIFO()
 	kapi := &k8smScheduler{k}
-
+	q := newQueuer(podStore)
 	podDeleter := &deleter{
-		api:      kapi,
-		podQueue: podQueue,
+		api: kapi,
+		qr:  q,
 	}
 	podDeleter.Run(updates)
-
-	q := &queuer{
-		podQueue: podQueue,
-		podStore: podStore,
-	}
 	q.Run()
 
 	eh := &errorHandler{
@@ -530,7 +573,7 @@ func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
 			perPodBackoff: map[string]*backoffEntry{},
 			clock:         realClock{},
 		},
-		podQueue: podQueue,
+		qr: q,
 	}
 	return &plugin.Config{
 		MinionLister: nil,
