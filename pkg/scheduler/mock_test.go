@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/mesos/mesos-go/mesos"
 	"github.com/stretchr/testify/mock"
 )
@@ -33,14 +32,6 @@ func (m *MockScheduler) algorithm() (f PodScheduleFunc) {
 	}
 	return
 }
-func (m *MockScheduler) client() (f *client.Client) {
-	args := m.Called()
-	x := args.Get(0)
-	if x != nil {
-		f = x.(*client.Client)
-	}
-	return
-}
 func (m *MockScheduler) createPodTask(ctx api.Context, pod *api.Pod) (task *PodTask, err error) {
 	args := m.Called(ctx, pod)
 	x := args.Get(0)
@@ -48,14 +39,6 @@ func (m *MockScheduler) createPodTask(ctx api.Context, pod *api.Pod) (task *PodT
 		task = x.(*PodTask)
 	}
 	err = args.Error(1)
-	return
-}
-func (m *MockScheduler) driver() (f mesos.SchedulerDriver) {
-	args := m.Called()
-	x := args.Get(0)
-	if x != nil {
-		f = x.(mesos.SchedulerDriver)
-	}
 	return
 }
 func (m *MockScheduler) getTask(taskId string) (task *PodTask, currentState stateType) {
@@ -93,6 +76,14 @@ func (m *MockScheduler) taskForPod(podID string) (taskID string, ok bool) {
 }
 func (m *MockScheduler) unregisterPodTask(task *PodTask) {
 	m.Called(task)
+}
+func (m *MockScheduler) killTask(taskId string) error {
+	args := m.Called(taskId)
+	return args.Error(0)
+}
+func (m *MockScheduler) launchTask(task *PodTask) error {
+	args := m.Called(task)
+	return args.Error(0)
 }
 
 // @deprecated this is a placeholder for me to test the mock package

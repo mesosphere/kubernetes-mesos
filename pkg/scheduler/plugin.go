@@ -30,14 +30,14 @@ type SchedulerInterface interface {
 	SlaveIndex
 
 	algorithm() PodScheduleFunc
-	client() *client.Client
 	createPodTask(api.Context, *api.Pod) (*PodTask, error)
-	driver() mesos.SchedulerDriver
 	getTask(taskId string) (task *PodTask, currentState stateType)
 	offers() OfferRegistry
 	registerPodTask(*PodTask, error) (*PodTask, error)
 	taskForPod(podID string) (taskID string, ok bool)
 	unregisterPodTask(*PodTask)
+	killTask(taskId string) error
+	launchTask(*PodTask) error
 }
 
 type k8smScheduler struct {
@@ -48,16 +48,8 @@ func (k *k8smScheduler) algorithm() PodScheduleFunc {
 	return k.KubernetesScheduler.scheduleFunc
 }
 
-func (k *k8smScheduler) client() *client.Client {
-	return k.KubernetesScheduler.client
-}
-
 func (k *k8smScheduler) offers() OfferRegistry {
 	return k.KubernetesScheduler.offers
-}
-
-func (k *k8smScheduler) driver() mesos.SchedulerDriver {
-	return k.KubernetesScheduler.driver
 }
 
 func (k *k8smScheduler) taskForPod(podID string) (taskID string, ok bool) {
@@ -90,8 +82,21 @@ func (k *k8smScheduler) unregisterPodTask(task *PodTask) {
 	delete(k.pendingTasks, task.ID)
 }
 
+func (k *k8smScheduler) killTask(taskId string) error {
+	// assume caller is holding scheduler lock
+	killTaskId := &mesos.TaskID{Value: proto.String(taskId)}
+	return k.KubernetesScheduler.driver.KillTask(killTaskId)
+}
+
+func (k *k8smScheduler) launchTask(task *PodTask) error {
+	// assume caller is holding scheduler lock
+	taskList := []*mesos.TaskInfo{task.TaskInfo}
+	return k.KubernetesScheduler.driver.LaunchTasks(task.Offer.Details().Id, taskList, nil)
+}
+
 type binder struct {
-	api SchedulerInterface
+	api    SchedulerInterface
+	client *client.Client
 }
 
 // implements binding.Registry, launches the pod-associated-task in mesos
@@ -145,10 +150,9 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *PodTask) (err
 
 	if err = b.prepareTaskForLaunch(ctx, binding.Host, task); err == nil {
 		log.V(2).Infof("Attempting to bind %v to %v", binding.PodID, binding.Host)
-		if err = b.api.client().Post().Namespace(api.Namespace(ctx)).Path("bindings").Body(binding).Do().Error(); err == nil {
+		if err = b.client.Post().Namespace(api.Namespace(ctx)).Path("bindings").Body(binding).Do().Error(); err == nil {
 			log.V(2).Infof("launching task : %v", task)
-			taskList := []*mesos.TaskInfo{task.TaskInfo}
-			if err = b.api.driver().LaunchTasks(task.Offer.Details().Id, taskList, nil); err == nil {
+			if err = b.api.launchTask(task); err == nil {
 				b.api.offers().Invalidate(offerId)
 				task.Pod.Status.Host = binding.Host
 				task.launched = true
@@ -162,7 +166,7 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *PodTask) (err
 }
 
 func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *PodTask) error {
-	pod, err := b.api.client().Pods(api.Namespace(ctx)).Get(task.Pod.Name)
+	pod, err := b.client.Pods(api.Namespace(ctx)).Get(task.Pod.Name)
 	if err != nil {
 		return err
 	}
@@ -200,7 +204,7 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *Pod
 // HACK(jdef): adapted from https://github.com/GoogleCloudPlatform/kubernetes/blob/release-0.6/pkg/registry/pod/bound_pod_factory.go
 func (b *binder) getServiceEnvironmentVariables(ctx api.Context) (result []api.EnvVar, err error) {
 	var services *api.ServiceList
-	if services, err = b.api.client().Services(api.Namespace(ctx)).List(labels.Everything()); err == nil {
+	if services, err = b.client.Services(api.Namespace(ctx)).List(labels.Everything()); err == nil {
 		result = envvars.FromServices(services)
 	}
 	return
@@ -520,10 +524,7 @@ func (k *deleter) deleteOne(pod *Pod) error {
 
 	// determine if the task has already been launched to mesos, if not then
 	// cleanup is easier (unregister) since there's no state to sync
-	var killTaskId *mesos.TaskID
-	task, state := k.api.getTask(taskId)
-
-	switch state {
+	switch task, state := k.api.getTask(taskId); state {
 	case statePending:
 		if !task.launched {
 			// we've been invoked in between Schedule() and Bind()
@@ -536,15 +537,14 @@ func (k *deleter) deleteOne(pod *Pod) error {
 		}
 		fallthrough
 	case stateRunning:
-		killTaskId = &mesos.TaskID{Value: proto.String(task.ID)}
+		// signal to watchers that the related pod is going down
+		task.deleted = true
+		task.Pod.Status.Host = ""
+		return k.api.killTask(taskId)
 	default:
 		log.Warningf("cannot kill pod '%s': task not found %v", podKey, taskId)
 		return noSuchTaskErr
 	}
-	// signal to watchers that the related pod is going down
-	task.deleted = true
-	task.Pod.Status.Host = ""
-	return k.api.driver().KillTask(killTaskId)
 }
 
 // Create creates a scheduler plugin and all supporting background functions.
@@ -582,7 +582,8 @@ func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
 			podStore: podStore,
 		},
 		Binder: &binder{
-			api: kapi,
+			api:    kapi,
+			client: k.client,
 		},
 		NextPod: q.yield,
 		Error:   eh.handleSchedulingError,
