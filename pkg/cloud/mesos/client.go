@@ -10,7 +10,7 @@ import (
 	"time"
 
 	log "github.com/golang/glog"
-	"github.com/mesosphere/kubernetes-mesos/pkg/executor"
+	"github.com/mesosphere/kubernetes-mesos/pkg/config"
 	"golang.org/x/net/context"
 )
 
@@ -144,7 +144,7 @@ func (c *mesosClient) slaveRunningKubeletExecutor(ctx context.Context, slaveHost
 		}
 		for _, f := range state.Frameworks {
 			for _, e := range f.Executors {
-				if e.Source == executor.DefaultInfoSource && e.ID == executor.DefaultInfoID {
+				if e.Source == config.DefaultInfoSource && e.ID == config.DefaultInfoID {
 					found = true
 					return nil
 				}

@@ -29,6 +29,8 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/mesosphere/kubernetes-mesos/pkg/profile"
+
 	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
@@ -42,15 +44,12 @@ import (
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
-	"github.com/mesosphere/kubernetes-mesos/pkg/executor"
-	_ "github.com/mesosphere/kubernetes-mesos/pkg/profile"
+	"github.com/mesosphere/kubernetes-mesos/pkg/config"
 	kmscheduler "github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
 )
 
 const (
-	httpReadTimeout  = 10 * time.Second // k8s api server config: maximum duration before timing out read of the request
-	httpWriteTimeout = 10 * time.Second // k8s api server config: maximum duration before timing out write of the response
-	defaultMesosUser = "root"           // should have privs to execute docker and iptables commands
+	defaultMesosUser = "root" // should have privs to execute docker and iptables commands
 )
 
 var (
@@ -128,13 +127,13 @@ func prepareExecutorInfo() *mesos.ExecutorInfo {
 
 	// Create mesos scheduler driver.
 	return &mesos.ExecutorInfo{
-		ExecutorId: &mesos.ExecutorID{Value: proto.String(executor.DefaultInfoID)},
+		ExecutorId: &mesos.ExecutorID{Value: proto.String(config.DefaultInfoID)},
 		Command: &mesos.CommandInfo{
 			Value: proto.String(executorCommand),
 			Uris:  executorUris,
 		},
-		Name:   proto.String(executor.DefaultInfoName),
-		Source: proto.String(executor.DefaultInfoSource),
+		Name:   proto.String(config.DefaultInfoName),
+		Source: proto.String(config.DefaultInfoSource),
 	}
 }
 
