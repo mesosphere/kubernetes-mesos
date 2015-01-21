@@ -11,17 +11,19 @@ KUBE_GO_PACKAGE	?= github.com/GoogleCloudPlatform/kubernetes
 K8S_CMD		:= \
                    ${KUBE_GO_PACKAGE}/cmd/kubecfg		\
                    ${KUBE_GO_PACKAGE}/cmd/kubectl		\
+                   ${KUBE_GO_PACKAGE}/cmd/kube-apiserver	\
                    ${KUBE_GO_PACKAGE}/cmd/kube-proxy
 FRAMEWORK_CMD	:= \
-                   github.com/mesosphere/kubernetes-mesos/controller-manager		\
-                   github.com/mesosphere/kubernetes-mesos/kubernetes-mesos		\
-                   github.com/mesosphere/kubernetes-mesos/kubernetes-executor
+                   github.com/mesosphere/kubernetes-mesos/cmd/k8sm-controller-manager	\
+                   github.com/mesosphere/kubernetes-mesos/cmd/k8sm-scheduler		\
+                   github.com/mesosphere/kubernetes-mesos/cmd/k8sm-executor
 FRAMEWORK_LIB	:= \
-		   github.com/mesosphere/kubernetes-mesos/scheduler	\
-		   github.com/mesosphere/kubernetes-mesos/service	\
-		   github.com/mesosphere/kubernetes-mesos/master	\
-		   github.com/mesosphere/kubernetes-mesos/executor	\
-		   github.com/mesosphere/kubernetes-mesos/queue
+		   github.com/mesosphere/kubernetes-mesos/pkg/scheduler	\
+		   github.com/mesosphere/kubernetes-mesos/pkg/service	\
+		   github.com/mesosphere/kubernetes-mesos/pkg/executor	\
+		   github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos \
+		   github.com/mesosphere/kubernetes-mesos/pkg/profile	\
+		   github.com/mesosphere/kubernetes-mesos/pkg/queue
 
 KUBE_GIT_VERSION_FILE := $(current_dir)/.kube-version
 
@@ -36,7 +38,7 @@ DESTDIR		?= /target
 # default build tags
 TAGS		?=
 
-.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test patch version
+.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test patch version test.v
 
 ifneq ($(WITH_MESOS_DIR),)
 
@@ -94,8 +96,8 @@ framework: require-godep
 format: require-gopath
 	go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
 
-test: require-gopath
-	go test $(FRAMEWORK_LIB)
+test test.v: require-gopath
+	test "$@" = "test.v" && args="-test.v" || args=""; go test $$args $(FRAMEWORK_LIB)
 
 install: all
 	mkdir -p $(DESTDIR)

@@ -31,7 +31,9 @@ import (
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/controller"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
+	minionControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider/controller"
+	replicationControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/controller"
 	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	kendpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
@@ -39,13 +41,15 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
 	"github.com/golang/glog"
 
-	kmendpoint "github.com/mesosphere/kubernetes-mesos/service"
+	kmendpoint "github.com/mesosphere/kubernetes-mesos/pkg/service"
 )
 
 var (
 	port                 = flag.Int("port", ports.ControllerManagerPort, "The port that the controller-manager's http service runs on")
 	address              = util.IP(net.ParseIP("127.0.0.1"))
 	clientConfig         = &client.Config{}
+	cloudProvider        = flag.String("cloud_provider", "mesos", "The provider for cloud services. Only 'mesos' is currently supported.")
+	cloudConfigFile      = flag.String("cloud_config", "", "The path to the cloud provider configuration file. Empty string for no configuration file.")
 	useHostPortEndpoints = flag.Bool("host_port_endpoints", true, "Map service endpoints to hostIP:hostPort instead of podIP:containerPort. Default true.")
 )
 
@@ -75,8 +79,19 @@ func main() {
 	endpoints := createEndpointController(kubeClient)
 	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, time.Second*10)
 
-	controllerManager := controller.NewReplicationManager(kubeClient)
+	controllerManager := replicationControllerPkg.NewReplicationManager(kubeClient)
 	controllerManager.Run(10 * time.Second)
+
+	//TODO(jdef) should eventually support more cloud providers here
+	if *cloudProvider != "mesos" {
+		glog.Fatalf("Unsupported cloud provider: %v", *cloudProvider)
+	}
+	cloud := cloudprovider.InitCloudProvider(*cloudProvider, *cloudConfigFile)
+
+	//TODO(jdef) as we support additional cloud providers, may need to specify other values
+	//for minionRegexp and machineList
+	minionController := minionControllerPkg.NewMinionController(cloud, "^.*$", nil, nil, kubeClient)
+	minionController.Run(10 * time.Second)
 
 	select {}
 }

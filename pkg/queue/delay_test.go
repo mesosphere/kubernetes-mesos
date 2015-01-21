@@ -10,6 +10,10 @@ const (
 	tolerance = 100 * time.Millisecond // go time delays aren't perfect, this is our tolerance for errors WRT expected timeouts
 )
 
+func timedPriority(t time.Time) Priority {
+	return Priority{ts: t}
+}
+
 func TestPQ(t *testing.T) {
 	t.Parallel()
 
@@ -18,8 +22,8 @@ func TestPQ(t *testing.T) {
 		t.Fatalf("pq should be empty")
 	}
 
-	now := time.Now()
-	now2 := now.Add(2 * time.Second)
+	now := timedPriority(time.Now())
+	now2 := timedPriority(now.ts.Add(2 * time.Second))
 	pq.Push(&qitem{priority: now2})
 	if pq.Len() != 1 {
 		t.Fatalf("pq.len should be 1")
@@ -49,8 +53,8 @@ func TestPQ(t *testing.T) {
 	if pq.Len() != 0 {
 		t.Fatalf("pq should be empty")
 	}
-	now4 := now.Add(4 * time.Second)
-	now6 := now.Add(4 * time.Second)
+	now4 := timedPriority(now.ts.Add(4 * time.Second))
+	now6 := timedPriority(now.ts.Add(4 * time.Second))
 	pq.Push(&qitem{priority: now2})
 	pq.Push(&qitem{priority: now4})
 	pq.Push(&qitem{priority: now6})

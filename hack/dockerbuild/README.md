@@ -74,16 +74,16 @@ Next, [start the framework](https://github.com/mesosphere/kubernetes-mesos/#star
 Once the framework and executors are up and running you can start capturing heaps:
 
     $ ts=$(date +'%Y%m%d%H%M%S')
-    $ curl http://${servicehost}:9000/debug/pprof/heap >framework.heap.$ts
+    $ curl http://${servicehost}:10251/debug/pprof/heap >framework.$ts.heap
     $ for slave in 240 242 243; do
-          curl http://10.132.189.${slave}:10250/debug/pprof/heap >${slave}.heap.$ts;
+          curl http://10.132.189.${slave}:10250/debug/pprof/heap >${slave}.$ts.heap;
       done
 
 Once you have a few heaps, you can generate reports.
 Additional packages may be required to support the reporting format you desire.
 
     $ apt-get install ghostscript graphviz
-    $ go tool pprof --base=./framework.heap.20141117175634 --inuse_objects --pdf \
-        ./bin/kubernetes-mesos ./framework.heap.20141120162503 >framework-20141120a.pdf
+    $ go tool pprof --base=./framework.20141117175634.heap --inuse_objects --pdf \
+        ./bin/k8sm-scheduler ./framework.20141120162503.heap >framework-20141120a.pdf
 
 For more details regarding profiling read the [pprof](http://golang.org/pkg/net/http/pprof/) package documentation.

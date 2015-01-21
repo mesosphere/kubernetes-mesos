@@ -30,34 +30,44 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
 - [ ] Use resource shapes to schedule pods
 - [ ] Even smarter (Marathon-like) scheduling
 
-### Build
+### Tutorial
 
-For a binary-only install of the Kubernetes-Mesos framework you can use the Docker-based builder:
+Mesosphere maintains a tutorial for running [Kubernetes-Mesos on GCE][10], which is periodically updated to coincide with releases of this project.
+Please use a release from the [0.3.x series][11] for the best experience with the tutorial.
+
+### Binaries
+
+For a binary-only install of the Kubernetes-Mesos framework you can use the Docker-based builder.
+Assuming you are running the latest official binary release of Mesos, the following commands will build and copy the resulting binaries to `./bin`:
 ```shell
 # chcon needed for systems protected by SELinux
 $ mkdir bin && chcon -Rt svirt_sandbox_file_t bin   
 $ docker run -rm -v $(pwd)/bin:/target jdef/kubernetes-mesos:build-latest
 ```
 
-Instructions to build and install from source are as follows:
+### Build
 
-**NOTE:** Building Kubernetes for Mesos requires Go 1.2+, protobuf 2.5.0, and Mesos 0.19+.
+To build from source follow the instructions below.
+
+**NOTE:** Building Kubernetes for Mesos requires Go 1.2+, [godep][5], protobuf 2.5.0, and Mesos 0.19+.
 Building the project is greatly simplified by using godep.
 
 * To install Mesos, see [mesosphere.io/downloads][4]
 * To install godep, see [github.com/tools/godep][5]
 * See the [development][1] page for sample environment setup steps.
 
-Once the [prerequisites][7] have been installed you can build the project:
+Kubernetes-Mesos is built using a Makefile to greatly simplify the process of patching the vanilla Kubernetes code.
+At this time it is **highly recommended** to use the Makefile instead of building components manually using `go build`.
 ```shell
 $ cd $GOPATH # If you don't have one, create directory and set GOPATH accordingly.
 
 $ mkdir -p src/github.com/mesosphere/kubernetes-mesos
 $ git clone https://github.com/mesosphere/kubernetes-mesos.git src/github.com/mesosphere/kubernetes-mesos
-$ cd src/github.com/mesosphere/kubernetes-mesos && godep restore
-$ go install github.com/GoogleCloudPlatform/kubernetes/cmd/{kube-proxy,kubecfg,kubectl}
-$ go install github.com/mesosphere/kubernetes-mesos/kubernetes-{mesos,executor}
-$ go install github.com/mesosphere/kubernetes-mesos/controller-manager
+$ cd src/github.com/mesosphere/kubernetes-mesos
+$ make bootstrap                   # downloads dependencies using godep
+$ make                             # compile the binaries
+$ make test                        # execute unit tests
+$ make install DESTDIR=$(pwd)/bin  # install to ./bin
 ```
 
 ### Start the framework
@@ -81,17 +91,27 @@ $ sudo docker run -d --net=host coreos/etcd go-wrapper run \
    -listen-peer-urls=http://${servicehost}:7001
 ```
 
-Assuming your mesos cluster is started, and that the mesos-master and etcd are running on `${servicehost}`, then:
+Ensure that your mesos cluster is started.
+Assuming that the mesos-master and etcd are running on `${servicehost}`, then:
 
 ```shell
-$ ./bin/kubernetes-mesos \
+$ ./bin/kube-apiserver \
   -address=${servicehost} \
   -mesos_master=${servicehost}:5050 \
   -etcd_servers=http://${servicehost}:4001 \
-  -executor_path=$(pwd)/bin/kubernetes-executor \
-  -proxy_path=$(pwd)/bin/kube-proxy \
   -portal_net=10.10.10.0/24 \
-  -mesos_user=root
+  -port=8888 \
+  -cloud_provider=mesos \
+  -health_check_minions=false
+
+$ ./bin/k8sm-scheduler \
+  -address=${servicehost} \
+  -mesos_master=${servicehost}:5050 \
+  -etcd_servers=http://${servicehost}:4001 \
+  -executor_path=$(pwd)/bin/k8sm-executor \
+  -proxy_path=$(pwd)/bin/kube-proxy \
+  -mesos_user=root \
+  -api_servers=$servicehost:8888
 ```
 
 For simpler execution of `kubecfg`:
@@ -101,7 +121,9 @@ $ export KUBERNETES_MASTER=http://${servicehost}:8888
 
 To enable replication control, start a kubernetes replication controller instance:
 ```shell
-$ ./bin/controller-manager -master=${KUBERNETES_MASTER#http://*}
+$ ./bin/k8sm-controller-manager \
+  -master=$servicehost:8888 \
+  -mesos_master=$servicehost:5050
 ```
 
 You can increase logging for both the framework and the controller by including, for example, `-v=2`.
@@ -381,3 +403,5 @@ $ go test github.com/mesosphere/kubernetes-mesos/kubernetes-mesos -v
 [7]: DEVELOP.md#prerequisites
 [8]: http://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing
 [9]: https://github.com/GoogleCloudPlatform/kubernetes/releases/tag/v0.5
+[10]: https://mesosphere.com/docs/tutorials/kubernetes-mesos-gcp/
+[11]: https://github.com/mesosphere/kubernetes-mesos/releases

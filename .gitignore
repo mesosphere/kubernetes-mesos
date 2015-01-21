@@ -7,6 +7,7 @@
 _obj
 _test
 third_party
+bin
 
 # Architecture specific extensions/prefixes
 *.[568vq]

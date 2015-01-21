@@ -6,6 +6,10 @@
 	],
 	"Deps": [
 		{
+			"ImportPath": "code.google.com/p/gcfg",
+			"Rev": "c2d3050044d05357eaf6c3547249ba57c5e235cb"
+		},
+		{
 			"ImportPath": "code.google.com/p/go-uuid/uuid",
 			"Comment": "null-12",
 			"Rev": "7dda39b2e7d5e265014674c5af696ba4186679e9"
@@ -194,8 +198,30 @@
 			"Rev": "8c4f650e62f096710da794e536de86e34447fca9"
 		},
 		{
+			"ImportPath": "github.com/mitchellh/goamz/aws",
+			"Rev": "9cad7da945e699385c1a3e115aa255211921c9bb"
+		},
+		{
+			"ImportPath": "github.com/mitchellh/goamz/ec2",
+			"Rev": "9cad7da945e699385c1a3e115aa255211921c9bb"
+		},
+		{
 			"ImportPath": "github.com/mesos/mesos-go/mesos",
 			"Rev": "3bf3f3e448da25618ff5b5300b0b706f5ae4b4e1"
+		},
+		{
+			"ImportPath": "github.com/mitchellh/mapstructure",
+			"Rev": "740c764bc6149d3f1806231418adb9f52c11bcbf"
+		},
+		{
+			"ImportPath": "github.com/racker/perigee",
+			"Comment": "v0.0.0-18-g0c00cb0",
+			"Rev": "0c00cb0a026b71034ebc8205263c77dad3577db5"
+		},
+		{
+			"ImportPath": "github.com/rackspace/gophercloud",
+			"Comment": "v0.1.0-31-ge13cda2",
+			"Rev": "e13cda260ce48d63ce816f4fa72b6c6cd096596d"
 		},
 		{
 			"ImportPath": "github.com/skratchdot/open-golang/open",
@@ -208,6 +234,19 @@
 		{
 			"ImportPath": "github.com/spf13/pflag",
 			"Rev": "463bdc838f2b35e9307e91d480878bda5fff7232"
+		},
+		{
+			"ImportPath": "github.com/stretchr/testify/assert",
+			"Rev": "e897f97d666c44ddbc131f4121c2961034b4c1b4"
+		},
+		{
+			"ImportPath": "github.com/stretchr/testify/mock",
+			"Rev": "e897f97d666c44ddbc131f4121c2961034b4c1b4"
+		},
+		{
+			"ImportPath": "github.com/tonnerre/golang-pretty",
+			"Comment": "debian/0.0_git20130613-1-1-ge7fccc0",
+			"Rev": "e7fccc03e91bad289b96c21aa3312a220689bdd7"
 		},
 		{
 			"ImportPath": "golang.org/x/net/context",

@@ -37,7 +37,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
 	"github.com/golang/glog"
 	"github.com/google/cadvisor/info"
-	"github.com/mesosphere/kubernetes-mesos/profile"
+	"github.com/mesosphere/kubernetes-mesos/pkg/profile"
 )
 
 // Server is a http.Handler which exposes kubelet functionality over HTTP.
