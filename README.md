@@ -35,26 +35,28 @@ This is still very much a work-in-progress, but stay tuned for updates as we con
 Mesosphere maintains a tutorial for running [Kubernetes-Mesos on GCE][10], which is periodically updated to coincide with releases of this project.
 Please use a release from the [0.3.x series][11] for the best experience with the tutorial.
 
-### Build
+### Binaries
 
-For a binary-only install of the Kubernetes-Mesos framework you can use the Docker-based builder:
+For a binary-only install of the Kubernetes-Mesos framework you can use the Docker-based builder.
+Assuming you are running the latest official binary release of Mesos, the following commands will build and copy the resulting binaries to `./bin`:
 ```shell
 # chcon needed for systems protected by SELinux
 $ mkdir bin && chcon -Rt svirt_sandbox_file_t bin   
 $ docker run -rm -v $(pwd)/bin:/target jdef/kubernetes-mesos:build-latest
 ```
 
-Instructions to build and install from source are as follows:
+### Build
 
-**NOTE:** Building Kubernetes for Mesos requires Go 1.2+, protobuf 2.5.0, and Mesos 0.19+.
+To build from source follow the instructions below.
+
+**NOTE:** Building Kubernetes for Mesos requires Go 1.2+, [godep][5], protobuf 2.5.0, and Mesos 0.19+.
 Building the project is greatly simplified by using godep.
 
 * To install Mesos, see [mesosphere.io/downloads][4]
 * To install godep, see [github.com/tools/godep][5]
 * See the [development][1] page for sample environment setup steps.
 
-Once the [prerequisites][7] have been installed you can build the project.
-Kubernetes-Mesos is built using a Makefile to simplify the process of patching the vanilla Kubernetes code.
+Kubernetes-Mesos is built using a Makefile to greatly simplify the process of patching the vanilla Kubernetes code.
 At this time it is **highly recommended** to use the Makefile instead of building components manually using `go build`.
 ```shell
 $ cd $GOPATH # If you don't have one, create directory and set GOPATH accordingly.
