@@ -42,8 +42,15 @@ import (
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
+	"github.com/mesosphere/kubernetes-mesos/pkg/executor"
 	_ "github.com/mesosphere/kubernetes-mesos/pkg/profile"
 	kmscheduler "github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
+)
+
+const (
+	httpReadTimeout  = 10 * time.Second // k8s api server config: maximum duration before timing out read of the request
+	httpWriteTimeout = 10 * time.Second // k8s api server config: maximum duration before timing out write of the response
+	defaultMesosUser = "root"           // should have privs to execute docker and iptables commands
 )
 
 var (
@@ -61,11 +68,6 @@ var (
 	mesosRole           = flag.String("mesos_role", "", "Mesos role for this framework, defaults to none.")
 	mesosAuthPrincipal  = flag.String("mesos_authentication_principal", "", "Mesos authentication principal.")
 	mesosAuthSecretFile = flag.String("mesos_authentication_secret_file", "", "Mesos authentication secret file.")
-)
-
-const (
-	httpReadTimeout  = 10 * time.Second // k8s api server config: maximum duration before timing out read of the request
-	httpWriteTimeout = 10 * time.Second // k8s api server config: maximum duration before timing out write of the response
 )
 
 func init() {
@@ -126,13 +128,13 @@ func prepareExecutorInfo() *mesos.ExecutorInfo {
 
 	// Create mesos scheduler driver.
 	return &mesos.ExecutorInfo{
-		ExecutorId: &mesos.ExecutorID{Value: proto.String("KubeleteExecutorID")},
+		ExecutorId: &mesos.ExecutorID{Value: proto.String(executor.DefaultInfoID)},
 		Command: &mesos.CommandInfo{
 			Value: proto.String(executorCommand),
 			Uris:  executorUris,
 		},
-		Name:   proto.String("Kubelet Executor"),
-		Source: proto.String("kubernetes"),
+		Name:   proto.String(executor.DefaultInfoName),
+		Source: proto.String(executor.DefaultInfoSource),
 	}
 }
 
@@ -269,7 +271,7 @@ func getUsername() (username string, err error) {
 		if u, err := user.Current(); err == nil {
 			username = u.Username
 			if username == "" {
-				username = "root"
+				username = defaultMesosUser
 			}
 		}
 	}

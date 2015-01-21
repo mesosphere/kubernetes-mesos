@@ -23,6 +23,13 @@ import (
 	"gopkg.in/v1/yaml"
 )
 
+const (
+	enqueuePopTimeout  = 200 * time.Millisecond
+	enqueueWaitTimeout = 3 * time.Second
+	yieldPopTimeout    = 200 * time.Millisecond
+	yieldWaitTimeout   = 3 * time.Second
+)
+
 // scheduler abstraction to allow for easier unit testing
 type SchedulerInterface interface {
 	sync.Locker
@@ -329,7 +336,7 @@ func (q *queuer) Run() {
 		for {
 			// limit blocking here for short intervals so that scheduling
 			// may proceed even if there have been no recent pod changes
-			p := q.podStore.Await(200 * time.Millisecond) // TODO(jdef) extract constant
+			p := q.podStore.Await(enqueuePopTimeout)
 			if p == nil {
 				signalled := make(chan struct{})
 				go func() {
@@ -338,7 +345,7 @@ func (q *queuer) Run() {
 				}()
 				// we've yielded the lock
 				select {
-				case <-time.After(3 * time.Second): // TODO(jdef) extract constant
+				case <-time.After(enqueueWaitTimeout):
 					q.deltaCond.Broadcast() // abort Wait()
 					<-signalled             // wait for lock re-acquisition
 					log.V(4).Infoln("timed out waiting for a pod update")
@@ -373,7 +380,7 @@ func (q *queuer) yield() *api.Pod {
 	for {
 		// limit blocking here to short intervals so that we don't block the
 		// enqueuer Run() routine for very long
-		kpod := q.podQueue.Await(200 * time.Millisecond) // TODO(jdef) extract constant
+		kpod := q.podQueue.Await(yieldPopTimeout)
 		if kpod == nil {
 			signalled := make(chan struct{})
 			go func() {
@@ -384,7 +391,7 @@ func (q *queuer) yield() *api.Pod {
 			// lock is yielded at this point and we're going to wait for either
 			// a timeout, or a signal that there's data
 			select {
-			case <-time.After(3 * time.Second): // TODO(jdef) extract constant
+			case <-time.After(yieldWaitTimeout):
 				q.unscheduledCond.Broadcast() // abort Wait()
 				<-signalled                   // wait for the go-routine, and the lock
 				log.V(4).Infoln("timed out waiting for a pod to yield")

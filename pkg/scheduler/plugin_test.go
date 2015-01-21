@@ -3,9 +3,7 @@ package scheduler
 import (
 	"testing"
 
-	proto "code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/mesos/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 	"github.com/stretchr/testify/assert"
 )
@@ -15,6 +13,7 @@ func TestDeleteOne_NonexistentPod(t *testing.T) {
 	obj := &MockScheduler{}
 	obj.On("taskForPod", "/pods/default/foo").Return("", false)
 	qr := newQueuer(nil)
+	assert.Equal(0, len(qr.podQueue.List()))
 	d := &deleter{
 		api: obj,
 		qr:  qr,
@@ -47,30 +46,28 @@ func TestDeleteOne_PendingPod(t *testing.T) {
 	obj.On("unregisterPodTask", task).Return()
 
 	// preconditions
-	q := queue.NewDelayFIFO()
-	q.Add(pod, queue.ReplaceExisting)
-	assert.Equal(1, len(q.List()))
-	t.Logf("pod.uid: %v\n", q.List()[0].(queue.UniqueID).GetUID())
-	_, found := q.Get("foo0")
+	qr := newQueuer(nil)
+	qr.podQueue.Add(pod, queue.ReplaceExisting)
+	assert.Equal(1, len(qr.podQueue.List()))
+	_, found := qr.podQueue.Get("foo0")
 	assert.True(found)
 
 	// exec & post conditions
 	d := &deleter{
-		api:      obj,
-		podQueue: q,
+		api: obj,
+		qr:  qr,
 	}
 	err := d.deleteOne(pod)
 	assert.Nil(err)
-	_, found = q.Get("foo0")
+	_, found = qr.podQueue.Get("foo0")
 	assert.False(found)
-	assert.Equal(0, len(q.List()))
+	assert.Equal(0, len(qr.podQueue.List()))
 	obj.AssertExpectations(t)
 }
 
 func TestDeleteOne_Running(t *testing.T) {
 	assert := assert.New(t)
 	obj := &MockScheduler{}
-	drv := &MockSchedulerDriver{}
 
 	podKey := "/pods/default/foo"
 	pod := &Pod{Pod: &api.Pod{
@@ -84,27 +81,25 @@ func TestDeleteOne_Running(t *testing.T) {
 	// set expectations
 	obj.On("taskForPod", podKey).Return(task.ID, true)
 	obj.On("getTask", task.ID).Return(task, statePending)
-	obj.On("driver").Return(drv)
-	drv.On("KillTask", &mesos.TaskID{Value: proto.String(task.ID)}).Return(nil)
+	obj.On("killTask", task.ID).Return(nil)
 
 	// preconditions
-	q := queue.NewDelayFIFO()
-	q.Add(pod, queue.ReplaceExisting)
-	assert.Equal(1, len(q.List()))
-	t.Logf("pod.uid: %v\n", q.List()[0].(queue.UniqueID).GetUID())
-	_, found := q.Get("foo0")
+	qr := newQueuer(nil)
+	qr.podQueue.Add(pod, queue.ReplaceExisting)
+	assert.Equal(1, len(qr.podQueue.List()))
+	_, found := qr.podQueue.Get("foo0")
 	assert.True(found)
 
 	// exec & post conditions
 	d := &deleter{
-		api:      obj,
-		podQueue: q,
+		api: obj,
+		qr:  qr,
 	}
 	err := d.deleteOne(pod)
 	assert.Nil(err)
-	_, found = q.Get("foo0")
+	_, found = qr.podQueue.Get("foo0")
 	assert.False(found)
-	assert.Equal(0, len(q.List()))
+	assert.Equal(0, len(qr.podQueue.List()))
 	obj.AssertExpectations(t)
 }
 
@@ -125,18 +120,14 @@ func TestDeleteOne_Unknown(t *testing.T) {
 	obj.On("taskForPod", podKey).Return(taskId, true)
 	obj.On("getTask", taskId).Return(nil, stateUnknown)
 
-	// preconditions
-	q := queue.NewDelayFIFO()
-	assert.Equal(0, len(q.List()))
-
 	// exec & post conditions
 	d := &deleter{
-		api:      obj,
-		podQueue: q,
+		api: obj,
+		qr:  newQueuer(nil),
 	}
 	err := d.deleteOne(pod)
 	assert.Equal(err, noSuchTaskErr)
-	assert.Equal(0, len(q.List()))
+	assert.Equal(0, len(d.qr.podQueue.List()))
 	obj.AssertExpectations(t)
 }
 
@@ -144,10 +135,9 @@ func TestDeleteOne_badPodNaming(t *testing.T) {
 	assert := assert.New(t)
 	obj := &MockScheduler{}
 	pod := &Pod{Pod: &api.Pod{}}
-	q := queue.NewDelayFIFO()
 	d := &deleter{
-		api:      obj,
-		podQueue: q,
+		api: obj,
+		qr:  newQueuer(nil),
 	}
 
 	err := d.deleteOne(pod)
