@@ -14,7 +14,9 @@ import (
 
 var (
 	noHostNameSpecified = errors.New("No hostname specified")
-	mesosMaster         = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master. Default localhost:5050.")
+
+	//TODO(jdef) this should handle mesos upid's (perhaps once we move to pure bindings)
+	mesosMaster = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master. Default localhost:5050.")
 )
 
 func init() {

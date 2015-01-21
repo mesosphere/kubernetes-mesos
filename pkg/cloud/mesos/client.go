@@ -4,12 +4,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	log "github.com/golang/glog"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor"
 	"golang.org/x/net/context"
+)
+
+const (
+	mesosHttpClientTimeout = 10 * time.Second //TODO(jdef) configurable via fiag?
 )
 
 type mesosClient struct {
@@ -18,14 +24,15 @@ type mesosClient struct {
 	tr          *http.Transport
 }
 
-//TODO(jdef) we probably want additional configuration passed in here to
-//account for things like HTTP timeout, SSL configuration, etc.
 func newMesosClient() *mesosClient {
 	tr := &http.Transport{}
 	return &mesosClient{
 		mesosMaster: MasterURI(),
-		client:      &http.Client{Transport: tr},
-		tr:          tr,
+		client: &http.Client{
+			Transport: tr,
+			Timeout:   mesosHttpClientTimeout,
+		},
+		tr: tr,
 	}
 }
 
@@ -89,8 +96,10 @@ func (c *mesosClient) EnlistedSlaves(ctx context.Context) ([]string, error) {
 	for _, slave := range slaves {
 		if found, err := c.slaveRunningKubeletExecutor(ctx, slave); found {
 			// parse the host from the slave host:port
-			if parts := strings.SplitN(slave, ":", 2); len(parts) > 0 && len(parts[0]) > 0 {
-				results = append(results, parts[0])
+			if host, _, err := net.SplitHostPort(slave); err == nil {
+				results = append(results, host)
+			} else {
+				log.V(1).Infof("failed to parse slave host from host:port '%v'", slave)
 			}
 		} else if err != nil {
 			// swallow the error and move on to the next
