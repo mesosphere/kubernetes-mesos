@@ -375,7 +375,7 @@ func buildFrameworkInfo() (info *mesos.FrameworkInfo, cred *mesos.Credential, er
 	}
 	log.V(2).Infof("Framework configured with mesos user %v", username)
 	info = &mesos.FrameworkInfo{
-		Name: proto.String("KubernetesScheduler"),
+		Name: proto.String("Kubernetes"),
 		User: proto.String(username),
 	}
 	if *mesosRole != "" {
