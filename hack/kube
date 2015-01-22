@@ -1,0 +1,144 @@
+#!/bin/bash
+
+function serviceHost() {
+  hostname -i|tr ' ' '\n'|head -n1
+}
+
+test -n "$KUBERNETES_MASTER" || {
+
+  #TODO(jdef) attempt to discover it in a local container
+
+  servicehost=$(serviceHost)
+  KUBERNETES_MASTER=http://$servicehost:8888
+}
+
+#TODO(jdef) copied from bake! should be in a shared lib file
+binary_image=mesosphere/k8sm:${k8sm_version:-latest}
+kubernetes_mesos_image=${binary_image}-master
+kube_controller_manager_image=${binary_image}-controller
+kube_proxy_image=${binary_image}-proxy
+
+kube_docker_images=(
+  $binary_image
+  $kubernetes_mesos_image
+  $kube_controller_manager_image
+  $kube_proxy_image
+)
+
+function die() {
+  echo "ERROR: $@" >&2
+  exit 1
+}
+
+function apiserver_healthy() {
+  ok=$(curl -s -f ${KUBERNETES_MASTER}/healthz --connect-timeout 2)
+  test "$ok" = "ok" || \
+    die failed to connect to kubernetes master at $KUBERNETES_MASTER
+}
+
+function check_one_image() {
+  sudo docker images | grep -E "^$1\s+$2\s+" >/dev/null
+}
+
+function check_images() {
+  for i in "${kube_docker_images[@]}"; do
+    check_one_image ${i%%:*} ${i##*:} || die missing docker image $i, you may need to 'make bake'
+    echo found docker image $i
+  done
+}
+
+function list_containers() {
+  # prints $id $name for each running container
+  sudo docker ps | awk '{ print $1 " " $2 }' | sed -e 1d
+}
+
+# for now, assumes that etcd is running in a local container
+function list_etcd_servers() {
+  for ct in $(list_containers|grep -E '^\w+\s+coreos/etcd:'|cut -f1 -d' '); do
+    local mode=$(sudo docker inspect --format='{{.HostConfig.NetworkMode}}' $ct)
+    test $mode = "host" || continue  # TODO(jdef) expand to implement other network modes
+    host=$(serviceHost)
+
+    # must expose port 4001 (is this check even worth doing)
+    sudo docker inspect --format='{{range $k, $v := .Config.ExposedPorts}}{{$k}},{{end}}' $ct \
+      | tr ',' '\n' | grep -e '4001/tcp' >/dev/null || continue
+
+    echo http://$host:4001
+    return
+  done
+  return 1 # we didn't find a match
+}
+
+function ensure_ct_stopped() {
+  local name=$1
+  sudo docker inspect --format='{{.Name}} {{.State.Running}}' $(list_containers | cut -f1 -d' ') 2>/dev/null | grep -E "^/${name} true" >/dev/null && {
+    sudo docker wait "$name" >/dev/null 2>&1 &
+    sudo docker stop "$name" >/dev/null 2>&1 || true
+    wait
+    sudo docker rm -f "$name" >/dev/null 2>&1 || true
+  } || true
+}
+
+function ensure_ct_running() {
+  local name=$1
+  shift
+  sudo docker inspect --format='{{.Name}} {{.State.Running}}' $(list_containers | cut -f1 -d' ') 2>/dev/null | grep -E "^/${name} true" >/dev/null || {
+    set -v
+    sudo docker stop "$name" >/dev/null 2>&1 || true
+    sudo docker rm -f "$name" >/dev/null 2>&1 || true
+    sudo docker run -d --name=${name} "$@"
+    local rc=$?
+    set +v
+    return $rc
+  }
+}
+
+bindir=$(readlink -f "$(dirname "$0")/../bin")
+test -d "$bindir" ||
+  die failed to locate kubernetes-mesos binaries, expected at $bindir
+
+cmd="$1"
+shift
+
+case "$cmd" in
+  up)
+    check_images
+    mesos_master=$(mesos resolve) || die failed to determine leading mesos master
+    echo found mesos master at $mesos_master
+
+    etcd_servers=$(list_etcd_servers) || die failed to determine etcd servers
+    echo found etcd servers at $etcd_servers
+
+    ensure_ct_running "k8sm-scheduler" \
+        -e MESOS_MASTER=$mesos_master \
+        -e ETCD_SERVER_LIST=$etcd_servers \
+        -e BIND_ADDRESS=$(serviceHost) \
+	--net=host \
+	$kubernetes_mesos_image
+
+    ensure_ct_running "k8sm-controller-manager" \
+        -e KUBERNETES_MASTER=$KUBERNETES_MASTER \
+        --net=host \
+	$kube_controller_manager_image
+
+    ensure_ct_running "kube-proxy" \
+        -e ETCD_SERVER_LIST=$etcd_servers \
+        -e BIND_ADDRESS=$(serviceHost) \
+	--cap-add=NET_ADMIN \
+	--net=host \
+	$kube_proxy_image
+    ;;
+  down)
+    ensure_ct_stopped "k8sm-scheduler"
+    ensure_ct_stopped "k8sm-controller-manager"
+    ensure_ct_stopped "kube-proxy"
+    ;;
+  config)
+    apiserver_healthy
+    export KUBERNETES_MASTER
+    exec "$bindir/kubecfg" "$@"
+    ;;
+  *)
+    die unknown command $1
+    ;;
+esac

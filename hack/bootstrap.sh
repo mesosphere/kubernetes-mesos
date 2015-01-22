@@ -30,9 +30,15 @@ test -x "$prog" && {
     test ! -n "${BIND_ADDRESS}" || args+=("-address=${BIND_ADDRESS}")
     ;;
   bin/controller-manager)
+    args=(
+      -port=${CONTROLLER_MANAGER_PORT:-10252}
+    )
     test ! -n "${KUBERNETES_MASTER}" || args+=("-master=${KUBERNETES_MASTER##*://}")
     ;;
   bin/kube-proxy)
+    args=(
+      -healthz_port=${KUBE_PROXY_PORT:-10249}
+    )
     test ! -n "${BIND_ADDRESS}" || args+=("-bind_address=${BIND_ADDRESS}")
     test ! -n "${ETCD_SERVER_LIST}" || args+=("-etcd_servers=${ETCD_SERVER_LIST}")
     ;;

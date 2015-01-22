@@ -112,12 +112,40 @@ EOF
 #     SCHEDULER_LIBPROCESS_PORT
 #
 kubernetes_mesos_image=${binary_image}-master
+
 sudo docker build -t $kubernetes_mesos_image - <<EOF
 FROM $binary_image
 MAINTAINER James DeFelice <james.defelice@gmail.com>
-ENV APISERVER_READONLY_PORT ${APISERVER_READONLY_PORT:-7080}
 ENV APISERVER_PORT ${APISERVER_PORT:-8888}
+ENV APISERVER_READONLY_PORT ${APISERVER_READONLY_PORT:-7080}
 ENV ARTIFACTS_PORT ${EXECUTOR_ARTIFACTS_PORT:-9000}
 ENV LIBPROCESS_PORT ${SCHEDULER_LIBPROCESS_PORT:-9876}
 EXPOSE \$APISERVER_READONLY_PORT \$APISERVER_PORT \$ARTIFACTS_PORT \$LIBPROCESS_PORT
+CMD [ "kubernetes-mesos" ]
+EOF
+
+#
+# make the image that runs the replication controller
+#
+kube_controller_manager_image=${binary_image}-controller
+
+sudo docker build -t $kube_controller_manager_image - <<EOF
+FROM $binary_image
+MAINTAINER James DeFelice <james.defelice@gmail.com>
+ENV CONTROLLER_MANAGER_PORT ${CONTROLLER_MANAGER_PORT:-10252}
+EXPOSE \$CONTROLLER_MANAGER_PORT
+CMD [ "controller-manager" ]
+EOF
+
+#
+# make the image that runs the kube-proxy
+#
+kube_proxy_image=${binary_image}-proxy
+
+sudo docker build -t $kube_proxy_image - <<EOF
+FROM $binary_image
+MAINTAINER James DeFelice <james.defelice@gmail.com>
+ENV KUBE_PROXY_PORT ${KUBE_PROXY_PORT:-10249}
+EXPOSE \$KUBE_PROXY_PORT
+CMD [ "kube-proxy" ]
 EOF
