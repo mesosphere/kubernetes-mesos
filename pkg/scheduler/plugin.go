@@ -20,7 +20,7 @@ import (
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
-	"gopkg.in/v1/yaml"
+	"gopkg.in/v2/yaml"
 )
 
 const (
@@ -109,7 +109,7 @@ type binder struct {
 // implements binding.Registry, launches the pod-associated-task in mesos
 func (b *binder) Bind(binding *api.Binding) error {
 
-	ctx := api.WithNamespace(api.NewDefaultContext(), binding.Namespace)
+	ctx := api.WithNamespace(api.NewContext(), binding.Namespace)
 
 	// default upstream scheduler passes pod.Name as binding.PodID
 	podKey, err := makePodKey(ctx, binding.PodID)
@@ -157,7 +157,7 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *PodTask) (err
 
 	if err = b.prepareTaskForLaunch(ctx, binding.Host, task); err == nil {
 		log.V(2).Infof("Attempting to bind %v to %v", binding.PodID, binding.Host)
-		if err = b.client.Post().Namespace(api.Namespace(ctx)).Path("bindings").Body(binding).Do().Error(); err == nil {
+		if err = b.client.Post().Namespace(api.Namespace(ctx)).Resource("bindings").Body(binding).Do().Error(); err == nil {
 			log.V(2).Infof("launching task : %v", task)
 			if err = b.api.launchTask(task); err == nil {
 				b.api.offers().Invalidate(offerId)
@@ -606,7 +606,7 @@ type listWatch struct {
 func (lw *listWatch) List() (runtime.Object, error) {
 	return lw.client.
 		Get().
-		Path(lw.resource).
+		Resource(lw.resource).
 		SelectorParam("fields", lw.fieldSelector).
 		Do().
 		Get()
@@ -615,8 +615,8 @@ func (lw *listWatch) List() (runtime.Object, error) {
 func (lw *listWatch) Watch(resourceVersion string) (watch.Interface, error) {
 	return lw.client.
 		Get().
-		Path("watch").
-		Path(lw.resource).
+		Prefix("watch").
+		Resource(lw.resource).
 		SelectorParam("fields", lw.fieldSelector).
 		Param("resourceVersion", resourceVersion).
 		Watch()

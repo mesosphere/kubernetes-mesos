@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/capabilities"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
@@ -55,12 +56,15 @@ var (
 	maxContainerCount       = flag.Int("maximum_dead_containers_per_container", 5, "Maximum number of old instances of a container to retain per container.  Each container takes up some disk space.  Default: 5.")
 	authPath                = flag.String("auth_path", "", "Path to .kubernetes_auth file, specifying how to authenticate to API server.")
 	apiServerList           util.StringList
+	clusterDomain           = flag.String("cluster_domain", "", "Domain for this cluster.  If set, kubelet will configure all containers to search this domain in addition to the host's search domains")
+	clusterDNS              = util.IP(nil)
 )
 
 func init() {
 	flag.Var(&etcdServerList, "etcd_servers", "List of etcd servers to watch (http://ip:port), comma separated")
 	flag.Var(&address, "address", "The IP address for the info and proxy servers to serve on. Default to 0.0.0.0.")
 	flag.Var(&apiServerList, "api_servers", "List of Kubernetes API servers to publish events to. (ip:port), comma separated.")
+	flag.Var(&clusterDNS, "cluster_dns", "IP address for a cluster DNS server.  If set, kubelet will configure all containers to use this for DNS resolution in addition to the host's DNS servers")
 }
 
 func getDockerEndpoint() string {
@@ -135,7 +139,7 @@ func main() {
 		} else {
 			// Send events to APIserver if there is a client.
 			log.Infof("Sending events to APIserver.")
-			record.StartRecording(apiClient.Events(""), "kubelet")
+			record.StartRecording(apiClient.Events(""), api.EventSource{Component:"kubelet"})
 		}
 	}
 
@@ -212,7 +216,10 @@ func main() {
 		float32(*registryPullQPS),
 		*registryBurst,
 		*minimumGCAge,
-		*maxContainerCount)
+		*maxContainerCount,
+		cfg.SeenAllSources,
+		*clusterDomain,
+		net.IP(clusterDNS))
 
 	kl.BirthCry()
 

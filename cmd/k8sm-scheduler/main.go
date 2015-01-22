@@ -185,7 +185,7 @@ func main() {
 	}
 
 	// Send events to APIserver if there is a client.
-	record.StartRecording(client.Events(""), "scheduler")
+	record.StartRecording(client.Events(""), api.EventSource{Component:"scheduler"})
 
 	// Create mesos scheduler driver.
 	executor := prepareExecutorInfo()
