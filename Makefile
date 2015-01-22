@@ -27,6 +27,9 @@ KUBE_GIT_VERSION_FILE := $(current_dir)/.kube-version
 
 SHELL		:= /bin/bash
 
+# thse binaries may be copied to an executable docker iamge
+CONTAINER_TOOLS := iptables hostname /bin/sh /usr/bin/test /bin/pwd /bin/bash
+
 # a list of upstream projects for which we test the availability of patches
 PATCH_SCRIPT	:= $(current_dir)/hack/patches/apply.sh
 
@@ -36,7 +39,7 @@ DESTDIR		?= /target
 # default build tags
 TAGS		?=
 
-.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test patch version
+.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test patch version dockerbuild
 
 ifneq ($(WITH_MESOS_DIR),)
 
@@ -83,6 +86,7 @@ require-godep: require-gopath
 require-gopath:
 	@test -n "$(GOPATH)" || ${fail} MSG="GOPATH undefined, aborting"
 
+# env CGO_ENABLED=0 go install -ldflags "$$(cat $(KUBE_GIT_VERSION_FILE)) -extldflags '-static'" $(K8S_CMD)
 proxy: require-godep $(KUBE_GIT_VERSION_FILE)
 	go install -ldflags "$$(cat $(KUBE_GIT_VERSION_FILE))" $(K8S_CMD)
 
@@ -110,6 +114,7 @@ info:
 	@echo CGO_LDFLAGS="$(CGO_LDFLAGS)"
 	@echo RACE_FLAGS=$${WITH_RACE:+-race}
 	@echo TAGS=$(TAGS)
+	@echo dir=$(current_dir)
 
 bootstrap: require-godep
 	godep restore
@@ -126,3 +131,16 @@ $(KUBE_GIT_VERSION_FILE): require-gopath
 
 $(PATCH_SCRIPT):
 	test -x $@ || chmod +x $@
+
+dockerbuild:
+	mesosdir="$(WITH_MESOS_DIR)"; sudo docker run --rm \
+		-v $(current_dir)/bin:/target \
+		-v $${mesosdir:-/usr/local}:/import/mesos \
+		-v $(current_dir):/snapshot \
+		-e TAGS="$(TAGS)" \
+		-e WITH_MESOS_DIR=/import/mesos \
+		jdef/kubernetes-mesos:build-latest
+bake:
+	cd $(current_dir) && test -d ./bin && \
+		sudo ./hack/bake.sh $$(ls bin/*) $(CONTAINER_TOOLS) && \
+		sudo docker run --rm -ti mesosphere/k8sm:latest --version
