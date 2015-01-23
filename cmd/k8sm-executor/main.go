@@ -139,7 +139,7 @@ func main() {
 		} else {
 			// Send events to APIserver if there is a client.
 			log.Infof("Sending events to APIserver.")
-			record.StartRecording(apiClient.Events(""), api.EventSource{Component:"kubelet"})
+			record.StartRecording(apiClient.Events(""), api.EventSource{Component: "kubelet"})
 		}
 	}
 
