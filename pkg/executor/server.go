@@ -35,6 +35,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/httplog"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	"github.com/golang/glog"
 	"github.com/google/cadvisor/info"
 	"github.com/mesosphere/kubernetes-mesos/pkg/profile"
@@ -91,7 +92,8 @@ func NewServer(host HostInterface, enableDebuggingHandlers bool, ns string) Serv
 func (s *Server) InstallDefaultHandlers() {
 	healthz.InstallHandler(s.mux)
 	profile.InstallHandler(s.mux)
-	s.mux.HandleFunc("/podInfo", s.handlePodInfo)
+	s.mux.HandleFunc("/podInfo", s.handlePodInfoOld)
+	s.mux.HandleFunc("/api/v1beta1/podInfo", s.handlePodInfoVersioned)
 	s.mux.HandleFunc("/boundPods", s.handleBoundPods)
 	s.mux.HandleFunc("/stats/", s.handleStats)
 	s.mux.HandleFunc("/spec/", s.handleSpec)
@@ -189,8 +191,16 @@ func (s *Server) handleBoundPods(w http.ResponseWriter, req *http.Request) {
 	w.Write(data)
 }
 
+func (s *Server) handlePodInfoOld(w http.ResponseWriter, req *http.Request) {
+	s.handlePodInfo(w, req, false)
+}
+
+func (s *Server) handlePodInfoVersioned(w http.ResponseWriter, req *http.Request) {
+	s.handlePodInfo(w, req, true)
+}
+
 // handlePodInfo handles podInfo requests against the Kubelet.
-func (s *Server) handlePodInfo(w http.ResponseWriter, req *http.Request) {
+func (s *Server) handlePodInfo(w http.ResponseWriter, req *http.Request, versioned bool) {
 	req.Close = true
 	u, err := url.ParseRequestURI(req.RequestURI)
 	if err != nil {
@@ -227,7 +237,7 @@ func (s *Server) handlePodInfo(w http.ResponseWriter, req *http.Request) {
 		s.error(w, err)
 		return
 	}
-	data, err := json.Marshal(info)
+	data, err := exportPodInfo(info, versioned)
 	if err != nil {
 		s.error(w, err)
 		return
@@ -269,6 +279,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	defer httplog.NewLogged(req, &w).StacktraceWhen(
 		httplog.StatusIsNot(
 			http.StatusOK,
+			http.StatusMovedPermanently,
+			http.StatusTemporaryRedirect,
 			http.StatusNotFound,
 		),
 	).Log()
@@ -277,7 +289,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 // serveStats implements stats logic.
 func (s *Server) serveStats(w http.ResponseWriter, req *http.Request) {
-	// /stats/<podfullname>/<containerName> or /stats/<podfullname>/<uuid>/<containerName>
+	// /stats/<podfullname>/<containerName> or /stats/<namespace>/<podfullname>/<uuid>/<containerName>
 	components := strings.Split(strings.TrimPrefix(path.Clean(req.URL.Path), "/"), "/")
 	var stats *info.ContainerInfo
 	var err error
@@ -299,23 +311,21 @@ func (s *Server) serveStats(w http.ResponseWriter, req *http.Request) {
 		// Backward compatibility without uuid information
 		podFullName := kubelet.GetPodFullName(&api.BoundPod{
 			ObjectMeta: api.ObjectMeta{
-				Name: components[1],
-				// TODO(k8s): I am broken
+				Name:        components[1],
 				Namespace:   api.NamespaceDefault,
 				Annotations: map[string]string{kubelet.ConfigSourceAnnotationKey: s.sourcename},
 			},
 		})
 		stats, err = s.host.GetContainerInfo(podFullName, "", components[2], &query)
-	case 4:
+	case 5:
 		podFullName := kubelet.GetPodFullName(&api.BoundPod{
 			ObjectMeta: api.ObjectMeta{
-				Name: components[1],
-				// TODO(k8s): I am broken
-				Namespace:   "",
+				Name:        components[2],
+				Namespace:   components[1],
 				Annotations: map[string]string{kubelet.ConfigSourceAnnotationKey: s.sourcename},
 			},
 		})
-		stats, err = s.host.GetContainerInfo(podFullName, components[2], components[2], &query)
+		stats, err = s.host.GetContainerInfo(podFullName, components[3], components[4], &query)
 	default:
 		http.Error(w, "unknown resource.", http.StatusNotFound)
 		return
@@ -338,6 +348,26 @@ func (s *Server) serveStats(w http.ResponseWriter, req *http.Request) {
 	w.Header().Add("Content-type", "application/json")
 	w.Write(data)
 	return
+}
+
+func exportPodInfo(info api.PodInfo, versioned bool) ([]byte, error) {
+	if versioned {
+		// TODO: support arbitrary versions here
+		codec, err := findCodec("v1beta1")
+		if err != nil {
+			return nil, err
+		}
+		return codec.Encode(&api.PodContainerInfo{ContainerInfo: info})
+	}
+	return json.Marshal(info)
+}
+
+func findCodec(version string) (runtime.Codec, error) {
+	versions, err := latest.InterfacesFor(version)
+	if err != nil {
+		return nil, err
+	}
+	return versions.Codec, nil
 }
 
 // HACK(jdef): FlushWriter taken from k8s /pkg/kubelet/handlers.go
