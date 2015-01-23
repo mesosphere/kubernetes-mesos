@@ -22,6 +22,8 @@ This worked for me on a GCE cluster, spun up from [Mesosphere's GCE tooling][1].
 :; git clone https://github.com/mesosphere/kubernetes-mesos.git k8sm
 :; cd k8sm && git checkout dcos_demo
 
+## assumes that Mesos was installed to /usr/local. If it's somewhere else then
+## you can specify, after 'bake', WITH_MESOS_DIR=/your/special/mesos/distro/prefix
 :; make dockerbuild bake
 
 :; export servicehost=$(hostname -i|tr ' ' '\n'|head -n1)
