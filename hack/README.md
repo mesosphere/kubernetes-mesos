@@ -33,6 +33,13 @@ This worked for me on a GCE cluster, spun up from [Mesosphere's GCE tooling][1].
 :; ./hack/kube up
 
 :; sudo docker ps
+
+## ... and then you can start spinning up the guestbook
+:; ./hack/kube config -c examples/guestbook/redis-master.json create pods
+:; ./hack/kube config -c examples/guestbook/redis-master-service.json create services
+:; ./hack/kube list pods
+:; ./hack/kube list services
+
 ```
 
 [1]: https://google.mesosphere.com/
