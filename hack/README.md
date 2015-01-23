@@ -24,6 +24,7 @@ This worked for me on a GCE cluster, spun up from [Mesosphere's GCE tooling][1].
 
 :; make dockerbuild bake
 
+:; export servicehost=$(hostname -i|tr ' ' '\n'|head -n1)
 :; sudo docker run -d --net=host coreos/etcd go-wrapper run \
    -advertise-client-urls=http://${servicehost}:4001 \
    -listen-client-urls=http://${servicehost}:4001 \
@@ -37,8 +38,27 @@ This worked for me on a GCE cluster, spun up from [Mesosphere's GCE tooling][1].
 ## ... and then you can start spinning up the guestbook
 :; ./hack/kube config -c examples/guestbook/redis-master.json create pods
 :; ./hack/kube config -c examples/guestbook/redis-master-service.json create services
-:; ./hack/kube list pods
-:; ./hack/kube list services
+:; ./hack/kube config -c examples/guestbook/redis-slave-controller.json create replicationControllers
+:; ./hack/kube config -c examples/guestbook/redis-slave-service.json create services
+:; ./hack/kube config -c examples/guestbook/frontend-controller.json create replicationControllers
+:; cat <<EOS >/tmp/frontend-service
+{
+  "id": "frontend",
+  "kind": "Service",
+  "apiVersion": "v1beta1",
+  "port": 9998,
+  "selector": {
+    "name": "frontend"
+  },
+  "publicIPs": [
+    "${servicehost}"
+  ]
+}
+EOS
+
+:; ./hack/kube config -c /tmp/frontend-service create services
+:; ./hack/kube config list pods
+:; ./hack/kube config list services
 
 ```
 
