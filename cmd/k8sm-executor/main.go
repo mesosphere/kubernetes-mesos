@@ -6,27 +6,20 @@ import (
 	"io"
 	"math/rand"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
-	"path"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/capabilities"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/clientauth"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/health"
 	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	kconfig "github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/config"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/standalone"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
-	"github.com/coreos/go-etcd/etcd"
 	"github.com/fsouza/go-dockerclient"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
@@ -55,6 +48,8 @@ var (
 	minimumGCAge            = flag.Duration("minimum_container_ttl_duration", 0, "Minimum age for a finished container before it is garbage collected.  Examples: '300ms', '10s' or '2h45m'")
 	maxContainerCount       = flag.Int("maximum_dead_containers_per_container", 5, "Maximum number of old instances of a container to retain per container.  Each container takes up some disk space.  Default: 5.")
 	authPath                = flag.String("auth_path", "", "Path to .kubernetes_auth file, specifying how to authenticate to API server.")
+	cAdvisorPort            = flag.Uint("cadvisor_port", 4194, "The port of the localhost cAdvisor endpoint")
+	oomScoreAdj             = flag.Int("oom_score_adj", -900, "The oom_score_adj value for kubelet process. Values must be within the range [-1000, 1000]")
 	apiServerList           util.StringList
 	clusterDomain           = flag.String("cluster_domain", "", "Domain for this cluster.  If set, kubelet will configure all containers to search this domain in addition to the host's search domains")
 	clusterDNS              = util.IP(nil)
@@ -67,126 +62,100 @@ func init() {
 	flag.Var(&clusterDNS, "cluster_dns", "IP address for a cluster DNS server.  If set, kubelet will configure all containers to use this for DNS resolution in addition to the host's DNS servers")
 }
 
-func getDockerEndpoint() string {
-	var endpoint string
-	if len(*dockerEndpoint) > 0 {
-		endpoint = *dockerEndpoint
-	} else if len(os.Getenv("DOCKER_HOST")) > 0 {
-		endpoint = os.Getenv("DOCKER_HOST")
-	} else {
-		endpoint = "unix:///var/run/docker.sock"
-	}
-	log.Infof("Connecting to docker on %s", endpoint)
-
-	return endpoint
-}
-
-func getHostname() string {
-	hostname := []byte(*hostnameOverride)
-	if string(hostname) == "" {
-		// Note: We use exec here instead of os.Hostname() because we
-		// want the FQDN, and this is the easiest way to get it.
-		fqdn, err := exec.Command("hostname", "-f").Output()
-		if err != nil {
-			log.Fatalf("Couldn't determine hostname: %v", err)
-		}
-		hostname = fqdn
-	}
-	return strings.TrimSpace(string(hostname))
-}
-
-func getApiserverClient() (*client.Client, error) {
-	clientConfig := client.Config{}
-	if *authPath != "" {
-		authInfo, err := clientauth.LoadFromFile(*authPath)
-		if err != nil {
-			return nil, err
-		}
-		clientConfig, err = authInfo.MergeWithConfig(clientConfig)
-		if err != nil {
-			return nil, err
-		}
-	}
-	// TODO: adapt Kube client to support LB over several servers
-	if len(apiServerList) > 1 {
-		log.Infof("Mulitple api servers specified.  Picking first one")
-	}
-	clientConfig.Host = apiServerList[0]
-	if c, err := client.New(&clientConfig); err != nil {
-		return nil, err
-	} else {
-		return c, nil
-	}
-}
-
 func main() {
 
 	flag.Parse()
-	util.InitLogs() // TODO(jdef) figure out where this actually sends logs by default
+	util.InitLogs()
 	defer util.FlushLogs()
 	rand.Seed(time.Now().UTC().UnixNano())
 
 	verflag.PrintAndExitIfRequested()
 
-	etcd.SetLogger(util.NewLogger("etcd "))
-
-	// Make an API client if possible.
-	if len(apiServerList) < 1 {
-		log.Info("No api servers specified.")
-	} else {
-		if apiClient, err := getApiserverClient(); err != nil {
-			log.Errorf("Unable to make apiserver client: %v", err)
-		} else {
-			// Send events to APIserver if there is a client.
-			log.Infof("Sending events to APIserver.")
-			record.StartRecording(apiClient.Events(""), api.EventSource{Component: "kubelet"})
-		}
+	if err := util.ApplyOomScoreAdj(*oomScoreAdj); err != nil {
+		log.Info(err)
 	}
 
-	// Log the events locally too.
-	record.StartLogging(log.Infof)
+	kcfg := standalone.KubeletConfig{
+		Address:                 address,
+		AuthPath:                *authPath,
+		ApiServerList:           apiServerList,
+		AllowPrivileged:         *allowPrivileged,
+		HostnameOverride:        *hostnameOverride,
+		RootDirectory:           *rootDirectory,
+		NetworkContainerImage:   *networkContainerImage,
+		SyncFrequency:           *syncFrequency,
+		RegistryPullQPS:         *registryPullQPS,
+		RegistryBurst:           *registryBurst,
+		MinimumGCAge:            *minimumGCAge,
+		MaxContainerCount:       *maxContainerCount,
+		ClusterDomain:           *clusterDomain,
+		ClusterDNS:              clusterDNS,
+		Port:                    *port, // TODO(nnielsen): Don't hardwire port, but use port from resource offer.
+		CAdvisorPort:            *cAdvisorPort,
+		EnableServer:            true,
+		EnableDebuggingHandlers: *enableDebuggingHandlers,
+		DockerClient:            util.ConnectToDockerOrDie(*dockerEndpoint),
+		EtcdClient:              kubelet.EtcdClientOrDie(etcdServerList, *etcdConfigFile),
+	}
 
-	capabilities.Initialize(capabilities.Capabilities{
-		AllowPrivileged: *allowPrivileged,
+	driver := new(mesos.MesosExecutorDriver)
+
+	//HACK(jdef) largely hacked from the k8s standalone package, createAndInitKubelet
+	builder := standalone.KubeletBuilder(func(kc *standalone.KubeletConfig) (standalone.KubeletBootstrap, *kconfig.PodConfig) {
+		pc := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
+		updates := pc.Channel(MESOS_CFG_SOURCE)
+
+		// TODO(k8s): block until all sources have delivered at least one update to the channel, or break the sync loop
+		// up into "per source" synchronizations
+
+		k := &kubeletExecutor{
+			Kubelet: kubelet.NewMainKubelet(
+				kc.Hostname,
+				kc.DockerClient,
+				kc.EtcdClient,
+				kc.RootDirectory,
+				kc.NetworkContainerImage,
+				kc.SyncFrequency,
+				float32(kc.RegistryPullQPS),
+				kc.RegistryBurst,
+				kc.MinimumGCAge,
+				kc.MaxContainerCount,
+				pc.SeenAllSources,
+				kc.ClusterDomain,
+				net.IP(kc.ClusterDNS)),
+			driver: driver,
+		}
+		driver.Executor = executor.New(driver, k.Kubelet, updates, MESOS_CFG_SOURCE)
+
+		log.V(2).Infof("Initialize executor driver...")
+		driver.Init()
+
+		k.BirthCry()
+		k.reconcileTasks(kc.DockerClient)
+
+		go k.GarbageCollectLoop()
+		// go k.MonitorCAdvisor(kc.CAdvisorPort) // TODO(jdef) support cadvisor at some point
+
+		k.InitHealthChecking()
+		return k, pc
 	})
 
-	dockerClient, err := docker.NewClient(getDockerEndpoint())
-	if err != nil {
-		log.Fatal("Couldn't connnect to docker.")
-	}
+	// create, initialize, and run kubelet services
+	standalone.RunKubelet(&kcfg, builder)
+	defer driver.Destroy()
 
-	hostname := getHostname()
+	// block until driver is shut down
+	driver.Join()
+}
 
-	if *rootDirectory == "" {
-		log.Fatal("Invalid root directory path.")
-	}
-	*rootDirectory = path.Clean(*rootDirectory)
-	if err := os.MkdirAll(*rootDirectory, 0750); err != nil {
-		log.Warningf("Error creating root directory: %v", err)
-	}
+type kubeletExecutor struct {
+	*kubelet.Kubelet
+	driver     *mesos.MesosExecutorDriver
+	initialize sync.Once
+}
 
-	// source of all configuration
-	cfg := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
-
-	// k8sm: no other pod configuration sources supported in this hybrid kubelet-executor
-
-	// define etcd config source and initialize etcd client
-	var etcdClient *etcd.Client
-	if len(etcdServerList) > 0 {
-		etcdClient = etcd.NewClient(etcdServerList)
-	} else if *etcdConfigFile != "" {
-		var err error
-		etcdClient, err = etcd.NewClientFromFile(*etcdConfigFile)
-		if err != nil {
-			log.Fatalf("Error with etcd config file: %v", err)
-		}
-	}
-
-	if etcdClient != nil {
-		log.Infof("Connected to etcd at %v", etcdClient.GetCluster())
-	}
-
-	// TODO(???): Destroy existing k8s containers for now - we don't know how to reconcile yet.
+func (kl *kubeletExecutor) reconcileTasks(dockerClient dockertools.DockerInterface) {
+	// TODO(jdef): Destroy existing k8s containers for now - we don't know how to reconcile yet.
 	if containers, err := dockertools.GetKubeletDockerContainers(dockerClient, true); err == nil {
 		opts := docker.RemoveContainerOptions{
 			RemoveVolumes: true,
@@ -202,97 +171,21 @@ func main() {
 	} else {
 		log.Warningf("Failed to list kubelet docker containers: %v", err)
 	}
+}
 
-	// TODO(k8s): block until all sources have delivered at least one update to the channel, or break the sync loop
-	// up into "per source" synchronizations
+func (kl *kubeletExecutor) ListenAndServe(address net.IP, port uint, enableDebuggingHandlers bool) {
+	// this func could be called many times, depending how often the HTTP server crashes,
+	// so only execute certain initialization procs once
+	kl.initialize.Do(func() {
+		go util.Forever(runProxyService, 5*time.Second)
+		kl.driver.Start()
+		log.V(2).Infof("Executor driver is running!")
 
-	kl := kubelet.NewMainKubelet(
-		hostname,
-		dockerClient,
-		etcdClient,
-		*rootDirectory,
-		*networkContainerImage,
-		*syncFrequency,
-		float32(*registryPullQPS),
-		*registryBurst,
-		*minimumGCAge,
-		*maxContainerCount,
-		cfg.SeenAllSources,
-		*clusterDomain,
-		net.IP(clusterDNS))
-
-	kl.BirthCry()
-
-	go func() {
-		util.Forever(func() {
-			err := kl.GarbageCollectContainers()
-			if err != nil {
-				log.Errorf("Garbage collect failed: %v", err)
-			}
-		}, time.Minute*1)
-	}()
-
-	/* TODO(jdef): enable cadvisor integration
-	go func() {
-		defer util.HandleCrash()
-		// TODO(k8s): Monitor this connection, reconnect if needed?
-		log.V(1).Infof("Trying to create cadvisor client.")
-		cadvisorClient, err := cadvisor.NewClient("http://127.0.0.1:4194")
-		if err != nil {
-			log.Errorf("Error on creating cadvisor client: %v", err)
-			return
-		}
-		log.V(1).Infof("Successfully created cadvisor client.")
-		kl.SetCadvisorClient(cadvisorClient)
-	}()
-	*/
-
-	// TODO(k8s): These should probably become more plugin-ish: register a factory func
-	// in each checker's init(), iterate those here.
-	health.AddHealthChecker(health.NewExecHealthChecker(kl))
-	health.AddHealthChecker(health.NewHTTPHealthChecker(&http.Client{}))
-	health.AddHealthChecker(&health.TCPHealthChecker{})
-
-	driver := new(mesos.MesosExecutorDriver)
-	kubeletExecutor := executor.New(driver, kl, cfg.Channel(MESOS_CFG_SOURCE), MESOS_CFG_SOURCE)
-	driver.Executor = kubeletExecutor
-
-	log.V(2).Infof("Initialize executor driver...")
-	driver.Init()
-	defer driver.Destroy()
-
-	log.V(2).Infof("Executor driver is running!")
-	driver.Start()
-
-	// TODO(who?) Recover running containers from check pointed pod list.
-
-	// start the kubelet
-	go util.Forever(func() { kl.Run(cfg.Updates()) }, 0)
-
+		// TODO(who?) Recover running containers from check pointed pod list.
+		// @see reconcileTasks
+	})
 	log.Infof("Starting kubelet server...")
-	//TODO(jdef) when migrating to release 0.8+ the 10s re-try interval below is specified as
-	// zero seconds in pkg/standalone/startKubelet. We don't want 0s because if we can't get
-	// the port right away then we generate **tons** of logging and fill up the disk.
-	go util.Forever(func() {
-		// TODO(nnielsen): Don't hardwire port, but use port from resource offer.
-		log.Error(executor.ListenAndServeKubeletServer(kl, net.IP(address), *port, *enableDebuggingHandlers, MESOS_CFG_SOURCE))
-	}, 10*time.Second)
-
-	go runProxyService()
-
-	/*
-		// TODO(nnielsen): Factor check-pointing into subsystem.
-		dat, err := ioutil.ReadFile("/tmp/kubernetes-pods")
-		if err == nil {
-			var target []api.PodInfo
-			err := json.Unmarshal(dat, &target)
-			if err == nil {
-				log.Infof("Checkpoint: '%v'", target)
-			}
-		}
-	*/
-
-	driver.Join()
+	log.Error(executor.ListenAndServeKubeletServer(kl, address, port, enableDebuggingHandlers, MESOS_CFG_SOURCE))
 }
 
 // this function blocks as long as the proxy service is running; intended to be
