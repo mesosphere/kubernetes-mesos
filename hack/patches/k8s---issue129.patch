@@ -1,0 +1,28 @@
+diff --git a/pkg/kubelet/util.go b/pkg/kubelet/util.go
+index cc6aa58..acabbc8 100644
+--- a/pkg/kubelet/util.go
++++ b/pkg/kubelet/util.go
+@@ -99,13 +97,16 @@ func SetupLogging() {
+ 
+ // TODO: move this into pkg/client
+ func getApiserverClient(authPath string, apiServerList util.StringList) (*client.Client, error) {
+-	authInfo, err := clientauth.LoadFromFile(authPath)
+-	if err != nil {
+-		return nil, err
+-	}
+-	clientConfig, err := authInfo.MergeWithConfig(client.Config{})
+-	if err != nil {
+-		return nil, err
++	clientConfig := client.Config{}
++	if authPath != "" {
++		authInfo, err := clientauth.LoadFromFile(authPath)
++		if err != nil {
++			return nil, err
++		}
++		clientConfig, err = authInfo.MergeWithConfig(clientConfig)
++		if err != nil {
++			return nil, err
++		}
+ 	}
+ 	if len(apiServerList) < 1 {
+ 		return nil, fmt.Errorf("no apiservers specified.")
