@@ -101,6 +101,7 @@ func main() {
 	driver := new(mesos.MesosExecutorDriver)
 
 	//HACK(jdef) largely hacked from the k8s standalone package, createAndInitKubelet
+	initialized := make(chan struct{})
 	builder := standalone.KubeletBuilder(func(kc *standalone.KubeletConfig) (standalone.KubeletBootstrap, *kconfig.PodConfig) {
 		pc := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
 		updates := pc.Channel(MESOS_CFG_SOURCE)
@@ -123,7 +124,8 @@ func main() {
 				pc.SeenAllSources,
 				kc.ClusterDomain,
 				net.IP(kc.ClusterDNS)),
-			driver: driver,
+			driver:      driver,
+			initialized: initialized,
 		}
 		driver.Executor = executor.New(driver, k.Kubelet, updates, MESOS_CFG_SOURCE)
 
@@ -142,6 +144,8 @@ func main() {
 
 	// create, initialize, and run kubelet services
 	standalone.RunKubelet(&kcfg, builder)
+
+	<-initialized
 	defer driver.Destroy()
 
 	// block until driver is shut down
@@ -150,8 +154,9 @@ func main() {
 
 type kubeletExecutor struct {
 	*kubelet.Kubelet
-	driver     *mesos.MesosExecutorDriver
-	initialize sync.Once
+	driver      *mesos.MesosExecutorDriver
+	initialize  sync.Once
+	initialized chan struct{}
 }
 
 func (kl *kubeletExecutor) reconcileTasks(dockerClient dockertools.DockerInterface) {
@@ -177,6 +182,7 @@ func (kl *kubeletExecutor) ListenAndServe(address net.IP, port uint, enableDebug
 	// this func could be called many times, depending how often the HTTP server crashes,
 	// so only execute certain initialization procs once
 	kl.initialize.Do(func() {
+		defer close(kl.initialized)
 		go util.Forever(runProxyService, 5*time.Second)
 		kl.driver.Start()
 		log.V(2).Infof("Executor driver is running!")
