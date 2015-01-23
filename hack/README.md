@@ -34,6 +34,11 @@ This worked for me on a GCE cluster, spun up from [Mesosphere's GCE tooling][1].
 :; ./hack/kube up
 
 :; sudo docker ps
+CONTAINER ID  IMAGE                              COMMAND            CREATED  STATUS  NAMES
+fb7741160735  mesosphere/k8sm:latest-proxy       "/bootstrap.sh ku  27m ago  Up 27m  kube-proxy
+03c374dbcb83  mesosphere/k8sm:latest-controller  "/bootstrap.sh co  27m ago  Up 27m  k8sm-controller-manager
+713ce321b533  mesosphere/k8sm:latest-master      "/bootstrap.sh ku  27m ago  Up 27m  k8sm-scheduler
+475024dedd5b  coreos/etcd:latest                 "/etcd go-wrapper  27m ago  Up 27m  happy_goldstine
 
 ## ... and then you can start spinning up the guestbook
 :; ./hack/kube config -c examples/guestbook/redis-master.json create pods
