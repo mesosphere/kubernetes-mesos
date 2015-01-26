@@ -14,10 +14,10 @@ A Mesos cluster consists of one or more masters, and one or more slaves.
 Kubernetes-Mesos (k8sm) operates as a Mesos framework that runs on the cluster.
 As a framework, k8sm provides scheduler and executor components, both of which are hybrids of Kubernetes and Mesos:
 the scheduler component integrates the Kubernetes scheduling API and the Mesos scheduler runtime, whereas;
-the executor component integrates Kubernetes kubelet services and Mesos executor runtime.
+the executor component integrates Kubernetes kubelet services and the Mesos executor runtime.
 
 Multiple Mesos masters are typically configured to coordinate leadership election via Zookeeper.
-Kubernetes maintains its internal registry (pods, replication controllers, minions, services) in etcd.
+Kubernetes maintains its internal registry (pods, replication controllers, bindings, minions, services) in etcd.
 Users typically interact with Kubernetes using the `kubecfg` or `kubectl` commands to manage Kubernetes primitives.
 
 When a pod is created in Kubernetes, the k8sm scheduler creates an associated Task and queues it for scheduling.
