@@ -23,7 +23,7 @@ Kubernetes service endpoints terminate, by default, at a backing pod's IPv4 addr
 This is problematic when default Docker networking has been configured, such as in the case of typical Mesos clusters, because a pod's host-private IPv4 address is not intended to be reachable outside of its host.
 
 The k8sm project has implemented a work-around: service endpoints are terminated at HostIP:HostPort, where the HostIP resolves to the IP address of the Mesos slave and the HostPort resolves to the host port declared in the pod container port specification.
-Thus, this enfores a **new requirement** for Kubernetes services running on the k8sm framework:
+Thus, this enforces a **new requirement** for Kubernetes services running on the k8sm framework:
 
 * Pod containers that wish to expose a Port to a service must declare a host port in their specification.
 
