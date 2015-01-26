@@ -145,6 +145,7 @@ func main() {
 	// create, initialize, and run kubelet services
 	standalone.RunKubelet(&kcfg, builder)
 
+	log.Infoln("Waiting for driver initialization to complete")
 	<-initialized
 	defer driver.Destroy()
 
