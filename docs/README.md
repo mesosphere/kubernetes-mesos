@@ -26,9 +26,9 @@ Kubernetes maintains its internal registry (pods, replication controllers, bindi
 Users typically interact with Kubernetes using the `kubecfg` or `kubectl` commands to manage Kubernetes primitives.
 
 When a pod is created in Kubernetes, the k8sm scheduler creates an associated Task and queues it for scheduling.
-Upon pairing the task with an acceptable resource offer, the scheduler binds the task to the offer's slave.
-As a result of binding the task is launched and delivered to an executor (an executor is created by the Mesos slave if one is not already running).
-The executor launches the task, which registers the bound pod with the kubelet engine and the kubelet begins to manage the lifecycle of the pod instance.
+Upon pairing the pod/task with an acceptable resource offer, the scheduler binds the pod/task to the offer's slave.
+As a result of binding the pod/task is launched and delivered to an executor (an executor is created by the Mesos slave if one is not already running).
+The executor launches the pod/task, which registers the bound pod with the kubelet engine and the kubelet begins to manage the lifecycle of the pod instance.
 
 ![Architecture Diagram](architecture.png)
 
