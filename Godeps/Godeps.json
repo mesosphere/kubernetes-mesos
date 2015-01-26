@@ -237,11 +237,11 @@
 		},
 		{
 			"ImportPath": "github.com/stretchr/testify/assert",
-			"Rev": "37614ac27794505bf7867ca93aac883cadb6a5f7"
+			"Rev": "e897f97d666c44ddbc131f4121c2961034b4c1b4"
 		},
 		{
 			"ImportPath": "github.com/stretchr/testify/mock",
-			"Rev": "37614ac27794505bf7867ca93aac883cadb6a5f7"
+			"Rev": "e897f97d666c44ddbc131f4121c2961034b4c1b4"
 		},
 		{
 			"ImportPath": "github.com/tonnerre/golang-pretty",

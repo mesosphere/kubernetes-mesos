@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/meta"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
@@ -91,7 +90,7 @@ func (k *k8smScheduler) unregisterPodTask(task *PodTask) {
 
 func (k *k8smScheduler) killTask(taskId string) error {
 	// assume caller is holding scheduler lock
-	killTaskId := &mesos.TaskID{Value: proto.String(taskId)}
+	killTaskId := newTaskID(taskId)
 	return k.KubernetesScheduler.driver.KillTask(killTaskId)
 }
 
@@ -659,38 +658,4 @@ func (psa *podStoreAdapter) Replace(idToObj map[string]interface{}) {
 		newmap[k] = &Pod{Pod: pod}
 	}
 	psa.FIFO.Replace(newmap)
-}
-
-// implements Copyable
-func (p *Pod) Copy() queue.Copyable {
-	if p == nil {
-		return nil
-	}
-	//TODO(jdef) we may need a better "deep-copy" implementation
-	pod := *(p.Pod)
-	return &Pod{Pod: &pod}
-}
-
-// implements Unique
-func (p *Pod) GetUID() string {
-	return p.UID
-}
-
-// implements Deadlined
-func (dp *Pod) Deadline() (time.Time, bool) {
-	if dp.deadline != nil {
-		return *(dp.deadline), true
-	}
-	return time.Time{}, false
-}
-
-func (dp *Pod) GetDelay() time.Duration {
-	if dp.delay != nil {
-		return *(dp.delay)
-	}
-	return 0
-}
-
-func (p *Pod) Breaker() queue.BreakChan {
-	return p.notify
 }

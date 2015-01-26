@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	log "github.com/golang/glog"
@@ -80,7 +79,7 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 		executor: executor,
 		offers: CreateOfferRegistry(OfferRegistryConfig{
 			declineOffer: func(id string) error {
-				offerId := &mesos.OfferID{Value: proto.String(id)}
+				offerId := newOfferID(id)
 				return k.driver.DeclineOffer(offerId, nil)
 			},
 			ttl:           defaultOfferTTL * time.Second,
