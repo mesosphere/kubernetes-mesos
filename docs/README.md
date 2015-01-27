@@ -22,6 +22,7 @@ the scheduler component integrates the Kubernetes scheduling API and the Mesos s
 the executor component integrates Kubernetes kubelet services and the Mesos executor runtime.
 
 Multiple Mesos masters are typically configured to coordinate leadership election via Zookeeper.
+Future releases of Mesos may implement leader election protocols [differently][10].
 Kubernetes maintains its internal registry (pods, replication controllers, bindings, minions, services) in etcd.
 Users typically interact with Kubernetes using the `kubecfg` or `kubectl` commands to manage Kubernetes primitives.
 
@@ -41,3 +42,4 @@ The executor launches the pod/task, which registers the bound pod with the kubel
 [7]: https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/pods.md
 [8]: https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/replication-controller.md
 [9]: https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/node.md
+[10]: https://issues.apache.org/jira/browse/MESOS-1806
