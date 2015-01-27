@@ -33,6 +33,13 @@ The executor launches the pod/task, which registers the bound pod with the kubel
 
 ![Architecture Diagram](architecture.png)
 
+### Networking
+
+Kubernetes-Mesos defaults to "normal" Docker IPv4, host-private networking.
+This allows services to operate, but creates other [issues][11].
+
+![Network Diagram](networking.png)
+
 [1]: http://mesos.apache.org/documentation/latest
 [2]: https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/README.md
 [3]: issues.md
@@ -43,3 +50,4 @@ The executor launches the pod/task, which registers the bound pod with the kubel
 [8]: https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/replication-controller.md
 [9]: https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/node.md
 [10]: https://issues.apache.org/jira/browse/MESOS-1806
+[11]: issues.md#service-endpoints
