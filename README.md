@@ -10,25 +10,10 @@ Kubernetes and Mesos are a match made in heaven.
 Kubernetes enables the Pod (group of co-located containers) abstraction, along with Pod labels for service discovery, load-balancing, and replication control.
 Mesos provides the fine-grained resource allocations for pods across nodes in a cluster, and can make Kubernetes play nicely with other frameworks running on the same cluster resources.
 
-Within the Kubernetes framework for Mesos the framework scheduler first registers with Mesos and begins accepting API requests.
-At some point Mesos offers the scheduler sets of available resources from the cluster nodes (slaves/minions).
-Once the scheduler is able to match a Mesos resource offer to an unassigned Kubernetes pod it binds the pod to the slave, first sending a launchTasks message to the Mesos master, and then updating the pod's state (desired host).
-Mesos marks the resources as claimed and then forwards the request onto the appropriate slave.
-The slave fetches the kubelet/executor and starts running it, spawning the pod's containers and communicating the pod/task status back to Mesos.
+This is still very much a work-in-progress, but stay tuned for updates as we continue development.
+If you have ideas or patches, feel free to contribute!
 
-### Roadmap
-This is still very much a work-in-progress, but stay tuned for updates as we continue development. If you have ideas or patches, feel free to contribute!
-
-- [x] Launching pods (on local machine)
-  1. Implement Kube-scheduler API
-  1. Pick a Pod (FCFS), match it to an offer.
-  1. Launch it!
-  1. Kubelet as Executor+Containerizer
-- [x] Pod Labels: for Service Discovery + Load Balancing
-- [x] Running multi-node on GCE
-- [x] Replication Control
-- [ ] Use resource shapes to schedule pods
-- [ ] Even smarter (Marathon-like) scheduling
+Refer to the [documentation pages][12] for a review of core concepts, system architecture, and [known issues][13].
 
 ### Tutorial
 
@@ -405,3 +390,5 @@ $ go test github.com/mesosphere/kubernetes-mesos/kubernetes-mesos -v
 [9]: https://github.com/GoogleCloudPlatform/kubernetes/releases/tag/v0.5
 [10]: https://mesosphere.com/docs/tutorials/kubernetes-mesos-gcp/
 [11]: https://github.com/mesosphere/kubernetes-mesos/releases
+[12]: docs/README.md
+[13]: docs/issues.md
