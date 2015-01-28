@@ -321,17 +321,8 @@ func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 	case statePending:
 		delete(k.pendingTasks, taskId)
 		delete(k.podToTask, task.podKey)
-
 		if task.launched && messages.CreateBindingFailure == taskStatus.GetMessage() {
-			if t, err := task.dup(); err == nil {
-				k.pendingTasks[taskId] = t
-				//TODO(jdef): need to invoke something like plugin.reconcile(t.Pod)
-				//because the scheduler may have already dropped the pod from the
-				//to-be-scheduled queue.
-				return
-			} else {
-				log.Error("failed to duplicate task, will not schedule: %v", err)
-			}
+			go k.plugin.reconcilePod(*task.Pod)
 		}
 	case stateRunning:
 		delete(k.runningTasks, taskId)

@@ -200,6 +200,7 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *Pod
 		boundPod.Annotations = make(map[string]string)
 	}
 	boundPod.Annotations[annotation.BindingHostKey] = machine
+	boundPod.Annotations[annotation.TaskIdKey] = task.ID
 
 	// the kubelet-executor uses this boundPod to instantiate the pod
 	task.TaskInfo.Data, err = yaml.Marshal(&boundPod)
@@ -257,6 +258,10 @@ func (k *kubeScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (st
 		}
 		return k.doSchedule(k.api.registerPodTask(k.api.createPodTask(ctx, &pod)))
 	} else {
+		//TODO(jdef) it's possible that the pod state has diverged from what
+		//we knew previously, we should probably update the task.Pod state here
+		//before proceeding with scheduling
+
 		switch task, state := k.api.getTask(taskID); state {
 		case statePending:
 			if task.launched {
@@ -559,7 +564,7 @@ func (k *deleter) deleteOne(pod *Pod) error {
 }
 
 // Create creates a scheduler plugin and all supporting background functions.
-func (k *KubernetesScheduler) NewPluginConfig(startLatch <-chan struct{}) *plugin.Config {
+func (k *KubernetesScheduler) NewPluginConfig(startLatch <-chan struct{}) *PluginConfig {
 
 	// Watch and queue pods that need scheduling.
 	updates := make(chan queue.Entry, defaultUpdatesBacklog)
@@ -591,31 +596,65 @@ func (k *KubernetesScheduler) NewPluginConfig(startLatch <-chan struct{}) *plugi
 			q.Run()
 		}
 	}()
-	return &plugin.Config{
-		MinionLister: nil,
-		Algorithm: &kubeScheduler{
-			api:      kapi,
-			podStore: podStore,
+	return &PluginConfig{
+		Config: &plugin.Config{
+			MinionLister: nil,
+			Algorithm: &kubeScheduler{
+				api:      kapi,
+				podStore: podStore,
+			},
+			Binder: &binder{
+				api:    kapi,
+				client: k.client,
+			},
+			NextPod: q.yield,
+			Error:   eh.handleSchedulingError,
 		},
-		Binder: &binder{
-			api:    kapi,
-			client: k.client,
-		},
-		NextPod: q.yield,
-		Error:   eh.handleSchedulingError,
+		client: k.client,
 	}
 }
 
-func NewPlugin(c *plugin.Config) PluginInterface {
-	return &schedulingPlugin{plugin.New(c)}
+type PluginConfig struct {
+	*plugin.Config
+	client *client.Client
+}
+
+func NewPlugin(c *PluginConfig) PluginInterface {
+	return &schedulingPlugin{
+		Scheduler: plugin.New(c.Config),
+		client:    c.client,
+	}
 }
 
 type schedulingPlugin struct {
 	*plugin.Scheduler
+	client *client.Client
 }
 
-func (s *schedulingPlugin) reconcilePod(api.Pod) {
-	//TODO(jdef) implement me
+// this pod may be out of sync with respect to the API server registry:
+//      this pod   |  apiserver registry
+//    -------------|----------------------
+//      host=""    |  host=""       ; perhaps no updates to process?
+//      host=""    |  host="..."    ; pod has been scheduled and assigned, is there a task assigned? (check TaskIdKey in binding?)
+//      host="..." |  host=""       ; pod is no longer scheduled, does it need to be re-queued?
+//      host="..." |  host="..."    ; perhaps no updates to process?
+//
+func (s *schedulingPlugin) reconcilePod(oldPod api.Pod) {
+	ctx := api.WithNamespace(api.NewDefaultContext(), oldPod.Namespace)
+	pod, err := s.client.Pods(api.Namespace(ctx)).Get(oldPod.Name)
+	if err != nil {
+		//TODO(jdef) handle 404's differently than other errors,
+		//other errors should probably trigger a retry (w/ backoff).
+
+		//For now, drop the pod on the floor
+		log.Warning(err)
+		return
+	}
+	if oldPod.Status.Host != pod.Status.Host {
+		//TODO(jdef) handle this case
+	} else {
+		//TODO(jdef) for now, ignore the fact that the rest of the spec may be different
+	}
 }
 
 type listWatch struct {
