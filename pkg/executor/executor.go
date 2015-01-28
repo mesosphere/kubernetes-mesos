@@ -10,7 +10,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
-	"gopkg.in/v1/yaml"
+	"gopkg.in/v2/yaml"
 )
 
 const (

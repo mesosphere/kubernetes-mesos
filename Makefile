@@ -73,7 +73,7 @@ endif
 export SHELL
 export KUBE_GO_PACKAGE
 
-all: patch proxy framework
+all: proxy framework
 
 error:
 	echo -E "$@: ${MSG}" >&2
@@ -85,7 +85,7 @@ require-godep: require-gopath
 require-gopath:
 	@test -n "$(GOPATH)" || ${fail} MSG="GOPATH undefined, aborting"
 
-proxy: require-godep $(KUBE_GIT_VERSION_FILE)
+proxy: require-godep $(KUBE_GIT_VERSION_FILE) patch
 	go install -ldflags "$$(cat $(KUBE_GIT_VERSION_FILE))" $(K8S_CMD)
 
 require-vendor:

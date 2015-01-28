@@ -55,11 +55,11 @@ func (e *endpointController) SyncServiceEndpoints() error {
 	}
 	var resultErr error
 	for _, service := range services.Items {
-		if service.Name == "kubernetes" || service.Name == "kubernetes-ro" {
-			// HACK(k8s): This is a temporary hack for supporting the master services
-			// until we actually start running apiserver in a pod.
+		if service.Spec.Selector == nil {
+			// services without a selector receive no endpoints.  The last endpoint will be used.
 			continue
 		}
+
 		glog.Infof("About to update endpoints for service %v", service.Name)
 		pods, err := e.client.Pods(service.Namespace).List(labels.Set(service.Spec.Selector).AsSelector())
 		if err != nil {

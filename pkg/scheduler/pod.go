@@ -1,0 +1,50 @@
+package scheduler
+
+import (
+	"time"
+
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
+)
+
+// wrapper for the k8s pod type so that we can define additional methods on a "pod"
+type Pod struct {
+	*api.Pod
+	deadline *time.Time
+	delay    *time.Duration
+	notify   queue.BreakChan
+}
+
+// implements Copyable
+func (p *Pod) Copy() queue.Copyable {
+	if p == nil {
+		return nil
+	}
+	//TODO(jdef) we may need a better "deep-copy" implementation
+	pod := *(p.Pod)
+	return &Pod{Pod: &pod}
+}
+
+// implements Unique
+func (p *Pod) GetUID() string {
+	return p.UID
+}
+
+// implements Deadlined
+func (dp *Pod) Deadline() (time.Time, bool) {
+	if dp.deadline != nil {
+		return *(dp.deadline), true
+	}
+	return time.Time{}, false
+}
+
+func (dp *Pod) GetDelay() time.Duration {
+	if dp.delay != nil {
+		return *(dp.delay)
+	}
+	return 0
+}
+
+func (p *Pod) Breaker() queue.BreakChan {
+	return p.notify
+}

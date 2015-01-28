@@ -2,11 +2,9 @@ package scheduler
 
 import (
 	"errors"
-	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
-	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 )
 
 // PodScheduleFunc implements how to schedule pods among slaves.
@@ -38,14 +36,6 @@ var (
 	noSuchPodErr        = errors.New("No such pod exists")
 	noSuchTaskErr       = errors.New("No such task exists")
 )
-
-// wrapper for the k8s pod type so that we can define additional methods on a "pod"
-type Pod struct {
-	*api.Pod
-	deadline *time.Time
-	delay    *time.Duration
-	notify   queue.BreakChan
-}
 
 // adapter for k8s pkg/scheduler/Scheduler interface
 type SchedulerFunc func(api.Pod, algorithm.MinionLister) (selectedMachine string, err error)
