@@ -10,7 +10,7 @@ import (
 	"time"
 
 	log "github.com/golang/glog"
-	"github.com/mesosphere/kubernetes-mesos/pkg/config"
+	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"golang.org/x/net/context"
 )
 

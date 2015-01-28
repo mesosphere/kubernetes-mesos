@@ -11,6 +11,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
+	"github.com/mesosphere/kubernetes-mesos/pkg/executor/messages"
 )
 
 const (
@@ -31,6 +32,15 @@ func newSlave(hostName string) *Slave {
 		HostName: hostName,
 		Offers:   make(map[string]empty),
 	}
+}
+
+type PluginInterface interface {
+	// the API may have a different state for the pod that we realize
+	// so reconcile our records, but only for this one pod
+	reconcilePod(api.Pod)
+
+	// execute the Scheduling plugin, should start a go routine and return immediately
+	Run()
 }
 
 // KubernetesScheduler implements:
@@ -69,6 +79,7 @@ type KubernetesScheduler struct {
 	scheduleFunc PodScheduleFunc
 
 	client *client.Client
+	plugin PluginInterface
 }
 
 // New create a new KubernetesScheduler
@@ -112,8 +123,9 @@ func (k *KubernetesScheduler) getTask(taskId string) (*PodTask, stateType) {
 	return nil, stateUnknown
 }
 
-func (k *KubernetesScheduler) Init(d mesos.SchedulerDriver) {
+func (k *KubernetesScheduler) Init(d mesos.SchedulerDriver, pl PluginInterface) {
 	k.driver = d
+	k.plugin = pl
 	k.offers.Init()
 }
 
@@ -220,7 +232,9 @@ func (k *KubernetesScheduler) StatusUpdate(driver mesos.SchedulerDriver, taskSta
 }
 
 func (k *KubernetesScheduler) handleTaskStaging(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Not implemented: task staging")
+	// we expect to receive this when a launched task is finally "bound"
+	// via the API server. however, there's nothing specific for us to do
+	// here.
 }
 
 func (k *KubernetesScheduler) handleTaskStarting(taskStatus *mesos.TaskStatus) {
@@ -306,7 +320,19 @@ func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 	switch task, state := k.getTask(taskId); state {
 	case statePending:
 		delete(k.pendingTasks, taskId)
-		fallthrough
+		delete(k.podToTask, task.podKey)
+
+		if task.launched && messages.CreateBindingFailure == taskStatus.GetMessage() {
+			if t, err := task.dup(); err == nil {
+				k.pendingTasks[taskId] = t
+				//TODO(jdef): need to invoke something like plugin.reconcile(t.Pod)
+				//because the scheduler may have already dropped the pod from the
+				//to-be-scheduled queue.
+				return
+			} else {
+				log.Error("failed to duplicate task, will not schedule: %v", err)
+			}
+		}
 	case stateRunning:
 		delete(k.runningTasks, taskId)
 		delete(k.podToTask, task.podKey)

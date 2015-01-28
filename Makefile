@@ -18,12 +18,15 @@ FRAMEWORK_CMD	:= \
                    github.com/mesosphere/kubernetes-mesos/cmd/k8sm-scheduler		\
                    github.com/mesosphere/kubernetes-mesos/cmd/k8sm-executor
 FRAMEWORK_LIB	:= \
-		   github.com/mesosphere/kubernetes-mesos/pkg/scheduler	\
-		   github.com/mesosphere/kubernetes-mesos/pkg/service	\
-		   github.com/mesosphere/kubernetes-mesos/pkg/executor	\
 		   github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos \
+		   github.com/mesosphere/kubernetes-mesos/pkg/executor	\
+		   github.com/mesosphere/kubernetes-mesos/pkg/executor/config	\
+		   github.com/mesosphere/kubernetes-mesos/pkg/executor/messages	\
 		   github.com/mesosphere/kubernetes-mesos/pkg/profile	\
-		   github.com/mesosphere/kubernetes-mesos/pkg/queue
+		   github.com/mesosphere/kubernetes-mesos/pkg/queue \
+		   github.com/mesosphere/kubernetes-mesos/pkg/scheduler	\
+		   github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta	\
+		   github.com/mesosphere/kubernetes-mesos/pkg/service
 
 KUBE_GIT_VERSION_FILE := $(current_dir)/.kube-version
 
