@@ -127,16 +127,13 @@ func main() {
 	etcd.SetLogger(util.NewLogger("etcd "))
 
 	// Make an API client if possible.
-	if len(apiServerList) < 1 {
-		log.Info("No api servers specified.")
+	apiClient, err := getApiserverClient()
+	if err != nil {
+		log.Errorf("Unable to make apiserver client: %v", err)
 	} else {
-		if apiClient, err := getApiserverClient(); err != nil {
-			log.Errorf("Unable to make apiserver client: %v", err)
-		} else {
-			// Send events to APIserver if there is a client.
-			log.Infof("Sending events to APIserver.")
-			record.StartRecording(apiClient.Events(""), "kubelet")
-		}
+		// Send events to APIserver if there is a client.
+		log.Infof("Sending events to APIserver.")
+		record.StartRecording(apiClient.Events(""), "kubelet")
 	}
 
 	// Log the events locally too.
@@ -247,7 +244,7 @@ func main() {
 	health.AddHealthChecker(&health.TCPHealthChecker{})
 
 	driver := new(mesos.MesosExecutorDriver)
-	kubeletExecutor := executor.New(driver, kl, cfg.Channel(MESOS_CFG_SOURCE), MESOS_CFG_SOURCE)
+	kubeletExecutor := executor.New(driver, kl, cfg.Channel(MESOS_CFG_SOURCE), MESOS_CFG_SOURCE, apiClient)
 	driver.Executor = kubeletExecutor
 
 	log.V(2).Infof("Initialize executor driver...")

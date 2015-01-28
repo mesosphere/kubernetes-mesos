@@ -20,6 +20,7 @@ import (
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
+	annotation "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 	"gopkg.in/v1/yaml"
 )
 
@@ -156,15 +157,12 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *PodTask) (err
 	}
 
 	if err = b.prepareTaskForLaunch(ctx, binding.Host, task); err == nil {
-		log.V(2).Infof("Attempting to bind %v to %v", binding.PodID, binding.Host)
-		if err = b.client.Post().Namespace(api.Namespace(ctx)).Path("bindings").Body(binding).Do().Error(); err == nil {
-			log.V(2).Infof("launching task : %v", task)
-			if err = b.api.launchTask(task); err == nil {
-				b.api.offers().Invalidate(offerId)
-				task.Pod.Status.Host = binding.Host
-				task.launched = true
-				return
-			}
+		log.V(2).Infof("launching task : %v", task)
+		if err = b.api.launchTask(task); err == nil {
+			b.api.offers().Invalidate(offerId)
+			task.Pod.Status.Host = binding.Host
+			task.launched = true
+			return
 		}
 	}
 	task.Offer.Release()
@@ -184,6 +182,10 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *Pod
 		return err
 	}
 
+	// as of release-0.8 the conversion from api.Pod to api.BoundPod preserves the following
+	// - Name (same as api.Binding.PodID)
+	// - Namespace
+	// - UID
 	boundPod := &api.BoundPod{}
 	if err := api.Scheme.Convert(pod, boundPod); err != nil {
 		return err
@@ -191,13 +193,16 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *Pod
 	for ix, container := range boundPod.Spec.Containers {
 		boundPod.Spec.Containers[ix].Env = append(container.Env, envVars...)
 	}
+
 	// Make a dummy self link so that references to this bound pod will work.
 	boundPod.SelfLink = "/api/v1beta1/boundPods/" + boundPod.Name
 
-	// update the boundPod here to pick up things like environment variables that
-	// pod containers will use for service discovery. the kubelet-executor uses this
-	// boundPod to instantiate the pods and this is the last update we make before
-	// firing up the pod.
+	if boundPod.Annotations == nil {
+		boundPod.Annotations = make(map[string]string)
+	}
+	boundPod.Annotations[annotation.BindingHostKey] = machine
+
+	// the kubelet-executor uses this boundPod to instantiate the pod
 	task.TaskInfo.Data, err = yaml.Marshal(&boundPod)
 	if err != nil {
 		log.V(2).Infof("Failed to marshal the updated boundPod")
@@ -555,12 +560,12 @@ func (k *deleter) deleteOne(pod *Pod) error {
 }
 
 // Create creates a scheduler plugin and all supporting background functions.
-func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
+func (k *KubernetesScheduler) NewPluginConfig(startLatch <-chan struct{}) *plugin.Config {
 
 	// Watch and queue pods that need scheduling.
 	updates := make(chan queue.Entry, defaultUpdatesBacklog)
 	podStore := &podStoreAdapter{queue.NewHistorical(updates)}
-	cache.NewReflector(createAllPodsLW(k.client), &api.Pod{}, podStore).Run()
+	reflector := cache.NewReflector(createAllPodsLW(k.client), &api.Pod{}, podStore)
 
 	// lock that guards critial sections that involve transferring pods from
 	// the store (cache) to the scheduling queue; its purpose is to maintain
@@ -571,9 +576,6 @@ func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
 		api: kapi,
 		qr:  q,
 	}
-	podDeleter.Run(updates)
-	q.Run()
-
 	eh := &errorHandler{
 		api: kapi,
 		backoff: &podBackoff{
@@ -582,6 +584,14 @@ func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
 		},
 		qr: q,
 	}
+	go func() {
+		select {
+		case <-startLatch:
+			reflector.Run()
+			podDeleter.Run(updates)
+			q.Run()
+		}
+	}()
 	return &plugin.Config{
 		MinionLister: nil,
 		Algorithm: &kubeScheduler{
@@ -595,6 +605,18 @@ func (k *KubernetesScheduler) NewPluginConfig() *plugin.Config {
 		NextPod: q.yield,
 		Error:   eh.handleSchedulingError,
 	}
+}
+
+func NewPlugin(c *plugin.Config) PluginInterface {
+	return &schedulingPlugin{plugin.New(c)}
+}
+
+type schedulingPlugin struct {
+	*plugin.Scheduler
+}
+
+func (s *schedulingPlugin) reconcilePod(api.Pod) {
+	//TODO(jdef) implement me
 }
 
 type listWatch struct {

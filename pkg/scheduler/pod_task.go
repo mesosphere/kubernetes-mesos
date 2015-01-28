@@ -164,6 +164,14 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 	return true
 }
 
+// create a duplicate task, one that refers to the same pod specification and
+// executor as the current task. all other state is reset to "factory settings"
+// (as if returned from newPodTask)
+func (t *PodTask) dup() (*PodTask, error) {
+	ctx := api.WithNamespace(api.NewDefaultContext(), t.Pod.Namespace)
+	return newPodTask(ctx, t.Pod, t.TaskInfo.Executor)
+}
+
 func newPodTask(ctx api.Context, pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
 	key, err := makePodKey(ctx, pod.Name)
 	if err != nil {
