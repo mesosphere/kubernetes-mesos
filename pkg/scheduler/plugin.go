@@ -334,6 +334,15 @@ func (q *queuer) requeue(pod *Pod) {
 	q.unscheduledCond.Broadcast()
 }
 
+// same as requeue but calls podQueue.Offer instead of podQueue.Add
+func (q *queuer) reoffer(pod *Pod) {
+	// use KeepExisting in case the pod has already been updated (can happen if binding fails
+	// due to constraint voilations); we don't want to overwrite a newer entry with stale data.
+	if q.podQueue.Offer(pod, queue.KeepExisting) {
+		q.unscheduledCond.Broadcast()
+	}
+}
+
 // spawns a go-routine to watch for unscheduled pods and queue them up
 // for scheduling. returns immediately.
 func (q *queuer) Run() {
@@ -610,25 +619,33 @@ func (k *KubernetesScheduler) NewPluginConfig(startLatch <-chan struct{}) *Plugi
 			NextPod: q.yield,
 			Error:   eh.handleSchedulingError,
 		},
+		api:    kapi,
 		client: k.client,
+		qr:     q,
 	}
 }
 
 type PluginConfig struct {
 	*plugin.Config
+	api    SchedulerInterface
 	client *client.Client
+	qr     *queuer
 }
 
 func NewPlugin(c *PluginConfig) PluginInterface {
 	return &schedulingPlugin{
 		Scheduler: plugin.New(c.Config),
+		api:       c.api,
 		client:    c.client,
+		qr:        c.qr,
 	}
 }
 
 type schedulingPlugin struct {
 	*plugin.Scheduler
+	api    SchedulerInterface
 	client *client.Client
+	qr     *queuer
 }
 
 // this pod may be out of sync with respect to the API server registry:
@@ -647,13 +664,46 @@ func (s *schedulingPlugin) reconcilePod(oldPod api.Pod) {
 		//other errors should probably trigger a retry (w/ backoff).
 
 		//For now, drop the pod on the floor
-		log.Warning(err)
+		log.Warning("aborting reconciliation for pod %v: %v", oldPod.Name, err)
 		return
 	}
 	if oldPod.Status.Host != pod.Status.Host {
-		//TODO(jdef) handle this case
+		if pod.Status.Host == "" {
+			// pod is unscheduled.
+			// it's possible that we dropped the pod in the scheduler error handler
+			// because of task misalignment with the pod (task.launched == true)
+
+			podKey, err := makePodKey(ctx, pod.Name)
+			if err != nil {
+				log.Error(err)
+				return
+			}
+
+			s.api.Lock()
+			defer s.api.Unlock()
+
+			if _, exists := s.api.taskForPod(podKey); exists {
+				//TODO(jdef) reconcile the task
+				log.Error("task already registered for pod %v", pod.Name)
+				return
+			}
+
+			now := time.Now()
+			s.qr.reoffer(&Pod{
+				Pod:      pod,
+				deadline: &now,
+			})
+		} else {
+			// pod is scheduled.
+			// not sure how this happened behind our backs. attempt to reconstruct
+			// at least a partial PodTask record.
+			//TODO(jdef) reconcile the task
+			log.Error("pod already scheduled: %v", pod.Name)
+		}
 	} else {
 		//TODO(jdef) for now, ignore the fact that the rest of the spec may be different
+		//and assume that our knowledge of the pod aligns with that of the apiserver
+		log.Error("pod reconciliation does not support updates; not yet implemented")
 	}
 }
 
