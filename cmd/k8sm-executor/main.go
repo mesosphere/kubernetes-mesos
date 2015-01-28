@@ -34,7 +34,7 @@ const (
 var (
 	syncFrequency           = flag.Duration("sync_frequency", 10*time.Second, "Max period between synchronizing running containers and config")
 	address                 = util.IP(net.ParseIP("0.0.0.0"))
-	port                    = flag.Uint("port", ports.KubeletPort, "The port for the info server to serve on") // TODO(jdef): use kmmaster.KubeletExecutorPort
+	port                    = flag.Uint("port", ports.KubeletPort, "The port for the info server to serve on")
 	hostnameOverride        = flag.String("hostname_override", "", "If non-empty, will use this string as identification instead of the actual hostname.")
 	networkContainerImage   = flag.String("network_container_image", kubelet.NetworkContainerImage, "The image that network containers in each pod will use.")
 	dockerEndpoint          = flag.String("docker_endpoint", "", "If non-empty, use this for the docker endpoint to communicate with")
@@ -75,6 +75,8 @@ func main() {
 		log.Info(err)
 	}
 
+	// TODO(nnielsen): use port from resource offer, instead of command line
+	// flag. (jdef) order of initialization becomes tricky once we go that way.
 	kcfg := standalone.KubeletConfig{
 		Address:                 address,
 		AuthPath:                *authPath,
@@ -90,7 +92,7 @@ func main() {
 		MaxContainerCount:       *maxContainerCount,
 		ClusterDomain:           *clusterDomain,
 		ClusterDNS:              clusterDNS,
-		Port:                    *port, // TODO(nnielsen): Don't hardwire port, but use port from resource offer.
+		Port:                    *port,
 		CAdvisorPort:            *cAdvisorPort,
 		EnableServer:            true,
 		EnableDebuggingHandlers: *enableDebuggingHandlers,
@@ -100,7 +102,7 @@ func main() {
 
 	driver := new(mesos.MesosExecutorDriver)
 
-	//HACK(jdef) largely hacked from the k8s standalone package, createAndInitKubelet
+	// @see kubernetes/pkg/standalone.go:createAndInitKubelet
 	initialized := make(chan struct{})
 	builder := standalone.KubeletBuilder(func(kc *standalone.KubeletConfig) (standalone.KubeletBootstrap, *kconfig.PodConfig) {
 		pc := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
