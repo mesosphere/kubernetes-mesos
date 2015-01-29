@@ -247,9 +247,9 @@ func (k *kubeScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (st
 	defer k.api.Unlock()
 
 	if taskID, ok := k.api.taskForPod(podKey); !ok {
-		// There's a bit of a potential race here, a pod could have been yielded() but
-		// and then before we get *here* it could be deleted. We use meta to index the pod
-		// in the store since that's what k8s client/cache/reflector does.
+		// There's a bit of a potential race here, a pod could have been yielded() and
+		// then before we get *here* it could be deleted.
+		// We use meta to index the pod in the store since that's what k8s reflector does.
 		meta, err := meta.Accessor(&pod)
 		if err != nil {
 			log.Warningf("aborting Schedule, unable to understand pod object %+v", &pod)
@@ -268,7 +268,14 @@ func (k *kubeScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (st
 
 		switch task, state := k.api.getTask(taskID); state {
 		case statePending:
-			if task.launched {
+			if pod.UID != task.Pod.UID {
+				// we're dealing with a brand new pod spec here, so the old one must have been
+				// deleted -- and so our task store is out of sync w/ respect to reality
+				//TODO(jdef) reconcile task
+				return "", fmt.Errorf("task %v spec is out of sync with pod %v spec, aborting schedule", taskID, pod.Name)
+			} else if task.launched {
+				// pod binding creation may have failed, but we're going to let someone else handle it,
+				// probably the mesos task error handler
 				return "", fmt.Errorf("task %s has already been launched, aborting schedule", taskID)
 			} else {
 				return k.doSchedule(task, nil)
