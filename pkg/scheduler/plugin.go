@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/meta"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
@@ -155,7 +156,7 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *PodTask) (err
 		return fmt.Errorf("failed prior to launchTask due to expired offer for task %v", task.ID)
 	}
 
-	if err = b.prepareTaskForLaunch(ctx, binding.Host, task); err == nil {
+	if err = b.prepareTaskForLaunch(ctx, binding.Host, task, offerId); err == nil {
 		log.V(2).Infof("launching task : %v", task)
 		if err = b.api.launchTask(task); err == nil {
 			b.api.offers().Invalidate(offerId)
@@ -169,7 +170,7 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *PodTask) (err
 	return fmt.Errorf("Failed to launch task %v: %v", task.ID, err)
 }
 
-func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *PodTask) error {
+func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *PodTask, offerId string) error {
 	pod, err := b.client.Pods(api.Namespace(ctx)).Get(task.Pod.Name)
 	if err != nil {
 		return err
@@ -201,6 +202,9 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *Pod
 	}
 	boundPod.Annotations[annotation.BindingHostKey] = machine
 	boundPod.Annotations[annotation.TaskIdKey] = task.ID
+	boundPod.Annotations[annotation.SlaveIdKey] = task.TaskInfo.SlaveId.GetValue()
+	boundPod.Annotations[annotation.OfferIdKey] = offerId
+	//TODO(jdef): include TaskInfo.Resources in annotations?
 
 	// the kubelet-executor uses this boundPod to instantiate the pod
 	task.TaskInfo.Data, err = yaml.Marshal(&boundPod)
@@ -567,7 +571,7 @@ func (k *deleter) deleteOne(pod *Pod) error {
 		task.Pod.Status.Host = ""
 		return k.api.killTask(taskId)
 	default:
-		log.Warningf("cannot kill pod '%s': task not found %v", podKey, taskId)
+		log.Infof("cannot kill pod '%s': task not found %v", podKey, taskId)
 		return noSuchTaskErr
 	}
 }
@@ -619,17 +623,19 @@ func (k *KubernetesScheduler) NewPluginConfig(startLatch <-chan struct{}) *Plugi
 			NextPod: q.yield,
 			Error:   eh.handleSchedulingError,
 		},
-		api:    kapi,
-		client: k.client,
-		qr:     q,
+		api:     kapi,
+		client:  k.client,
+		qr:      q,
+		deleter: podDeleter,
 	}
 }
 
 type PluginConfig struct {
 	*plugin.Config
-	api    SchedulerInterface
-	client *client.Client
-	qr     *queuer
+	api     SchedulerInterface
+	client  *client.Client
+	qr      *queuer
+	deleter *deleter
 }
 
 func NewPlugin(c *PluginConfig) PluginInterface {
@@ -638,14 +644,16 @@ func NewPlugin(c *PluginConfig) PluginInterface {
 		api:       c.api,
 		client:    c.client,
 		qr:        c.qr,
+		deleter:   c.deleter,
 	}
 }
 
 type schedulingPlugin struct {
 	*plugin.Scheduler
-	api    SchedulerInterface
-	client *client.Client
-	qr     *queuer
+	api     SchedulerInterface
+	client  *client.Client
+	qr      *queuer
+	deleter *deleter
 }
 
 // this pod may be out of sync with respect to the API server registry:
@@ -657,12 +665,19 @@ type schedulingPlugin struct {
 //      host="..." |  host="..."    ; perhaps no updates to process?
 //
 func (s *schedulingPlugin) reconcilePod(oldPod api.Pod) {
+	log.V(1).Infof("reconcile pod %v", oldPod.Name)
 	ctx := api.WithNamespace(api.NewDefaultContext(), oldPod.Namespace)
 	pod, err := s.client.Pods(api.Namespace(ctx)).Get(oldPod.Name)
 	if err != nil {
-		//TODO(jdef) handle 404's differently than other errors,
-		//other errors should probably trigger a retry (w/ backoff).
+		if errors.IsNotFound(err) {
+			// attempt to delete
+			if err = s.deleter.deleteOne(&Pod{Pod: &oldPod}); err != nil && err != noSuchPodErr && err != noSuchTaskErr {
+				log.Errorf("failed to delete pod: %v: %v", oldPod.Name, err)
+			}
+			return
+		}
 
+		//TODO(jdef) other errors should probably trigger a retry (w/ backoff).
 		//For now, drop the pod on the floor
 		log.Warning("aborting reconciliation for pod %v: %v", oldPod.Name, err)
 		return

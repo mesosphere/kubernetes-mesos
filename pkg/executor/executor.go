@@ -115,9 +115,17 @@ func (k *KubernetesExecutor) launchTask(driver mesos.ExecutorDriver, taskInfo *m
 
 	//HACK(jdef): cloned binding construction from k8s plugin/pkg/scheduler/scheduler.go
 	binding := &api.Binding{
-		ObjectMeta: api.ObjectMeta{Namespace: pod.Namespace},
-		PodID:      pod.Name,
-		Host:       pod.Annotations[meta.BindingHostKey],
+		ObjectMeta: api.ObjectMeta{
+			Namespace:   pod.Namespace,
+			Annotations: make(map[string]string),
+		},
+		PodID: pod.Name,
+		Host:  pod.Annotations[meta.BindingHostKey],
+	}
+	//TODO(jdef) this next part is useless until k8s implements annotation propagation
+	//from api.Binding to api.BoundPod in etcd.go:assignPod()
+	for k, v := range pod.Annotations {
+		binding.Annotations[k] = v
 	}
 	log.Infof("Binding '%v' to '%v' ...", binding.PodID, binding.Host)
 	ctx := api.WithNamespace(api.NewDefaultContext(), binding.Namespace)

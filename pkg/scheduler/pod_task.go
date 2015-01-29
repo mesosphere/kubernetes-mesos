@@ -117,7 +117,7 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 				ep := r.GetEnd()
 
 				for port, _ := range requiredPorts {
-					log.V(2).Infof("Evaluating port range {%d:%d} %d", bp, ep, port)
+					log.V(3).Infof("Evaluating port range {%d:%d} %d", bp, ep, port)
 
 					if (bp <= port) && (port <= ep) {
 						delete(requiredPorts, port)
@@ -129,12 +129,12 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 
 	unsatisfiedPorts := len(requiredPorts)
 	if unsatisfiedPorts > 0 {
-		log.V(2).Infof("Could not schedule pod %s: %d ports could not be allocated", t.Pod.Name, unsatisfiedPorts)
+		log.V(3).Infof("Could not schedule pod %s: %d ports could not be allocated", t.Pod.Name, unsatisfiedPorts)
 		return false
 	}
 
 	if (cpus < containerCpus) || (mem < containerMem) {
-		log.V(2).Infof("Not enough resources: cpus: %f mem: %f", cpus, mem)
+		log.V(3).Infof("Not enough resources: cpus: %f mem: %f", cpus, mem)
 		return false
 	}
 
