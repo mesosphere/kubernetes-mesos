@@ -7,8 +7,8 @@ When [Google Kubernetes][2] meets [Apache Mesos][3]
 [![GoDoc] (https://godoc.org/github.com/mesosphere/kubernetes-mesos?status.png)](https://godoc.org/github.com/mesosphere/kubernetes-mesos)
 
 Kubernetes and Mesos are a match made in heaven.
-Kubernetes enables the Pod (group of co-located containers) abstraction, along with Pod labels for service discovery, load-balancing, and replication control.
-Mesos provides the fine-grained resource allocations for pods across nodes in a cluster, and can make Kubernetes play nicely with other frameworks running on the same cluster resources.
+Kubernetes enables the Pod, an abstraction that represents a group of co-located containers, along with Labels for service discovery, load-balancing, and replication control.
+Mesos provides the fine-grained resource allocations for pods across nodes in a cluster, and facilitates resource sharing among Kubernetes and other frameworks running on the same cluster.
 
 This is still very much a work-in-progress, but stay tuned for updates as we continue development.
 If you have ideas or patches, feel free to contribute!
