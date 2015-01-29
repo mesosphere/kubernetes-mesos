@@ -681,12 +681,11 @@ func (s *schedulingPlugin) reconcilePod(oldPod api.Pod) {
 			if err = s.deleter.deleteOne(&Pod{Pod: &oldPod}); err != nil && err != noSuchPodErr && err != noSuchTaskErr {
 				log.Errorf("failed to delete pod: %v: %v", oldPod.Name, err)
 			}
-			return
+		} else {
+			//TODO(jdef) other errors should probably trigger a retry (w/ backoff).
+			//For now, drop the pod on the floor
+			log.Warning("aborting reconciliation for pod %v: %v", oldPod.Name, err)
 		}
-
-		//TODO(jdef) other errors should probably trigger a retry (w/ backoff).
-		//For now, drop the pod on the floor
-		log.Warning("aborting reconciliation for pod %v: %v", oldPod.Name, err)
 		return
 	}
 	if oldPod.Status.Host != pod.Status.Host {
