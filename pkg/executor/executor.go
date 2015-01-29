@@ -129,7 +129,7 @@ func (k *KubernetesExecutor) launchTask(driver mesos.ExecutorDriver, taskInfo *m
 	}
 
 	k.sendStatusUpdate(taskInfo.GetTaskId(),
-		mesos.TaskState_TASK_STAGING, messages.CreateBindingSuccess)
+		mesos.TaskState_TASK_STARTING, messages.CreateBindingSuccess)
 
 	podFullName := kubelet.GetPodFullName(&api.BoundPod{
 		ObjectMeta: api.ObjectMeta{

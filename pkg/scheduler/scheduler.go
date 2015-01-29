@@ -232,13 +232,13 @@ func (k *KubernetesScheduler) StatusUpdate(driver mesos.SchedulerDriver, taskSta
 }
 
 func (k *KubernetesScheduler) handleTaskStaging(taskStatus *mesos.TaskStatus) {
-	// we expect to receive this when a launched task is finally "bound"
-	// via the API server. however, there's nothing specific for us to do
-	// here.
+	log.Errorf("Not implemented: task starting")
 }
 
 func (k *KubernetesScheduler) handleTaskStarting(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Not implemented: task starting")
+	// we expect to receive this when a launched task is finally "bound"
+	// via the API server. however, there's nothing specific for us to do
+	// here.
 }
 
 func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
