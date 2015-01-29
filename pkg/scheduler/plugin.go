@@ -26,9 +26,9 @@ import (
 
 const (
 	enqueuePopTimeout  = 200 * time.Millisecond
-	enqueueWaitTimeout = 3 * time.Second
+	enqueueWaitTimeout = 1 * time.Second
 	yieldPopTimeout    = 200 * time.Millisecond
-	yieldWaitTimeout   = 3 * time.Second
+	yieldWaitTimeout   = 1 * time.Second
 )
 
 // scheduler abstraction to allow for easier unit testing
