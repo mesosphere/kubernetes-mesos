@@ -75,12 +75,12 @@ index 3d0cff7..629a925 100644
  	C.scheduler_destroy(sdriver.driver, sdriver.scheduler)
  }
 diff --git a/mesos/scheduler_driver.cpp b/mesos/scheduler_driver.cpp
-index ab08b50..88ce4f0 100644
+index ab08b50..01c389d 100644
 --- a/mesos/scheduler_driver.cpp
 +++ b/mesos/scheduler_driver.cpp
-@@ -241,6 +241,26 @@ SchedulerDriverStatus scheduler_launchTasks(
+@@ -240,6 +240,24 @@ SchedulerDriverStatus scheduler_launchTasks(
+   return mdriver->launchTasks(offer, taskInfos, filters_);
  }
- 
  
 +SchedulerDriverStatus scheduler_reconcileTasks(
 +    SchedulerDriverPtr driver,
@@ -100,8 +100,6 @@ index ab08b50..88ce4f0 100644
 +
 +  return mdriver->reconcileTasks(taskStatuses);
 +}
-+
-+
+ 
  SchedulerDriverStatus scheduler_killTask(
      SchedulerDriverPtr driver,
-     ProtobufObj* taskIdMessage)
