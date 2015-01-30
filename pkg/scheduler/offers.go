@@ -16,6 +16,7 @@ const (
 	offerListenerMaxAge      = 30                     // max number of times we'll attempt to fit an offer to a listener before requiring them to re-register themselves
 	offerIdCacheTTL          = 500 * time.Millisecond // determines expiration of cached offer ids, used in listener notification
 	deferredDeclineTtlFactor = 2                      // this factor, multiplied by the offer ttl, determines how long to wait before attempting to decline previously claimed offers that were subsequently deleted, then released. see offerStorage.Delete
+	notifyListenersDelay     = 10 * time.Millisecond  // delay between offer listener notification attempts
 )
 
 type OfferFilter func(*mesos.Offer) bool
@@ -361,26 +362,41 @@ func (s *offerStorage) notifyListeners(ids func() util.StringSet) {
 	if listener.age < offerListenerMaxAge {
 		listener.deadline = time.Now().Add(s.listenerDelay)
 		s.listeners.Offer(listener, queue.KeepExisting)
-	} // else, you're gc'd
+	} else {
+		// garbage collection is as simple as not re-adding the listener to the queue
+		//TODO(jdef) record metric/event?
+		log.V(3).Infof("garbage collecting offer listener %s", listener.id)
+	}
 }
 
 func (s *offerStorage) Init() {
+	// zero delay, reap offers as soon as they expire
 	go util.Forever(s.ageOffers, 0)
 
 	// cached offer ids for the purposes of listener notification
-	idsExpireAt := time.Now()
-	cachedIds := util.StringSet(nil)
-	ids := func() util.StringSet {
-		now := time.Now()
-		if idsExpireAt.Before(now) {
-			// update cached copy and expiration
-			cachedIds = s.offers.ContainedIDs()
-			idsExpireAt = now.Add(offerIdCacheTTL)
-		}
-		return cachedIds
+	idCache := &stringsCache{
+		refill: s.offers.ContainedIDs,
+		ttl:    offerIdCacheTTL,
 	}
 
 	// when the listeners queue grows large, this gives a little breathing room to
 	// the offers structure
-	go util.Forever(func() { s.notifyListeners(ids) }, 10*time.Millisecond)
+	go util.Forever(func() { s.notifyListeners(idCache.Strings) }, notifyListenersDelay)
+}
+
+type stringsCache struct {
+	expiresAt time.Time
+	cached    util.StringSet
+	ttl       time.Duration
+	refill    func() util.StringSet
+}
+
+// not thread-safe
+func (c *stringsCache) Strings() util.StringSet {
+	now := time.Now()
+	if c.expiresAt.Before(now) {
+		c.cached = c.refill()
+		c.expiresAt = now.Add(c.ttl)
+	}
+	return c.cached
 }
