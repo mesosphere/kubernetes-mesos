@@ -239,6 +239,16 @@ func (k *KubernetesScheduler) handleTaskStarting(taskStatus *mesos.TaskStatus) {
 	// we expect to receive this when a launched task is finally "bound"
 	// via the API server. however, there's nothing specific for us to do
 	// here.
+
+	taskId := taskStatus.GetTaskId().GetValue()
+	switch task, state := k.getTask(taskId); state {
+	case statePending:
+		//TODO(jdef) properly emit metric, or event type instead of just logging
+		task.bindTime = time.Now()
+		log.V(1).Infof("metric time_to_bind %v task %v pod %v", task.bindTime.Sub(task.launchTime), task.ID, task.Pod.Name)
+	default:
+		log.Warningf("Ignore status TASK_STARTING because the the task is not pending")
+	}
 }
 
 func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {

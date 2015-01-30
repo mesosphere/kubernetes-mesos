@@ -159,6 +159,11 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *PodTask) (err
 	if err = b.prepareTaskForLaunch(ctx, binding.Host, task, offerId); err == nil {
 		log.V(2).Infof("launching task : %v", task)
 		if err = b.api.launchTask(task); err == nil {
+			defer func() {
+				//TODO(jdef) properly emit metric, or event type instead of just logging
+				task.launchTime = time.Now()
+				log.V(1).Infof("metric time_to_launch %v task %v pod %v", task.launchTime.Sub(task.createTime), task.ID, task.Pod.Name)
+			}()
 			b.api.offers().Invalidate(offerId)
 			task.Pod.Status.Host = binding.Host
 			task.launched = true
@@ -487,21 +492,23 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 			log.V(2).Infof("Skipping re-scheduling for already-launched pod %v", podKey)
 			return
 		}
-		offersAvailable := queue.BreakChan(nil)
+		breakoutEarly := queue.BreakChan(nil)
 		if schedulingErr == noSuitableOffersErr {
 			log.V(3).Infof("adding backoff breakout handler for pod %v", podKey)
-			offersAvailable = queue.BreakChan(k.api.offers().Listen(podKey, func(offer *mesos.Offer) bool {
+			breakoutEarly = queue.BreakChan(k.api.offers().Listen(podKey, func(offer *mesos.Offer) bool {
 				k.api.RLocker().Lock()
 				defer k.api.RLocker().Unlock()
 				switch task, state := k.api.getTask(taskId); state {
 				case statePending:
 					return !task.launched && task.AcceptOffer(offer)
+				default:
+					// no point in continuing to check for matching offers
+					return true
 				}
-				return false
 			}))
 		}
 		delay := k.backoff.getBackoff(podKey)
-		k.qr.requeue(&Pod{Pod: pod, delay: &delay, notify: offersAvailable})
+		k.qr.requeue(&Pod{Pod: pod, delay: &delay, notify: breakoutEarly})
 	default:
 		log.V(2).Infof("Task is no longer pending, aborting reschedule for pod %v", podKey)
 	}
@@ -671,6 +678,7 @@ type schedulingPlugin struct {
 //      host="..." |  host=""       ; pod is no longer scheduled, does it need to be re-queued?
 //      host="..." |  host="..."    ; perhaps no updates to process?
 //
+// TODO(jdef) this needs an integration test
 func (s *schedulingPlugin) reconcilePod(oldPod api.Pod) {
 	log.V(1).Infof("reconcile pod %v", oldPod.Name)
 	ctx := api.WithNamespace(api.NewDefaultContext(), oldPod.Namespace)
