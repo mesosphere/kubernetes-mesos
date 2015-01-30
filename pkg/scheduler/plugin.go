@@ -187,7 +187,7 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *Pod
 		return err
 	}
 
-	// as of release-0.8 the conversion from api.Pod to api.BoundPod preserves the following
+	// as of k8s release-0.8 the conversion from api.Pod to api.BoundPod preserves the following
 	// - Name (same as api.Binding.PodID)
 	// - Namespace
 	// - UID

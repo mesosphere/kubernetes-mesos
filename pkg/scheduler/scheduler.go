@@ -35,7 +35,7 @@ func newSlave(hostName string) *Slave {
 }
 
 type PluginInterface interface {
-	// the API may have a different state for the pod that we realize
+	// the apiserver may have a different state for the pod than we do
 	// so reconcile our records, but only for this one pod
 	reconcilePod(api.Pod)
 
@@ -232,7 +232,7 @@ func (k *KubernetesScheduler) StatusUpdate(driver mesos.SchedulerDriver, taskSta
 }
 
 func (k *KubernetesScheduler) handleTaskStaging(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Not implemented: task starting")
+	log.Errorf("Not implemented: task staging")
 }
 
 func (k *KubernetesScheduler) handleTaskStarting(taskStatus *mesos.TaskStatus) {

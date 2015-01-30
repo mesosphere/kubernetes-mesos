@@ -307,7 +307,6 @@ func (s *offerStorage) Listen(id string, f OfferFilter) <-chan struct{} {
 		id:       id,
 		accepts:  f,
 		notify:   ch,
-		age:      0,
 		deadline: time.Now().Add(s.listenerDelay),
 	}
 	log.V(3).Infof("Registering offer listener %s", listen.id)
