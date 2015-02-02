@@ -673,6 +673,8 @@ type schedulingPlugin struct {
 // this pod may be out of sync with respect to the API server registry:
 //      this pod   |  apiserver registry
 //    -------------|----------------------
+//      host=.*    |  404           ; pod was deleted
+//      host=.*    |  5xx           ; failed to sync, try again later?
 //      host=""    |  host=""       ; perhaps no updates to process?
 //      host=""    |  host="..."    ; pod has been scheduled and assigned, is there a task assigned? (check TaskIdKey in binding?)
 //      host="..." |  host=""       ; pod is no longer scheduled, does it need to be re-queued?
