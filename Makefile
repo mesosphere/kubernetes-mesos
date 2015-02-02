@@ -56,6 +56,8 @@ WITH_MESOS_CGO_FLAGS :=  \
 	  CGO_CXXFLAGS="$(CGO_CXXFLAGS)" \
 	  CGO_LDFLAGS="$(CGO_LDFLAGS)"
 
+WITH_MESOS_LD_FLAGS := LD_LIBRARY_PATH=$(WITH_MESOS_DIR)/lib
+
 endif
 
 FRAMEWORK_FLAGS := -v -x -tags '$(TAGS)'
@@ -95,7 +97,8 @@ format: require-gopath
 	go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
 
 test test.v: require-gopath
-	test "$@" = "test.v" && args="-test.v" || args=""; go test $$args $(FRAMEWORK_LIB)
+	test "$@" = "test.v" && args="-test.v" || args=""; \
+		env $(WITH_MESOS_CGO_FLAGS) $(WITH_MESOS_LD_FLAGS) go test $$args $(FRAMEWORK_LIB)
 
 install: all
 	mkdir -p $(DESTDIR)

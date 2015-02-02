@@ -211,6 +211,18 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *Pod
 	boundPod.Annotations[annotation.OfferIdKey] = offerId
 	//TODO(jdef): include TaskInfo.Resources in annotations?
 
+	//TODO(jdef) using anything other than the default k8s host-port mapping may
+	//confuse k8s pod rectification loops. in the future this point may become
+	//moot if the kubelet sync's directly against the apiserver /pods state (and
+	//eliminates bound pods all together) - since our version of the kubelet does
+	//not use the apiserver or etcd channels, we will be in control of all
+	//rectification. And BTW we probably want to store this information, somehow,
+	//in the binding annotations.
+	for _, entry := range task.ports {
+		port := &(boundPod.Spec.Containers[entry.cindex].Ports[entry.pindex])
+		port.HostPort = int(entry.offerPort)
+	}
+
 	// the kubelet-executor uses this boundPod to instantiate the pod
 	task.TaskInfo.Data, err = yaml.Marshal(&boundPod)
 	if err != nil {

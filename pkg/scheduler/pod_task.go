@@ -27,6 +27,8 @@ type PodTask struct {
 	createTime time.Time
 	launchTime time.Time
 	bindTime   time.Time
+	mapper     hostPortMappingFunc
+	ports      []hostPortMapping
 }
 
 func (t *PodTask) hasAcceptedOffer() bool {
@@ -62,8 +64,18 @@ func (t *PodTask) FillTaskInfo(offer PerishableOffer) error {
 		mesos.ScalarResource("cpus", containerCpus),
 		mesos.ScalarResource("mem", containerMem),
 	}
-	if ports := rangeResource("ports", t.Ports()); ports != nil {
-		t.TaskInfo.Resources = append(t.TaskInfo.Resources, ports)
+	if mapping, err := t.mapper(t, details); err != nil {
+		t.ClearTaskInfo()
+		return err
+	} else {
+		ports := []uint64{}
+		for _, entry := range mapping {
+			ports = append(ports, entry.offerPort)
+		}
+		t.ports = mapping
+		if portsResource := rangeResource("ports", ports); portsResource != nil {
+			t.TaskInfo.Resources = append(t.TaskInfo.Resources, portsResource)
+		}
 	}
 	return nil
 }
@@ -77,35 +89,17 @@ func (t *PodTask) ClearTaskInfo() {
 	t.TaskInfo.SlaveId = nil
 	t.TaskInfo.Resources = nil
 	t.TaskInfo.Data = nil
-}
-
-func (t *PodTask) Ports() []uint64 {
-	ports := make([]uint64, 0)
-	for _, container := range t.Pod.Spec.Containers {
-		// strip all port==0 from this array; k8s already knows what to do with zero-
-		// ports (it does not create 'port bindings' on the minion-host); we need to
-		// remove the wildcards from this array since they don't consume host resources
-		for _, port := range container.Ports {
-			// HostPort is int, not uint64.
-			if port.HostPort != 0 {
-				ports = append(ports, uint64(port.HostPort))
-			}
-		}
-	}
-
-	return ports
+	t.ports = nil
 }
 
 func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
-	var cpus float64 = 0
-	var mem float64 = 0
-
-	// Mimic set type
-	requiredPorts := make(map[uint64]struct{})
-	for _, port := range t.Ports() {
-		requiredPorts[port] = struct{}{}
+	if offer == nil {
+		return false
 	}
-
+	var (
+		cpus float64 = 0
+		mem  float64 = 0
+	)
 	for _, resource := range offer.Resources {
 		if resource.GetName() == "cpus" {
 			cpus = *resource.GetScalar().Value
@@ -114,34 +108,15 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 		if resource.GetName() == "mem" {
 			mem = *resource.GetScalar().Value
 		}
-
-		if resource.GetName() == "ports" {
-			for _, r := range (*resource).GetRanges().Range {
-				bp := r.GetBegin()
-				ep := r.GetEnd()
-
-				for port, _ := range requiredPorts {
-					log.V(3).Infof("Evaluating port range {%d:%d} %d", bp, ep, port)
-
-					if (bp <= port) && (port <= ep) {
-						delete(requiredPorts, port)
-					}
-				}
-			}
-		}
 	}
-
-	unsatisfiedPorts := len(requiredPorts)
-	if unsatisfiedPorts > 0 {
-		log.V(3).Infof("found %d unsatisfied ports for pod %s", unsatisfiedPorts, t.Pod.Name)
+	if _, err := t.mapper(t, offer); err != nil {
+		log.V(3).Info(err)
 		return false
 	}
-
 	if (cpus < containerCpus) || (mem < containerMem) {
 		log.V(3).Infof("not enough resources: cpus: %f mem: %f", cpus, mem)
 		return false
 	}
-
 	return true
 }
 
@@ -154,6 +129,12 @@ func (t *PodTask) dup() (*PodTask, error) {
 }
 
 func newPodTask(ctx api.Context, pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
+	if pod == nil {
+		return nil, fmt.Errorf("illegal argument: pod was nil")
+	}
+	if executor == nil {
+		return nil, fmt.Errorf("illegal argument: executor was nil")
+	}
 	key, err := makePodKey(ctx, pod.Name)
 	if err != nil {
 		return nil, err
@@ -164,8 +145,92 @@ func newPodTask(ctx api.Context, pod *api.Pod, executor *mesos.ExecutorInfo) (*P
 		Pod:      pod,
 		TaskInfo: newTaskInfo("PodTask"),
 		podKey:   key,
+		mapper:   defaultHostPortMapping,
 	}
 	task.TaskInfo.Executor = executor
 	task.createTime = time.Now()
 	return task, nil
+}
+
+type hostPortMapping struct {
+	cindex    int // containerIndex
+	pindex    int // portIndex
+	offerPort uint64
+}
+
+// abstracts the way that host ports are mapped to pod container ports
+type hostPortMappingFunc func(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error)
+
+type PortAllocationError struct {
+	PodId string
+	Ports []uint64
+}
+
+func (err *PortAllocationError) Error() string {
+	return fmt.Sprintf("Could not schedule pod %s: %d port(s) could not be allocated", err.PodId, len(err.Ports))
+}
+
+type DuplicateHostPortError struct {
+	m1, m2 hostPortMapping
+}
+
+func (err *DuplicateHostPortError) Error() string {
+	return fmt.Sprintf(
+		"Host port %d is specified for container %d, pod %d and container %d, pod %d",
+		err.m1.offerPort, err.m1.cindex, err.m1.pindex, err.m2.cindex, err.m2.pindex)
+}
+
+// default k8s host port mapping implementation: hostPort == 0 means containerPort remains pod-private
+func defaultHostPortMapping(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error) {
+	requiredPorts := make(map[uint64]hostPortMapping)
+	mapping := []hostPortMapping{}
+	if t.Pod == nil {
+		// programming error
+		panic("task.Pod is nil")
+	}
+	for i, container := range t.Pod.Spec.Containers {
+		// strip all port==0 from this array; k8s already knows what to do with zero-
+		// ports (it does not create 'port bindings' on the minion-host); we need to
+		// remove the wildcards from this array since they don't consume host resources
+		for pi, port := range container.Ports {
+			if port.HostPort == 0 {
+				continue // ignore
+			}
+			m := hostPortMapping{
+				cindex:    i,
+				pindex:    pi,
+				offerPort: uint64(port.HostPort),
+			}
+			if entry, inuse := requiredPorts[uint64(port.HostPort)]; inuse {
+				return nil, &DuplicateHostPortError{entry, m}
+			}
+			requiredPorts[uint64(port.HostPort)] = m
+		}
+	}
+	for _, resource := range offer.Resources {
+		if resource.GetName() == "ports" {
+			for _, r := range (*resource).GetRanges().Range {
+				bp := r.GetBegin()
+				ep := r.GetEnd()
+				for port, _ := range requiredPorts {
+					log.V(3).Infof("evaluating port range {%d:%d} %d", bp, ep, port)
+					if (bp <= port) && (port <= ep) {
+						mapping = append(mapping, requiredPorts[port])
+						delete(requiredPorts, port)
+					}
+				}
+			}
+		}
+	}
+	unsatisfiedPorts := len(requiredPorts)
+	if unsatisfiedPorts > 0 {
+		err := &PortAllocationError{
+			PodId: t.Pod.Name,
+		}
+		for p, _ := range requiredPorts {
+			err.Ports = append(err.Ports, p)
+		}
+		return nil, err
+	}
+	return mapping, nil
 }
