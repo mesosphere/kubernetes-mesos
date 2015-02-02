@@ -13,5 +13,5 @@ echo "starting resizing loop for frontendController"
 while true; do
     x=$((RANDOM % 20))
     "$KUBECFG" resize frontendController $(( x + 1 )) > /dev/null
-    sleep $(( (RANDOM % 30) + 30 ))
+    sleep $(( (RANDOM % 15) + 15 ))
 done

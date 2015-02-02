@@ -129,7 +129,13 @@ func main() {
 			driver:      driver,
 			initialized: initialized,
 		}
-		driver.Executor = executor.New(driver, k.Kubelet, updates, MESOS_CFG_SOURCE)
+		//TODO(jdef) would be nice to share the same api client instance as the kubelet event recorder
+		apiClient, err := kubelet.GetApiserverClient(kc.AuthPath, kc.ApiServerList)
+		if err != nil {
+			log.Fatal("Failed to configure API server client: %v", err)
+		}
+
+		driver.Executor = executor.New(driver, k.Kubelet, updates, MESOS_CFG_SOURCE, apiClient)
 
 		log.V(2).Infof("Initialize executor driver...")
 		driver.Init()

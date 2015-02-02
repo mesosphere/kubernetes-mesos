@@ -7,23 +7,21 @@ current_dir	:= $(patsubst %/,%,$(dir $(mkfile_path)))
 fail		:= ${MAKE} --no-print-directory --quiet -f $(current_dir)/Makefile error
 
 KUBE_GO_PACKAGE	?= github.com/GoogleCloudPlatform/kubernetes
+K8SM_GO_PACKAGE	?= github.com/mesosphere/kubernetes-mesos
 
 K8S_CMD		:= \
                    ${KUBE_GO_PACKAGE}/cmd/kubecfg		\
                    ${KUBE_GO_PACKAGE}/cmd/kubectl		\
                    ${KUBE_GO_PACKAGE}/cmd/kube-apiserver	\
                    ${KUBE_GO_PACKAGE}/cmd/kube-proxy
-FRAMEWORK_CMD	:= \
-                   github.com/mesosphere/kubernetes-mesos/cmd/k8sm-controller-manager	\
-                   github.com/mesosphere/kubernetes-mesos/cmd/k8sm-scheduler		\
-                   github.com/mesosphere/kubernetes-mesos/cmd/k8sm-executor
-FRAMEWORK_LIB	:= \
-		   github.com/mesosphere/kubernetes-mesos/pkg/scheduler	\
-		   github.com/mesosphere/kubernetes-mesos/pkg/service	\
-		   github.com/mesosphere/kubernetes-mesos/pkg/executor	\
-		   github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos \
-		   github.com/mesosphere/kubernetes-mesos/pkg/profile	\
-		   github.com/mesosphere/kubernetes-mesos/pkg/queue
+
+CMD_DIRS := $(shell cd $(current_dir) && find . -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|uniq|cut -f1 -d/ --complement|grep ^cmd/)
+
+FRAMEWORK_CMD	:= ${CMD_DIRS:%=${K8SM_GO_PACKAGE}/%}
+
+LIB_DIRS := $(shell cd $(current_dir) && find . -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|uniq|cut -f1 -d/ --complement|grep -v ^cmd/)
+
+FRAMEWORK_LIB	:= ${LIB_DIRS:%=${K8SM_GO_PACKAGE}/%}
 
 KUBE_GIT_VERSION_FILE := $(current_dir)/.kube-version
 
@@ -112,6 +110,10 @@ info:
 	@echo CGO_LDFLAGS="$(CGO_LDFLAGS)"
 	@echo RACE_FLAGS=$${WITH_RACE:+-race}
 	@echo TAGS=$(TAGS)
+	@echo LIB_DIRS=$(LIB_DIRS)
+	@echo FRAMEWORK_LIB=$(FRAMEWORK_LIB)
+	@echo CMD_DIRS=$(CMD_DIRS)
+	@echo FRAMEWORK_CMD=$(FRAMEWORK_CMD)
 
 bootstrap: require-godep
 	godep restore

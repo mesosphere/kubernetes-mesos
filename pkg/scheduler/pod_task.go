@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"fmt"
+	"time"
 
 	"code.google.com/p/go-uuid/uuid"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
@@ -16,13 +17,16 @@ const (
 
 // A struct that describes a pod task.
 type PodTask struct {
-	ID       string
-	Pod      *api.Pod
-	TaskInfo *mesos.TaskInfo
-	Offer    PerishableOffer
-	launched bool
-	deleted  bool
-	podKey   string
+	ID         string
+	Pod        *api.Pod
+	TaskInfo   *mesos.TaskInfo
+	Offer      PerishableOffer
+	launched   bool
+	deleted    bool
+	podKey     string
+	createTime time.Time
+	launchTime time.Time
+	bindTime   time.Time
 }
 
 func (t *PodTask) hasAcceptedOffer() bool {
@@ -117,7 +121,7 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 				ep := r.GetEnd()
 
 				for port, _ := range requiredPorts {
-					log.V(2).Infof("Evaluating port range {%d:%d} %d", bp, ep, port)
+					log.V(3).Infof("Evaluating port range {%d:%d} %d", bp, ep, port)
 
 					if (bp <= port) && (port <= ep) {
 						delete(requiredPorts, port)
@@ -129,16 +133,24 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 
 	unsatisfiedPorts := len(requiredPorts)
 	if unsatisfiedPorts > 0 {
-		log.V(2).Infof("Could not schedule pod %s: %d ports could not be allocated", t.Pod.Name, unsatisfiedPorts)
+		log.V(3).Infof("found %d unsatisfied ports for pod %s", unsatisfiedPorts, t.Pod.Name)
 		return false
 	}
 
 	if (cpus < containerCpus) || (mem < containerMem) {
-		log.V(2).Infof("Not enough resources: cpus: %f mem: %f", cpus, mem)
+		log.V(3).Infof("not enough resources: cpus: %f mem: %f", cpus, mem)
 		return false
 	}
 
 	return true
+}
+
+// create a duplicate task, one that refers to the same pod specification and
+// executor as the current task. all other state is reset to "factory settings"
+// (as if returned from newPodTask)
+func (t *PodTask) dup() (*PodTask, error) {
+	ctx := api.WithNamespace(api.NewDefaultContext(), t.Pod.Namespace)
+	return newPodTask(ctx, t.Pod, t.TaskInfo.Executor)
 }
 
 func newPodTask(ctx api.Context, pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
@@ -154,5 +166,6 @@ func newPodTask(ctx api.Context, pod *api.Pod, executor *mesos.ExecutorInfo) (*P
 		podKey:   key,
 	}
 	task.TaskInfo.Executor = executor
+	task.createTime = time.Now()
 	return task, nil
 }

@@ -40,12 +40,11 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
-	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
 	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
-	"github.com/mesosphere/kubernetes-mesos/pkg/config"
-	kmscheduler "github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
+	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
 )
 
 const (
@@ -189,7 +188,7 @@ func main() {
 
 	// Create mesos scheduler driver.
 	executor := prepareExecutorInfo()
-	mesosPodScheduler := kmscheduler.New(executor, kmscheduler.FCFSScheduleFunc, client)
+	mesosPodScheduler := scheduler.New(executor, scheduler.FCFSScheduleFunc, client)
 	info, cred, err := buildFrameworkInfo()
 	if err != nil {
 		log.Fatalf("Misconfigured mesos framework: %v", err)
@@ -202,7 +201,9 @@ func main() {
 		Cred:      cred,
 	}
 
-	mesosPodScheduler.Init(driver)
+	pluginStart := make(chan struct{})
+	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(pluginStart))
+	mesosPodScheduler.Init(driver, kpl)
 	driver.Init()
 	defer driver.Destroy()
 
@@ -231,7 +232,8 @@ func main() {
 	}, 5*time.Second)
 
 	log.V(1).Info("Spinning up scheduling loop")
-	plugin.New(mesosPodScheduler.NewPluginConfig()).Run()
+	close(pluginStart) // signal the plugin to spin up its background procs
+	kpl.Run()
 
 	select {}
 }

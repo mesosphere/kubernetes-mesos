@@ -11,6 +11,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	log "github.com/golang/glog"
 	"github.com/mesos/mesos-go/mesos"
+	"github.com/mesosphere/kubernetes-mesos/pkg/executor/messages"
 )
 
 const (
@@ -31,6 +32,15 @@ func newSlave(hostName string) *Slave {
 		HostName: hostName,
 		Offers:   make(map[string]empty),
 	}
+}
+
+type PluginInterface interface {
+	// the apiserver may have a different state for the pod than we do
+	// so reconcile our records, but only for this one pod
+	reconcilePod(api.Pod)
+
+	// execute the Scheduling plugin, should start a go routine and return immediately
+	Run()
 }
 
 // KubernetesScheduler implements:
@@ -69,6 +79,7 @@ type KubernetesScheduler struct {
 	scheduleFunc PodScheduleFunc
 
 	client *client.Client
+	plugin PluginInterface
 }
 
 // New create a new KubernetesScheduler
@@ -112,8 +123,9 @@ func (k *KubernetesScheduler) getTask(taskId string) (*PodTask, stateType) {
 	return nil, stateUnknown
 }
 
-func (k *KubernetesScheduler) Init(d mesos.SchedulerDriver) {
+func (k *KubernetesScheduler) Init(d mesos.SchedulerDriver, pl PluginInterface) {
 	k.driver = d
+	k.plugin = pl
 	k.offers.Init()
 }
 
@@ -224,7 +236,19 @@ func (k *KubernetesScheduler) handleTaskStaging(taskStatus *mesos.TaskStatus) {
 }
 
 func (k *KubernetesScheduler) handleTaskStarting(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Not implemented: task starting")
+	// we expect to receive this when a launched task is finally "bound"
+	// via the API server. however, there's nothing specific for us to do
+	// here.
+
+	taskId := taskStatus.GetTaskId().GetValue()
+	switch task, state := k.getTask(taskId); state {
+	case statePending:
+		//TODO(jdef) properly emit metric, or event type instead of just logging
+		task.bindTime = time.Now()
+		log.V(1).Infof("metric time_to_bind %v task %v pod %v", task.bindTime.Sub(task.launchTime), task.ID, task.Pod.Name)
+	default:
+		log.Warningf("Ignore status TASK_STARTING because the the task is not pending")
+	}
 }
 
 func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
@@ -306,7 +330,10 @@ func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 	switch task, state := k.getTask(taskId); state {
 	case statePending:
 		delete(k.pendingTasks, taskId)
-		fallthrough
+		delete(k.podToTask, task.podKey)
+		if task.launched && messages.CreateBindingFailure == taskStatus.GetMessage() {
+			go k.plugin.reconcilePod(*task.Pod)
+		}
 	case stateRunning:
 		delete(k.runningTasks, taskId)
 		delete(k.podToTask, task.podKey)
