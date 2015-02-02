@@ -45,6 +45,7 @@ import (
 	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
+	sconfig "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
 )
 
 const (
@@ -246,7 +247,7 @@ func buildFrameworkInfo() (info *mesos.FrameworkInfo, cred *mesos.Credential, er
 	}
 	log.V(2).Infof("Framework configured with mesos user %v", username)
 	info = &mesos.FrameworkInfo{
-		Name: proto.String("KubernetesScheduler"),
+		Name: proto.String(sconfig.DefaultInfoName),
 		User: proto.String(username),
 	}
 	if *mesosRole != "" {
