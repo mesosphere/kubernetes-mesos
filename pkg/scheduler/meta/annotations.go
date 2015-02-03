@@ -2,8 +2,8 @@ package meta
 
 // kubernetes api object annotations
 const (
-	BindingHostKey = "kubernetes-mesos.mesosphere.io/bindingHost"
-	TaskIdKey      = "kubernetes-mesos.mesosphere.io/taskId"
-	SlaveIdKey     = "kubernetes-mesos.mesosphere.io/slaveId"
-	OfferIdKey     = "kubernetes-mesos.mesosphere.io/offerId"
+	BindingHostKey = "k8s.mesosphere.io/bindingHost"
+	TaskIdKey      = "k8s.mesosphere.io/taskId"
+	SlaveIdKey     = "k8s.mesosphere.io/slaveId"
+	OfferIdKey     = "k8s.mesosphere.io/offerId"
 )
