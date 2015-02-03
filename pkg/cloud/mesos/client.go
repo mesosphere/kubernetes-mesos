@@ -4,13 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	log "github.com/golang/glog"
-	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"golang.org/x/net/context"
 )
 
@@ -36,9 +33,10 @@ func newMesosClient() *mesosClient {
 	}
 }
 
-// return an array of host:port strings, each of which points to a mesos slave service
+// return an array of slave host names
 func (c *mesosClient) EnumerateSlaves(ctx context.Context) ([]string, error) {
 	//TODO(jdef) probably should not assume that mesosMaster is a host:port
+	//TODO(jdef) should not assume master uses http (what about https?)
 	uri := fmt.Sprintf("http://%s/state.json", c.mesosMaster)
 	req, err := http.NewRequest("GET", uri, nil)
 	if err != nil {
@@ -62,7 +60,7 @@ func (c *mesosClient) EnumerateSlaves(ctx context.Context) ([]string, error) {
 			Slaves []*struct {
 				Id       string `json:"id"`       // ex: 20150106-162714-3815890698-5050-2453-S2
 				Pid      string `json:"pid"`      // ex: slave(1)@10.22.211.18:5051
-				Hostname string `json:"hostname"` // ex: 10.22.211.18
+				Hostname string `json:"hostname"` // ex: 10.22.211.18, or slave-123.nowhere.com
 			} `json:"slaves"`
 		}
 		state := &State{}
@@ -71,12 +69,8 @@ func (c *mesosClient) EnumerateSlaves(ctx context.Context) ([]string, error) {
 			return err
 		}
 		for _, slave := range state.Slaves {
-			if slave.Pid != "" {
-				if parts := strings.SplitN(slave.Pid, "@", 2); len(parts) == 2 && len(parts[1]) > 0 {
-					hosts = append(hosts, parts[1])
-				} else {
-					log.Warningf("unparsable slave pid: %v", slave.Pid)
-				}
+			if slave.Hostname != "" {
+				hosts = append(hosts, slave.Hostname)
 			}
 		}
 		return nil
@@ -84,6 +78,7 @@ func (c *mesosClient) EnumerateSlaves(ctx context.Context) ([]string, error) {
 	return hosts, err
 }
 
+/*
 // return a list of slaves running a k8sm kubelet/executor
 func (c *mesosClient) EnlistedSlaves(ctx context.Context) ([]string, error) {
 	slaves, err := c.EnumerateSlaves(ctx)
@@ -154,6 +149,7 @@ func (c *mesosClient) slaveRunningKubeletExecutor(ctx context.Context, slaveHost
 	})
 	return found, err
 }
+*/
 
 type responseHandler func(*http.Response, error) error
 

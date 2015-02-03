@@ -72,13 +72,12 @@ func (c *MesosCloud) IPAddress(name string) (net.IP, error) {
 	if name == "" {
 		return nil, noHostNameSpecified
 	}
-	// TODO(jdef): validate that name actually points to a slave that we know
 	if iplist, err := net.LookupIP(name); err != nil {
-		log.Warningf("Failed to resolve IP from host name '%v': %v", name, err)
+		log.V(2).Infof("failed to resolve IP from host name '%v': %v", name, err)
 		return nil, err
 	} else {
 		ipaddr := iplist[0]
-		log.V(2).Infof("Resolved host '%v' to '%v'", name, ipaddr)
+		log.V(2).Infof("resolved host '%v' to '%v'", name, ipaddr)
 		return ipaddr, nil
 	}
 }
@@ -86,28 +85,17 @@ func (c *MesosCloud) IPAddress(name string) (net.IP, error) {
 // List lists instances that match 'filter' which is a regular expression
 // which must match the entire instance name (fqdn).
 func (c *MesosCloud) List(filter string) ([]string, error) {
-	ctx, cancel := context.WithCancel(context.Background())
+	//TODO(jdef) use a timeout here? 15s?
+	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
+
 	// TODO(jdef) listing all slaves for now, until EnlistedSlaves scales better
 	// Because of this, minion health checks should be disabled on the apiserver
 	addr, err := c.client.EnumerateSlaves(ctx)
-	if err == nil {
-		if len(addr) == 0 {
-			log.V(2).Info("no slaves found, are any running?")
-		}
-	} else {
-		log.Warning(err)
+	if err == nil && len(addr) == 0 {
+		log.V(2).Info("no slaves found, are any running?")
 	}
-	slaves := []string{}
-	for _, a := range addr {
-		host, _, err := net.SplitHostPort(a)
-		if err != nil {
-			log.Warning(err)
-			continue
-		}
-		slaves = append(slaves, host)
-	}
-	return slaves, nil
+	return addr, err
 }
 
 // GetNodeResources gets the resources for a particular node
