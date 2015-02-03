@@ -312,15 +312,23 @@ func (k *kubeScheduler) doSchedule(task *PodTask, err error) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	slaveId := offer.Details().GetSlaveId().GetValue()
+	details := offer.Details()
+	if details == nil {
+		return "", fmt.Errorf("offer already invalid/expired for task %v", task.ID)
+	}
+	slaveId := details.GetSlaveId().GetValue()
 	if slave, ok := k.api.slaveFor(slaveId); !ok {
 		// not much sense in Release()ing the offer here since its owner died
 		offer.Release()
-		k.api.offers().Invalidate(offer.Details().Id.GetValue())
+		k.api.offers().Invalidate(details.Id.GetValue())
 		task.ClearTaskInfo()
 		return "", fmt.Errorf("Slave disappeared (%v) while scheduling task %v", slaveId, task.ID)
 	} else {
-		task.FillTaskInfo(offer)
+		if task.Offer != nil && task.Offer != offer {
+			return "", fmt.Errorf("task.offer assignment must be idempotent, task %+v: offer %+v", task, offer)
+		}
+		task.Offer = offer
+		task.FillFromDetails(details)
 		return slave.HostName, nil
 	}
 }

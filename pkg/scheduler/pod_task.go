@@ -44,18 +44,12 @@ func (t *PodTask) GetOfferId() string {
 
 // Fill the TaskInfo in the PodTask, should be called during k8s scheduling,
 // before binding.
-func (t *PodTask) FillTaskInfo(offer PerishableOffer) error {
-	if offer == nil || offer.Details() == nil {
-		return fmt.Errorf("Nil offer for task %v", t)
-	}
-	details := offer.Details()
+func (t *PodTask) FillFromDetails(details *mesos.Offer) error {
 	if details == nil {
-		return fmt.Errorf("Illegal offer for task %v: %v", t, offer)
+		//programming error
+		panic("offer details are nil")
 	}
-	if t.Offer != nil && t.Offer != offer {
-		return fmt.Errorf("Offer assignment must be idempotent with task %v: %v", t, offer)
-	}
-	t.Offer = offer
+
 	log.V(3).Infof("Recording offer(s) %v against pod %v", details.Id, t.Pod.Name)
 
 	t.TaskInfo.TaskId = newTaskID(t.ID)
