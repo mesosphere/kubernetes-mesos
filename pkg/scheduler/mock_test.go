@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	mesos "github.com/mesos/mesos-go/mesosproto"
+	"github.com/mesos/mesos-go/mesos"
 	"github.com/stretchr/testify/mock"
 )
 

@@ -18,7 +18,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
 	log "github.com/golang/glog"
-	mesos "github.com/mesos/mesos-go/mesosproto"
+	"github.com/mesos/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 	annotation "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 	"gopkg.in/v2/yaml"
@@ -93,17 +93,13 @@ func (k *k8smScheduler) unregisterPodTask(task *PodTask) {
 func (k *k8smScheduler) killTask(taskId string) error {
 	// assume caller is holding scheduler lock
 	killTaskId := newTaskID(taskId)
-	_, err := k.KubernetesScheduler.driver.KillTask(killTaskId)
-	return err
+	return k.KubernetesScheduler.driver.KillTask(killTaskId)
 }
 
 func (k *k8smScheduler) launchTask(task *PodTask) error {
 	// assume caller is holding scheduler lock
 	taskList := []*mesos.TaskInfo{task.TaskInfo}
-	offerIds := []*mesos.OfferID{task.Offer.Details().Id}
-	filters := &mesos.Filters{}
-	_, err := k.KubernetesScheduler.driver.LaunchTasks(offerIds, taskList, filters)
-	return err
+	return k.KubernetesScheduler.driver.LaunchTasks(task.Offer.Details().Id, taskList, nil)
 }
 
 type binder struct {
