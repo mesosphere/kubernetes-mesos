@@ -1,8 +1,8 @@
 package scheduler
 
 import (
-	"code.google.com/p/goprotobuf/proto"
-	"github.com/mesos/mesos-go/mesos"
+	"github.com/gogo/protobuf/proto"
+	mesos "github.com/mesos/mesos-go/mesosproto"
 )
 
 // create a range resource for the listed ports
