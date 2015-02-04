@@ -92,7 +92,8 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 		offers: CreateOfferRegistry(OfferRegistryConfig{
 			declineOffer: func(id string) error {
 				offerId := newOfferID(id)
-				_, err := k.driver.DeclineOffer(offerId, nil)
+				filters := &mesos.Filters{}
+				_, err := k.driver.DeclineOffer(offerId, filters)
 				return err
 			},
 			ttl:           defaultOfferTTL * time.Second,
