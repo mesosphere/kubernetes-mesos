@@ -4,7 +4,8 @@ import (
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/mesos/mesos-go/mesos"
+	mesos "github.com/mesos/mesos-go/mesosproto"
+	mutil "github.com/mesos/mesos-go/mesosutil"
 )
 
 const (
@@ -44,8 +45,8 @@ func TestNoPortsInPodOrOffer(t *testing.T) {
 
 	offer := &mesos.Offer{
 		Resources: []*mesos.Resource{
-			mesos.ScalarResource("cpus", 0.001),
-			mesos.ScalarResource("mem", 0.001),
+			mutil.NewScalarResource("cpus", 0.001),
+			mutil.NewScalarResource("mem", 0.001),
 		},
 	}
 	if ok := task.AcceptOffer(offer); ok {
@@ -54,8 +55,8 @@ func TestNoPortsInPodOrOffer(t *testing.T) {
 
 	offer = &mesos.Offer{
 		Resources: []*mesos.Resource{
-			mesos.ScalarResource("cpus", t_min_cpu),
-			mesos.ScalarResource("mem", t_min_mem),
+			mutil.NewScalarResource("cpus", t_min_cpu),
+			mutil.NewScalarResource("mem", t_min_mem),
 		},
 	}
 	if ok := task.AcceptOffer(offer); !ok {
@@ -110,8 +111,8 @@ func TestAcceptOfferPorts(t *testing.T) {
 
 	offer := &mesos.Offer{
 		Resources: []*mesos.Resource{
-			mesos.ScalarResource("cpus", t_min_cpu),
-			mesos.ScalarResource("mem", t_min_mem),
+			mutil.NewScalarResource("cpus", t_min_cpu),
+			mutil.NewScalarResource("mem", t_min_mem),
 			rangeResource("ports", []uint64{1, 1}),
 		},
 	}
@@ -141,8 +142,8 @@ func TestAcceptOfferPorts(t *testing.T) {
 	}
 
 	offer.Resources = []*mesos.Resource{
-		mesos.ScalarResource("cpus", t_min_cpu),
-		mesos.ScalarResource("mem", t_min_mem),
+		mutil.NewScalarResource("cpus", t_min_cpu),
+		mutil.NewScalarResource("mem", t_min_mem),
 	}
 	if ok := task.AcceptOffer(offer); !ok {
 		t.Fatalf("did not accepted offer %v:", offer)
