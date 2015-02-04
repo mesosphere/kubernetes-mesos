@@ -101,7 +101,8 @@ func (k *k8smScheduler) launchTask(task *PodTask) error {
 	// assume caller is holding scheduler lock
 	taskList := []*mesos.TaskInfo{task.TaskInfo}
 	offerIds := []*mesos.OfferID{task.Offer.Details().Id}
-	_, err := k.KubernetesScheduler.driver.LaunchTasks(offerIds, taskList, nil)
+	filters := &mesos.Filters{}
+	_, err := k.KubernetesScheduler.driver.LaunchTasks(offerIds, taskList, filters)
 	return err
 }
 
