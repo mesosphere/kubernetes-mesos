@@ -31,7 +31,6 @@ import (
 
 	_ "github.com/mesosphere/kubernetes-mesos/pkg/profile"
 
-	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
@@ -40,8 +39,10 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
+	"github.com/gogo/protobuf/proto"
 	log "github.com/golang/glog"
-	"github.com/mesos/mesos-go/mesos"
+	mesos "github.com/mesos/mesos-go/mesosproto"
+	sdriver "github.com/mesos/mesos-go/scheduler"
 	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
@@ -195,18 +196,14 @@ func main() {
 		log.Fatalf("Misconfigured mesos framework: %v", err)
 	}
 	masterUri := kmcloud.MasterURI()
-	driver := &mesos.MesosSchedulerDriver{
-		Master:    masterUri,
-		Framework: *info,
-		Scheduler: mesosPodScheduler,
-		Cred:      cred,
+	driver, err := sdriver.NewMesosSchedulerDriver(mesosPodScheduler, info, masterUri, cred)
+	if err != nil {
+		log.Fatalf("failed to create mesos scheduler driver: %v", err)
 	}
 
 	pluginStart := make(chan struct{})
 	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(pluginStart))
 	mesosPodScheduler.Init(driver, kpl)
-	driver.Init()
-	defer driver.Destroy()
 
 	go func() {
 		if st, err := driver.Start(); err == nil {
