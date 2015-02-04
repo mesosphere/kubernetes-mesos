@@ -22,7 +22,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
 	"github.com/fsouza/go-dockerclient"
 	log "github.com/golang/glog"
-	edriver "github.com/mesos/mesos-go/executor"
+	"github.com/mesos/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor"
 )
 
@@ -100,7 +100,10 @@ func main() {
 		EtcdClient:              kubelet.EtcdClientOrDie(etcdServerList, *etcdConfigFile),
 	}
 
+	driver := new(mesos.MesosExecutorDriver)
+
 	// @see kubernetes/pkg/standalone.go:createAndInitKubelet
+	initialized := make(chan struct{})
 	builder := standalone.KubeletBuilder(func(kc *standalone.KubeletConfig) (standalone.KubeletBootstrap, *kconfig.PodConfig) {
 		pc := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
 		updates := pc.Channel(MESOS_CFG_SOURCE)
@@ -123,6 +126,8 @@ func main() {
 				pc.SeenAllSources,
 				kc.ClusterDomain,
 				net.IP(kc.ClusterDNS)),
+			driver:      driver,
+			initialized: initialized,
 		}
 		//TODO(jdef) would be nice to share the same api client instance as the kubelet event recorder
 		apiClient, err := kubelet.GetApiserverClient(kc.AuthPath, kc.ApiServerList)
@@ -130,14 +135,10 @@ func main() {
 			log.Fatal("Failed to configure API server client: %v", err)
 		}
 
-		exec := executor.New(k.Kubelet, updates, MESOS_CFG_SOURCE, apiClient)
-		if driver, err := edriver.NewMesosExecutorDriver(exec); err != nil {
-			log.Fatalf("failed to create executor driver: %v", err)
-		} else {
-			k.driver = driver
-		}
+		driver.Executor = executor.New(driver, k.Kubelet, updates, MESOS_CFG_SOURCE, apiClient)
 
 		log.V(2).Infof("Initialize executor driver...")
+		driver.Init()
 
 		k.BirthCry()
 		k.reconcileTasks(kc.DockerClient)
@@ -153,15 +154,18 @@ func main() {
 	standalone.RunKubelet(&kcfg, builder)
 
 	log.Infoln("Waiting for driver initialization to complete")
+	<-initialized
+	defer driver.Destroy()
 
 	// block until driver is shut down
-	select {}
+	driver.Join()
 }
 
 type kubeletExecutor struct {
 	*kubelet.Kubelet
-	initialize sync.Once
-	driver     edriver.ExecutorDriver
+	driver      *mesos.MesosExecutorDriver
+	initialize  sync.Once
+	initialized chan struct{}
 }
 
 func (kl *kubeletExecutor) reconcileTasks(dockerClient dockertools.DockerInterface) {
@@ -187,14 +191,10 @@ func (kl *kubeletExecutor) ListenAndServe(address net.IP, port uint, enableDebug
 	// this func could be called many times, depending how often the HTTP server crashes,
 	// so only execute certain initialization procs once
 	kl.initialize.Do(func() {
+		defer close(kl.initialized)
 		go util.Forever(runProxyService, 5*time.Second)
-		go func() {
-			if _, err := kl.driver.Run(); err != nil {
-				log.Fatalf("failed to start executor driver: %v", err)
-			} else {
-				log.V(2).Infof("Executor driver is running!")
-			}
-		}()
+		kl.driver.Start()
+		log.V(2).Infof("Executor driver is running!")
 
 		// TODO(who?) Recover running containers from check pointed pod list.
 		// @see reconcileTasks

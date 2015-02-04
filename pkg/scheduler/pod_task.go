@@ -7,8 +7,7 @@ import (
 	"code.google.com/p/go-uuid/uuid"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	log "github.com/golang/glog"
-	mesos "github.com/mesos/mesos-go/mesosproto"
-	mutil "github.com/mesos/mesos-go/mesosutil"
+	"github.com/mesos/mesos-go/mesos"
 )
 
 const (
@@ -56,8 +55,8 @@ func (t *PodTask) FillFromDetails(details *mesos.Offer) error {
 	t.TaskInfo.TaskId = newTaskID(t.ID)
 	t.TaskInfo.SlaveId = details.GetSlaveId()
 	t.TaskInfo.Resources = []*mesos.Resource{
-		mutil.NewScalarResource("cpus", containerCpus),
-		mutil.NewScalarResource("mem", containerMem),
+		mesos.ScalarResource("cpus", containerCpus),
+		mesos.ScalarResource("mem", containerMem),
 	}
 	if mapping, err := t.mapper(t, details); err != nil {
 		t.ClearTaskInfo()

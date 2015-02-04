@@ -15,6 +15,11 @@
 			"Rev": "7dda39b2e7d5e265014674c5af696ba4186679e9"
 		},
 		{
+			"ImportPath": "code.google.com/p/goprotobuf/proto",
+			"Comment": "go.r60-152",
+			"Rev": "36be16571e14f67e114bb0af619e5de2c1591679"
+		},
+		{
 			"ImportPath": "github.com/GoogleCloudPlatform/kubernetes/pkg/api",
 			"Comment": "v0.8.2",
 			"Rev": "5b046406a957a1e7eda7c0c86dd7a89e9c94fc5f"
@@ -184,10 +189,6 @@
 			"Rev": "9c377ffd9aed48a012adf1c3fd517fe98394120b"
 		},
 		{
-                        "ImportPath": "github.com/gogo/protobuf/proto",
-                        "Rev": "ab6cea4a44ef42b748cd88d2d372047b75806e0c"
-                },
-		{
 			"ImportPath": "github.com/golang/glog",
 			"Rev": "44145f04b68cf362d9c4df2182967c2275eaefed"
 		},
@@ -206,7 +207,7 @@
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/mesos",
-			"Rev": "10a3c9c44c40fe4345b6f2fdd2d0f42f2819713d"
+			"Rev": "3bf3f3e448da25618ff5b5300b0b706f5ae4b4e1"
 		},
 		{
 			"ImportPath": "github.com/mitchellh/mapstructure",

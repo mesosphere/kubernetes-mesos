@@ -10,8 +10,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	log "github.com/golang/glog"
-	mesos "github.com/mesos/mesos-go/mesosproto"
-	sdriver "github.com/mesos/mesos-go/scheduler"
+	"github.com/mesos/mesos-go/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/messages"
 )
 
@@ -56,7 +55,7 @@ type KubernetesScheduler struct {
 
 	// Mesos context.
 	executor    *mesos.ExecutorInfo
-	driver      sdriver.SchedulerDriver
+	driver      mesos.SchedulerDriver
 	frameworkId *mesos.FrameworkID
 	masterInfo  *mesos.MasterInfo
 	registered  bool
@@ -92,9 +91,7 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 		offers: CreateOfferRegistry(OfferRegistryConfig{
 			declineOffer: func(id string) error {
 				offerId := newOfferID(id)
-				filters := &mesos.Filters{}
-				_, err := k.driver.DeclineOffer(offerId, filters)
-				return err
+				return k.driver.DeclineOffer(offerId, nil)
 			},
 			ttl:           defaultOfferTTL * time.Second,
 			lingerTtl:     defaultOfferLingerTTL * time.Second, // remember expired offers so that we can tell if a previously scheduler offer relies on one
@@ -126,14 +123,14 @@ func (k *KubernetesScheduler) getTask(taskId string) (*PodTask, stateType) {
 	return nil, stateUnknown
 }
 
-func (k *KubernetesScheduler) Init(d sdriver.SchedulerDriver, pl PluginInterface) {
+func (k *KubernetesScheduler) Init(d mesos.SchedulerDriver, pl PluginInterface) {
 	k.driver = d
 	k.plugin = pl
 	k.offers.Init()
 }
 
 // Registered is called when the scheduler registered with the master successfully.
-func (k *KubernetesScheduler) Registered(driver sdriver.SchedulerDriver,
+func (k *KubernetesScheduler) Registered(driver mesos.SchedulerDriver,
 	frameworkId *mesos.FrameworkID, masterInfo *mesos.MasterInfo) {
 	k.frameworkId = frameworkId
 	k.masterInfo = masterInfo
@@ -143,13 +140,13 @@ func (k *KubernetesScheduler) Registered(driver sdriver.SchedulerDriver,
 
 // Reregistered is called when the scheduler re-registered with the master successfully.
 // This happends when the master fails over.
-func (k *KubernetesScheduler) Reregistered(driver sdriver.SchedulerDriver, masterInfo *mesos.MasterInfo) {
+func (k *KubernetesScheduler) Reregistered(driver mesos.SchedulerDriver, masterInfo *mesos.MasterInfo) {
 	log.Infof("Scheduler reregistered with the master: %v\n", masterInfo)
 	k.registered = true
 }
 
 // Disconnected is called when the scheduler loses connection to the master.
-func (k *KubernetesScheduler) Disconnected(driver sdriver.SchedulerDriver) {
+func (k *KubernetesScheduler) Disconnected(driver mesos.SchedulerDriver) {
 	log.Infof("Master disconnected!\n")
 	k.registered = false
 
@@ -161,7 +158,7 @@ func (k *KubernetesScheduler) Disconnected(driver sdriver.SchedulerDriver) {
 }
 
 // ResourceOffers is called when the scheduler receives some offers from the master.
-func (k *KubernetesScheduler) ResourceOffers(driver sdriver.SchedulerDriver, offers []*mesos.Offer) {
+func (k *KubernetesScheduler) ResourceOffers(driver mesos.SchedulerDriver, offers []*mesos.Offer) {
 	log.V(2).Infof("Received offers %+v", offers)
 
 	k.Lock()
@@ -200,7 +197,7 @@ func (k *KubernetesScheduler) deleteOffer(oid string) {
 }
 
 // OfferRescinded is called when the resources are recinded from the scheduler.
-func (k *KubernetesScheduler) OfferRescinded(driver sdriver.SchedulerDriver, offerId *mesos.OfferID) {
+func (k *KubernetesScheduler) OfferRescinded(driver mesos.SchedulerDriver, offerId *mesos.OfferID) {
 	log.Infof("Offer rescinded %v\n", offerId)
 
 	k.Lock()
@@ -210,7 +207,7 @@ func (k *KubernetesScheduler) OfferRescinded(driver sdriver.SchedulerDriver, off
 }
 
 // StatusUpdate is called when a status update message is sent to the scheduler.
-func (k *KubernetesScheduler) StatusUpdate(driver sdriver.SchedulerDriver, taskStatus *mesos.TaskStatus) {
+func (k *KubernetesScheduler) StatusUpdate(driver mesos.SchedulerDriver, taskStatus *mesos.TaskStatus) {
 	log.Infof("Received status update %v\n", taskStatus)
 
 	k.Lock()
@@ -382,13 +379,13 @@ func (k *KubernetesScheduler) handleTaskLost(taskStatus *mesos.TaskStatus) {
 }
 
 // FrameworkMessage is called when the scheduler receives a message from the executor.
-func (k *KubernetesScheduler) FrameworkMessage(driver sdriver.SchedulerDriver,
+func (k *KubernetesScheduler) FrameworkMessage(driver mesos.SchedulerDriver,
 	executorId *mesos.ExecutorID, slaveId *mesos.SlaveID, message string) {
 	log.Infof("Received messages from executor %v of slave %v, %v\n", executorId, slaveId, message)
 }
 
 // SlaveLost is called when some slave is lost.
-func (k *KubernetesScheduler) SlaveLost(driver sdriver.SchedulerDriver, slaveId *mesos.SlaveID) {
+func (k *KubernetesScheduler) SlaveLost(driver mesos.SchedulerDriver, slaveId *mesos.SlaveID) {
 	log.Infof("Slave %v is lost\n", slaveId)
 
 	k.Lock()
@@ -408,14 +405,14 @@ func (k *KubernetesScheduler) SlaveLost(driver sdriver.SchedulerDriver, slaveId 
 }
 
 // ExecutorLost is called when some executor is lost.
-func (k *KubernetesScheduler) ExecutorLost(driver sdriver.SchedulerDriver,
+func (k *KubernetesScheduler) ExecutorLost(driver mesos.SchedulerDriver,
 	executorId *mesos.ExecutorID, slaveId *mesos.SlaveID, status int) {
 	log.Infof("Executor %v of slave %v is lost, status: %v\n", executorId, slaveId, status)
 	// TODO(yifan): Restart any unfinished tasks of the executor.
 }
 
 // Error is called when there is some error.
-func (k *KubernetesScheduler) Error(driver sdriver.SchedulerDriver, message string) {
+func (k *KubernetesScheduler) Error(driver mesos.SchedulerDriver, message string) {
 	log.Errorf("Scheduler error: %v\n", message)
 }
 
