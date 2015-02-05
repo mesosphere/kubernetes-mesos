@@ -1,0 +1,118 @@
+diff --git a/messenger/http_transporter.go b/messenger/http_transporter.go
+index 6e39bce..589085c 100644
+--- a/messenger/http_transporter.go
++++ b/messenger/http_transporter.go
+@@ -25,7 +25,9 @@ import (
+ 	"io/ioutil"
+ 	"net"
+ 	"net/http"
++	"net/url"
+ 	"strings"
++	"time"
+ 
+ 	log "github.com/golang/glog"
+ 	"golang.org/x/net/context"
+@@ -55,30 +57,88 @@ func NewHTTPTransporter(upid *upid.UPID) *HTTPTransporter {
+ 	}
+ }
+ 
++// some network errors are probably recoverable, attempt to determine that here.
++func isRecoverableError(err error) bool {
++	if urlErr, ok := err.(*url.Error); ok {
++		log.V(2).Infof("checking url.Error for recoverability")
++		return urlErr.Op == "Post" && isRecoverableError(urlErr.Err)
++	} else if netErr, ok := err.(*net.OpError); ok && netErr.Err != nil {
++		log.V(2).Infof("checking net.OpError for recoverability: %#v", err)
++		if netErr.Temporary() {
++			return true
++		}
++		//TODO(jdef) this is pretty hackish, there's probably a better way
++		return (netErr.Op == "dial" && netErr.Net == "tcp" && strings.HasSuffix(netErr.Error(), ": connection refused"))
++	}
++	log.V(2).Infof("unrecoverable error: %#v", err)
++	return false
++}
++
++type recoverableError struct {
++	Err error
++}
++
++func (e *recoverableError) Error() string {
++	if e == nil {
++		return ""
++	}
++	return e.Err.Error()
++}
++
+ // Send sends the message to its specified upid.
+-func (t *HTTPTransporter) Send(ctx context.Context, msg *Message) error {
++func (t *HTTPTransporter) Send(ctx context.Context, msg *Message) (sendError error) {
+ 	log.V(2).Infof("Sending message to %v via http\n", msg.UPID)
+ 	req, err := t.makeLibprocessRequest(msg)
+ 	if err != nil {
+ 		log.Errorf("Failed to make libprocess request: %v\n", err)
+ 		return err
+ 	}
+-	return t.httpDo(ctx, req, func(resp *http.Response, err error) error {
+-		if err != nil {
+-			log.Infof("Failed to POST: %v\n", err)
+-			return err
++	duration := 1 * time.Second
++	for attempt := 0; attempt < 5; attempt++ { //TODO(jdef) extract/parameterize constant
++		if sendError != nil {
++			duration *= 2
++			log.Warningf("attempting to recover from error '%v', waiting before retry: %v", sendError, duration)
++			select {
++			case <-ctx.Done():
++				return ctx.Err()
++			case <-time.After(duration):
++				// ..retry request, continue
++			}
+ 		}
+-		defer resp.Body.Close()
+-
+-		// ensure master acknowledgement.
+-		if (resp.StatusCode != http.StatusOK) &&
+-			(resp.StatusCode != http.StatusAccepted) {
+-			msg := fmt.Sprintf("Master %s rejected %s.  Returned status %s.", msg.UPID, msg.RequestURI(), resp.Status)
+-			log.Warning(msg)
+-			return fmt.Errorf(msg)
++		sendError = t.httpDo(ctx, req, func(resp *http.Response, err error) error {
++			if err != nil {
++				if isRecoverableError(err) {
++					return &recoverableError{Err:err}
++				}
++				log.Infof("Failed to POST: %v\n", err)
++				return err
++			}
++			defer resp.Body.Close()
++
++			// ensure master acknowledgement.
++			if (resp.StatusCode != http.StatusOK) &&
++				(resp.StatusCode != http.StatusAccepted) {
++				msg := fmt.Sprintf("Master %s rejected %s.  Returned status %s.",
++					msg.UPID, msg.RequestURI(), resp.Status)
++				log.Warning(msg)
++				return fmt.Errorf(msg)
++			}
++			return nil
++		})
++		if sendError == nil {
++			// success
++			return
++		} else if _, ok := sendError.(*recoverableError); ok {
++			// recoverable, attempt backoff?
++			continue
+ 		}
+-		return nil
+-	})
++		// unrecoverable
++		break
++	}
++	if recoverable, ok := sendError.(*recoverableError); ok {
++		sendError = recoverable.Err
++	}
++	return
+ }
+ 
+ func (t *HTTPTransporter) httpDo(ctx context.Context, req *http.Request, f func(*http.Response, error) error) error {
