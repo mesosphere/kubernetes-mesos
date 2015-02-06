@@ -2,6 +2,7 @@ package executor
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -346,7 +347,14 @@ func (k *KubernetesExecutor) reportLostTask(driver edriver.ExecutorDriver, tid, 
 // FrameworkMessage is called when the framework sends some message to the executor
 func (k *KubernetesExecutor) FrameworkMessage(driver edriver.ExecutorDriver, message string) {
 	log.Infof("Receives message from framework %v\n", message)
-	// TODO(yifan): Check for update message.
+	//TODO(jdef) master reported a lost task, reconcile this! @see scheduler.go:handleTaskLost
+	if strings.HasPrefix("task-lost:", message) && len(message) > 10 {
+		taskId := message[10:]
+		if taskId != "" {
+			// clean up pod state
+			k.reportLostTask(driver, taskId, messages.TaskLostAck)
+		}
+	}
 }
 
 // Shutdown is called when the executor receives a shutdown request.

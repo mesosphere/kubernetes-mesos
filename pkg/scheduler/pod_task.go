@@ -18,18 +18,19 @@ const (
 
 // A struct that describes a pod task.
 type PodTask struct {
-	ID         string
-	Pod        *api.Pod
-	TaskInfo   *mesos.TaskInfo
-	Offer      PerishableOffer
-	launched   bool
-	deleted    bool
-	podKey     string
-	createTime time.Time
-	launchTime time.Time
-	bindTime   time.Time
-	mapper     hostPortMappingFunc
-	ports      []hostPortMapping
+	ID          string
+	Pod         *api.Pod
+	TaskInfo    *mesos.TaskInfo
+	Offer       PerishableOffer
+	launched    bool
+	deleted     bool
+	podKey      string
+	createTime  time.Time
+	launchTime  time.Time
+	bindTime    time.Time
+	updatedTime time.Time // time of the most recent StatusUpdate we've seen from the mesos master
+	mapper      hostPortMappingFunc
+	ports       []hostPortMapping
 }
 
 func (t *PodTask) hasAcceptedOffer() bool {

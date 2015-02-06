@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"net"
 	"net/http"
 	"os/user"
@@ -35,18 +36,22 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/clientauth"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
 	"github.com/gogo/protobuf/proto"
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
+	mutil "github.com/mesos/mesos-go/mesosutil"
 	sdriver "github.com/mesos/mesos-go/scheduler"
 	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
 	sconfig "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 )
 
 const (
@@ -68,6 +73,8 @@ var (
 	mesosRole           = flag.String("mesos_role", "", "Mesos role for this framework, defaults to none.")
 	mesosAuthPrincipal  = flag.String("mesos_authentication_principal", "", "Mesos authentication principal.")
 	mesosAuthSecretFile = flag.String("mesos_authentication_secret_file", "", "Mesos authentication secret file.")
+	checkpoint          = flag.Bool("checkpoint", false, "Enable/disable checkpointing for the kubernetes-mesos framework.")
+	failoverTimeout     = flag.Float64("failover_timeout", float64(math.MaxInt32), fmt.Sprintf("Framework failover timeout, in ns."))
 )
 
 func init() {
@@ -172,7 +179,13 @@ func main() {
 	verflag.PrintAndExitIfRequested()
 
 	// we'll need this for the kubelet-executor
-	if (*etcdConfigFile != "" && len(etcdServerList) != 0) || (*etcdConfigFile == "" && len(etcdServerList) == 0) {
+	/*
+		if (*etcdConfigFile != "" && len(etcdServerList) != 0) || (*etcdConfigFile == "" && len(etcdServerList) == 0) {
+			log.Fatalf("specify either -etcd_servers or -etcd_config")
+		}
+	*/
+	etcdClient := kubelet.EtcdClientOrDie(etcdServerList, *etcdConfigFile)
+	if etcdClient == nil {
 		log.Fatalf("specify either -etcd_servers or -etcd_config")
 	}
 
@@ -190,8 +203,8 @@ func main() {
 
 	// Create mesos scheduler driver.
 	executor := prepareExecutorInfo()
-	mesosPodScheduler := scheduler.New(executor, scheduler.FCFSScheduleFunc, client)
-	info, cred, err := buildFrameworkInfo()
+	mesosPodScheduler := scheduler.New(executor, scheduler.FCFSScheduleFunc, client, etcdClient)
+	info, cred, err := buildFrameworkInfo(etcdClient)
 	if err != nil {
 		log.Fatalf("Misconfigured mesos framework: %v", err)
 	}
@@ -205,20 +218,22 @@ func main() {
 	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(pluginStart))
 	mesosPodScheduler.Init(driver, kpl)
 
-	go func() {
-		if st, err := driver.Start(); err == nil {
-			if st != mesos.Status_DRIVER_RUNNING {
-				log.Fatalf("Scheduler driver failed to start, has status: %v", st)
-			}
+	if st, err := driver.Start(); err == nil {
+		if st != mesos.Status_DRIVER_RUNNING {
+			log.Fatalf("Scheduler driver failed to start, has status: %v", st)
+		}
+		go func() {
 			if st, err = driver.Join(); err != nil {
 				log.Fatal(err)
 			} else if st != mesos.Status_DRIVER_RUNNING {
 				log.Fatalf("Scheduler driver failed to join, has status: %v", st)
+			} else {
+				log.Fatalf("Driver stopped, aborting scheduler") //TODO(jdef) should probably exit(0) here?
 			}
-		} else {
-			log.Fatalf("Failed to start driver: %v", err)
-		}
-	}()
+		}()
+	} else {
+		log.Fatalf("Failed to start driver: %v", err)
+	}
 
 	//TODO(jdef) we need real task reconciliation at some point
 	log.V(1).Info("Clearing old pods from the registry")
@@ -236,7 +251,23 @@ func main() {
 	select {}
 }
 
-func buildFrameworkInfo() (info *mesos.FrameworkInfo, cred *mesos.Credential, err error) {
+func buildFrameworkInfo(client tools.EtcdClient) (info *mesos.FrameworkInfo, cred *mesos.Credential, err error) {
+
+	var frameworkId *mesos.FrameworkID
+	var failover *float64
+
+	if *checkpoint {
+		response, err := client.Get(meta.FrameworkIDKey, false, false)
+		if err != nil {
+			if !tools.IsEtcdNotFound(err) {
+				log.Fatal(err)
+			}
+		} else if response.Node.Value != "" {
+			log.Infof("configuring FrameworkInfo with Id found in etcd: '%s'", response.Node.Value)
+			frameworkId = mutil.NewFrameworkID(response.Node.Value)
+		}
+		failover = proto.Float64(*failoverTimeout)
+	}
 
 	username, err := getUsername()
 	if err != nil {
@@ -244,8 +275,11 @@ func buildFrameworkInfo() (info *mesos.FrameworkInfo, cred *mesos.Credential, er
 	}
 	log.V(2).Infof("Framework configured with mesos user %v", username)
 	info = &mesos.FrameworkInfo{
-		Name: proto.String(sconfig.DefaultInfoName),
-		User: proto.String(username),
+		Name:            proto.String(sconfig.DefaultInfoName),
+		User:            proto.String(username),
+		Checkpoint:      proto.Bool(*checkpoint),
+		Id:              frameworkId,
+		FailoverTimeout: failover,
 	}
 	if *mesosRole != "" {
 		info.Role = proto.String(*mesosRole)

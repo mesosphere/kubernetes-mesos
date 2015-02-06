@@ -5,14 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
+	mutil "github.com/mesos/mesos-go/mesosutil"
 	sdriver "github.com/mesos/mesos-go/scheduler"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/messages"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 )
 
 const (
@@ -79,12 +84,13 @@ type KubernetesScheduler struct {
 	// The function that does scheduling.
 	scheduleFunc PodScheduleFunc
 
-	client *client.Client
-	plugin PluginInterface
+	client     *client.Client
+	plugin     PluginInterface
+	etcdClient tools.EtcdClient
 }
 
 // New create a new KubernetesScheduler
-func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client) *KubernetesScheduler {
+func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client, etcdClient tools.EtcdClient) *KubernetesScheduler {
 	var k *KubernetesScheduler
 	k = &KubernetesScheduler{
 		RWMutex:  new(sync.RWMutex),
@@ -108,6 +114,7 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 		podToTask:     make(map[string]string),
 		scheduleFunc:  scheduleFunc,
 		client:        client,
+		etcdClient:    etcdClient,
 	}
 	return k
 }
@@ -138,7 +145,19 @@ func (k *KubernetesScheduler) Registered(driver sdriver.SchedulerDriver,
 	k.frameworkId = frameworkId
 	k.masterInfo = masterInfo
 	k.registered = true
+	go k.storeFrameworkId() //TODO(jdef) only do this if we're checkpointing?
 	log.Infof("Scheduler registered with the master: %v with frameworkId: %v\n", masterInfo, frameworkId)
+
+	//TODO(jdef) partial reconciliation started... needs work
+	r := &Reconciler{Action: k.ReconcileRunningTasks}
+	go util.Forever(func() { r.Run(driver) }, 5*time.Minute) // TODO(jdef) parameterize reconciliation interval
+}
+
+func (k *KubernetesScheduler) storeFrameworkId() {
+	_, err := k.etcdClient.Set(meta.FrameworkIDKey, k.frameworkId.GetValue(), 0)
+	if err != nil {
+		log.Error(err)
+	}
 }
 
 // Reregistered is called when the scheduler re-registered with the master successfully.
@@ -146,6 +165,10 @@ func (k *KubernetesScheduler) Registered(driver sdriver.SchedulerDriver,
 func (k *KubernetesScheduler) Reregistered(driver sdriver.SchedulerDriver, masterInfo *mesos.MasterInfo) {
 	log.Infof("Scheduler reregistered with the master: %v\n", masterInfo)
 	k.registered = true
+
+	//TODO(jdef) partial reconciliation started... needs work
+	r := &Reconciler{Action: k.ReconcileRunningTasks}
+	go util.Forever(func() { r.Run(driver) }, 5*time.Minute) // TODO(jdef) parameterize reconciliation interval
 }
 
 // Disconnected is called when the scheduler loses connection to the master.
@@ -230,7 +253,7 @@ func (k *KubernetesScheduler) StatusUpdate(driver sdriver.SchedulerDriver, taskS
 	case mesos.TaskState_TASK_KILLED:
 		k.handleTaskKilled(taskStatus)
 	case mesos.TaskState_TASK_LOST:
-		k.handleTaskLost(taskStatus)
+		k.handleTaskLost(driver, taskStatus)
 	}
 }
 
@@ -246,8 +269,9 @@ func (k *KubernetesScheduler) handleTaskStarting(taskStatus *mesos.TaskStatus) {
 	taskId := taskStatus.GetTaskId().GetValue()
 	switch task, state := k.getTask(taskId); state {
 	case statePending:
+		task.updatedTime = time.Now()
 		//TODO(jdef) properly emit metric, or event type instead of just logging
-		task.bindTime = time.Now()
+		task.bindTime = task.updatedTime
 		log.V(1).Infof("metric time_to_bind %v task %v pod %v", task.bindTime.Sub(task.launchTime), task.ID, task.Pod.Name)
 	default:
 		log.Warningf("Ignore status TASK_STARTING because the the task is not pending")
@@ -262,12 +286,14 @@ func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
 	}
 	switch task, state := k.getTask(taskId); state {
 	case statePending:
-		log.Infof("Received running status for pending task: '%v'", taskStatus)
+		task.updatedTime = time.Now()
+		log.Infof("Received running status for pending task: %+v", taskStatus)
 		k.fillRunningPodInfo(task, taskStatus)
 		k.runningTasks[taskId] = task
 		delete(k.pendingTasks, taskId)
 	case stateRunning:
-		log.Warningf("Ignore status TASK_RUNNING because the the task is already running")
+		task.updatedTime = time.Now()
+		log.V(2).Info("Ignore status TASK_RUNNING because the the task is already running")
 	case stateFinished:
 		log.Warningf("Ignore status TASK_RUNNING because the the task is already finished")
 	default:
@@ -314,7 +340,7 @@ func (k *KubernetesScheduler) handleTaskFinished(taskStatus *mesos.TaskStatus) {
 		panic("Pending task finished, this couldn't happen")
 	case stateRunning:
 		log.V(2).Infof(
-			"Received finished status for running task: '%v', running/pod task queue length = %d/%d",
+			"received finished status for running task: %+v, running/pod task queue length = %d/%d",
 			taskStatus, len(k.runningTasks), len(k.podToTask))
 		delete(k.podToTask, task.podKey)
 		k.finishedTasks.Next().Value = taskId
@@ -327,7 +353,7 @@ func (k *KubernetesScheduler) handleTaskFinished(taskStatus *mesos.TaskStatus) {
 }
 
 func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Task failed: '%v'", taskStatus)
+	log.Errorf("task failed: %+v", taskStatus)
 	taskId := taskStatus.GetTaskId().GetValue()
 
 	switch task, state := k.getTask(taskId); state {
@@ -346,7 +372,7 @@ func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
 func (k *KubernetesScheduler) handleTaskKilled(taskStatus *mesos.TaskStatus) {
 	var task *PodTask
 	defer func() {
-		msg := fmt.Sprintf("task killed: '%v', task %+v", taskStatus, task)
+		msg := fmt.Sprintf("task killed: %+v, task %+v", taskStatus, task)
 		if task != nil && task.deleted {
 			// we were expecting this, nothing out of the ordinary
 			log.V(2).Infoln(msg)
@@ -367,15 +393,28 @@ func (k *KubernetesScheduler) handleTaskKilled(taskStatus *mesos.TaskStatus) {
 	}
 }
 
-func (k *KubernetesScheduler) handleTaskLost(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Task lost: '%v'", taskStatus)
-	taskId := taskStatus.GetTaskId().GetValue()
+func (k *KubernetesScheduler) handleTaskLost(driver sdriver.SchedulerDriver, status *mesos.TaskStatus) {
+	log.Errorf("task lost: %+v", status)
+	taskId := status.GetTaskId().GetValue()
 
 	switch task, state := k.getTask(taskId); state {
 	case statePending:
 		delete(k.pendingTasks, taskId)
 		fallthrough
 	case stateRunning:
+		if status.ExecutorId != nil && status.SlaveId != nil {
+			//TODO(jdef) this may not be meaningful once we have proper checkpointing and master detection
+			//If we're reconciling and receive this then the executor may be
+			//running a task that we need it to kill. It's possible that the framework
+			//is unrecognized by the master at this point, so KillTask is not guaranteed
+			//to do anything. The underlying driver transport may be able to send a
+			//FrameworkMessage directly to the slave to terminate the task.
+			log.V(2).Info("forwarding TASK_LOST message to executor %v on slave %v", status.ExecutorId, status.SlaveId)
+			data := fmt.Sprintf("task-lost:%s", taskId) //TODO(jdef) use a real message type
+			if _, err := driver.SendFrameworkMessage(status.ExecutorId, status.SlaveId, data); err != nil {
+				log.Error(err)
+			}
+		}
 		delete(k.runningTasks, taskId)
 		delete(k.podToTask, task.podKey)
 	}
@@ -414,9 +453,10 @@ func (k *KubernetesScheduler) ExecutorLost(driver sdriver.SchedulerDriver,
 	// TODO(yifan): Restart any unfinished tasks of the executor.
 }
 
-// Error is called when there is some error.
+// Error is called when there is an unrecoverable error in the scheduler or scheduler driver.
+// The driver should have been aborted before this is invoked.
 func (k *KubernetesScheduler) Error(driver sdriver.SchedulerDriver, message string) {
-	log.Errorf("Scheduler error: %v\n", message)
+	log.Fatalf("fatal scheduler error: %v\n", message)
 }
 
 func containsTask(finishedTasks *ring.Ring, taskId string) bool {
@@ -430,4 +470,72 @@ func containsTask(finishedTasks *ring.Ring, taskId string) bool {
 		}
 	}
 	return false
+}
+
+// intended to be invoked as a Reconciler.Action by Reconciler.Run
+func (k *KubernetesScheduler) ReconcileRunningTasks(driver sdriver.SchedulerDriver, canceled <-chan struct{}) error {
+	log.Info("reconcile running tasks")
+	remaining := make(map[string]bool)
+	statusList := []*mesos.TaskStatus{}
+	func() {
+		k.RLock()
+		defer k.RUnlock()
+		for taskId := range k.runningTasks {
+			remaining[taskId] = true
+			statusList = append(statusList, mutil.NewTaskStatus(mutil.NewTaskID(taskId), mesos.TaskState_TASK_RUNNING))
+		}
+	}()
+	if _, err := driver.ReconcileTasks(statusList); err != nil {
+		return err
+	}
+	start := time.Now()
+	const maxBackoff = 120 * time.Second
+	first := true
+	for backoff := 1 * time.Second; first || len(remaining) > 0; backoff = backoff * 2 {
+		first = false
+		//TODO(jdef) reconcileTasks(remaining, canceled)
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+		select {
+		case <-canceled:
+			return nil //TODO(jdef) should probably return a cancelation error
+		case <-time.After(backoff):
+			func() {
+				k.RLock()
+				defer k.RUnlock()
+				for taskId := range remaining {
+					if task, found := k.runningTasks[taskId]; found && task.updatedTime.Before(start) {
+						// keep this task in remaining list
+						continue
+					}
+					delete(remaining, taskId)
+				}
+			}()
+		}
+	}
+	return nil
+}
+
+type Reconciler struct {
+	Action  func(driver sdriver.SchedulerDriver, canceled <-chan struct{}) error
+	running int32 // 1 when Action is running, 0 otherwise
+}
+
+// execute task reconciliation, returns a cancelation channel or nil if reconciliation is already running.
+// a client may signal that reconciliation should be canceled by closing the cancelation channel.
+// no objects are ever read from, or written to, the cancelation channel.
+func (r *Reconciler) Run(driver sdriver.SchedulerDriver) <-chan struct{} {
+	if atomic.CompareAndSwapInt32(&r.running, 0, 1) {
+		canceled := make(chan struct{})
+		go func() {
+			defer atomic.StoreInt32(&r.running, 0)
+			err := r.Action(driver, canceled)
+			if err != nil {
+				log.Error(err)
+			}
+		}()
+		return canceled
+	}
+	return nil
 }
