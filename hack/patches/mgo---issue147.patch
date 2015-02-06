@@ -1,0 +1,23 @@
+diff --git a/scheduler/scheduler.go b/scheduler/scheduler.go
+index cdefc6d..33c13f6 100644
+--- a/scheduler/scheduler.go
++++ b/scheduler/scheduler.go
+@@ -458,8 +458,16 @@ func (driver *MesosSchedulerDriver) Start() (mesos.Status, error) {
+ 	}
+ 
+ 	// register framework
+-	message := &mesos.RegisterFrameworkMessage{
+-		Framework: driver.FrameworkInfo,
++	var message proto.Message
++	if driver.FrameworkInfo.Id != nil && len(driver.FrameworkInfo.Id.GetValue()) > 0 {
++		message = &mesos.ReregisterFrameworkMessage{
++			Framework: driver.FrameworkInfo,
++			Failover:  proto.Bool(true),
++		}
++	} else {
++		message = &mesos.RegisterFrameworkMessage{
++			Framework: driver.FrameworkInfo,
++		}
+ 	}
+ 
+ 	log.V(3).Infoln("Registering with master", driver.MasterPid)
