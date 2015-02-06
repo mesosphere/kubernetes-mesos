@@ -1,23 +1,185 @@
 diff --git a/scheduler/scheduler.go b/scheduler/scheduler.go
-index cdefc6d..33c13f6 100644
+index cdefc6d..8e56d44 100644
 --- a/scheduler/scheduler.go
 +++ b/scheduler/scheduler.go
-@@ -458,8 +458,16 @@ func (driver *MesosSchedulerDriver) Start() (mesos.Status, error) {
+@@ -21,6 +21,8 @@ package scheduler
+ import (
+ 	"flag"
+ 	"fmt"
++	"math"
++	"math/rand"
+ 	"os"
+ 	"os/user"
+ 	"sync"
+@@ -39,7 +41,9 @@ import (
+ )
+ 
+ const (
+-	authTimeout = 5 * time.Second // timeout interval for an authentication attempt
++	authTimeout                  = 5 * time.Second // timeout interval for an authentication attempt
++	registrationRetryIntervalMax = float64(1 * time.Minute)
++	registrationBackoffFactor    = 2 * time.Second
+ )
+ 
+ var (
+@@ -83,6 +87,8 @@ type MesosSchedulerDriver struct {
+ 	local           bool
+ 	checkpoint      bool
+ 	recoveryTimeout time.Duration
++	failoverTimeout float64
++	failover        bool
+ 	cache           *schedCache
+ 	updates         map[string]*mesos.StatusUpdate // Key is a UUID string.
+ 	tasks           map[string]*mesos.TaskInfo     // Key is a UUID string.
+@@ -138,6 +144,11 @@ func NewMesosSchedulerDriver(
+ 		connected:     false,
+ 		cache:         newSchedCache(),
+ 		credential:    credential,
++		failover:      framework.Id != nil && len(framework.Id.GetValue()) > 0,
++	}
++	if framework.FailoverTimeout != nil && *framework.FailoverTimeout > 0 {
++		driver.failoverTimeout = *framework.FailoverTimeout * float64(time.Second)
++		log.V(1).Infof("found failover_timeout = %v", time.Duration(driver.failoverTimeout))
  	}
  
- 	// register framework
+ 	if m, err := upid.Parse("master@" + master); err != nil {
+@@ -184,6 +195,8 @@ func (driver *MesosSchedulerDriver) setStatus(stat mesos.Status) {
+ }
+ 
+ func (driver *MesosSchedulerDriver) Stopped() bool {
++	driver.lock.RLock()
++	defer driver.lock.RUnlock()
+ 	return driver.stopped
+ }
+ 
+@@ -194,12 +207,17 @@ func (driver *MesosSchedulerDriver) setStopped(val bool) {
+ }
+ 
+ func (driver *MesosSchedulerDriver) Connected() bool {
++	driver.lock.RLock()
++	defer driver.lock.RUnlock()
+ 	return driver.connected
+ }
+ 
+ func (driver *MesosSchedulerDriver) setConnected(val bool) {
+ 	driver.lock.Lock()
+ 	driver.connected = val
++	if val {
++		driver.failover = false
++	}
+ 	driver.lock.Unlock()
+ }
+ 
+@@ -457,33 +475,95 @@ func (driver *MesosSchedulerDriver) Start() (mesos.Status, error) {
+ 		}
+ 	}
+ 
+-	// register framework
 -	message := &mesos.RegisterFrameworkMessage{
 -		Framework: driver.FrameworkInfo,
-+	var message proto.Message
-+	if driver.FrameworkInfo.Id != nil && len(driver.FrameworkInfo.Id.GetValue()) > 0 {
-+		message = &mesos.ReregisterFrameworkMessage{
-+			Framework: driver.FrameworkInfo,
-+			Failover:  proto.Bool(true),
-+		}
-+	} else {
-+		message = &mesos.RegisterFrameworkMessage{
-+			Framework: driver.FrameworkInfo,
-+		}
- 	}
+-	}
+-
+-	log.V(3).Infoln("Registering with master", driver.MasterPid)
+-	if err := driver.send(driver.MasterPid, message); err != nil {
+-		log.Errorf("Failed to send RegisterFramework message: %v\n", err)
+-		stat := driver.Status()
+-		err0 := driver.stop(stat)
+-		if err0 != nil {
+-			log.Errorf("Failed to stop executor %v\n", err)
+-			return stat, err0
+-		}
+-		return stat, err
+-	}
+-
+ 	driver.self = driver.messenger.UPID()
+ 	driver.setStatus(mesos.Status_DRIVER_RUNNING)
+ 	driver.setStopped(false)
++
+ 	log.Infoln("Mesos scheduler driver started with PID=", driver.self.String())
  
- 	log.V(3).Infoln("Registering with master", driver.MasterPid)
++	// register framework
++	// TODO(jdef) eventually do this asynchronously
++	driver.doReliableRegistration(float64(registrationBackoffFactor))
++
+ 	// TODO(VV) Monitor Master Connection
+ 
+ 	return driver.Status(), nil
+ }
+ 
++func (driver *MesosSchedulerDriver) doReliableRegistration(maxBackoff float64) {
++	for {
++		if !driver.registerOnce() {
++			return
++		}
++		maxBackoff = math.Min(maxBackoff, registrationRetryIntervalMax)
++
++		// If failover timeout is present, bound the maximum backoff
++		// by 1/10th of the failover timeout.
++		if driver.failoverTimeout > 0 {
++			maxBackoff = math.Min(maxBackoff, driver.failoverTimeout/10.0)
++		}
++
++		// Determine the delay for next attempt by picking a random
++		// duration between 0 and 'maxBackoff'.
++		delay := time.Duration(maxBackoff * rand.Float64())
++
++		log.V(1).Infof("will retry registration in %v if necessary", delay)
++
++		select {
++		case <-driver.stopCh:
++			return
++		case <-time.After(delay):
++			maxBackoff *= 2
++		}
++	}
++}
++
++// return true if we should attempt another registration later
++func (driver *MesosSchedulerDriver) registerOnce() (proceed bool) {
++
++	proceed = true
++	var failover bool
++
++	func() {
++		driver.lock.RLock()
++		defer driver.lock.RUnlock()
++
++		//TODO(jdef) also, check that we know which master to send to; if none, return false
++		//TODO(jdef) also, if authentication is also asynchronous, check if we have credentials && !authenticated, if so, return false
++		if driver.stopped || driver.connected {
++			proceed = false
++		}
++		failover = driver.failover
++	}()
++	if proceed {
++		// register framework
++		var message proto.Message
++		if driver.FrameworkInfo.Id != nil && len(driver.FrameworkInfo.Id.GetValue()) > 0 {
++			// not the first time, or failing over
++			message = &mesos.ReregisterFrameworkMessage{
++				Framework: driver.FrameworkInfo,
++				Failover:  proto.Bool(failover),
++			}
++		} else {
++			message = &mesos.RegisterFrameworkMessage{
++				Framework: driver.FrameworkInfo,
++			}
++		}
++
++		go func() {
++			log.V(1).Infoln("Registering with master", driver.MasterPid)
++			if err := driver.send(driver.MasterPid, message); err != nil {
++				log.Errorf("failed to send RegisterFramework message: %v", err)
++				stat := driver.Status()
++				if err = driver.stop(stat); err != nil {
++					log.Errorf("failed to stop scheduler driver: %v", err)
++				}
++			}
++		}()
++	}
++	return
++}
++
+ //Join blocks until the driver is stopped.
+ //Should follow a call to Start()
+ func (driver *MesosSchedulerDriver) Join() (mesos.Status, error) {

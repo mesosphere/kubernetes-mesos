@@ -22,7 +22,6 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"math"
 	"net"
 	"net/http"
 	"os/user"
@@ -74,7 +73,7 @@ var (
 	mesosAuthPrincipal  = flag.String("mesos_authentication_principal", "", "Mesos authentication principal.")
 	mesosAuthSecretFile = flag.String("mesos_authentication_secret_file", "", "Mesos authentication secret file.")
 	checkpoint          = flag.Bool("checkpoint", false, "Enable/disable checkpointing for the kubernetes-mesos framework.")
-	failoverTimeout     = flag.Float64("failover_timeout", float64(math.MaxInt32), fmt.Sprintf("Framework failover timeout, in ns."))
+	failoverTimeout     = flag.Float64("failover_timeout", time.Duration((1 <<62)-1).Seconds(), fmt.Sprintf("Framework failover timeout, in ns."))
 )
 
 func init() {
