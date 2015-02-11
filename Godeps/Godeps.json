@@ -222,6 +222,10 @@
 			"Comment": "v1.0.0",
 			"Rev": "da56de6a59e53fdd61be1b5d9b87df34c47ac420"
 		},
+                {
+                        "ImportPath": "github.com/samuel/go-zookeeper/zk",
+                        "Rev": "ad552be7b78b762b4a8040ffc5518bdaf5b7225d"
+                },
 		{
 			"ImportPath": "github.com/skratchdot/open-golang/open",
 			"Rev": "ba570a111973b539baf23c918213059543b5bb6e"
