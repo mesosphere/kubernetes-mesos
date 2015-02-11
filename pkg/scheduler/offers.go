@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	offerListenerMaxAge      = 30                     // max number of times we'll attempt to fit an offer to a listener before requiring them to re-register themselves
-	offerIdCacheTTL          = 500 * time.Millisecond // determines expiration of cached offer ids, used in listener notification
-	deferredDeclineTtlFactor = 2                      // this factor, multiplied by the offer ttl, determines how long to wait before attempting to decline previously claimed offers that were subsequently deleted, then released. see offerStorage.Delete
-	notifyListenersDelay     = 10 * time.Millisecond  // delay between offer listener notification attempts
+	offerListenerMaxAge      = 30              // max number of times we'll attempt to fit an offer to a listener before requiring them to re-register themselves
+	offerIdCacheTTL          = 1 * time.Second // determines expiration of cached offer ids, used in listener notification
+	deferredDeclineTtlFactor = 2               // this factor, multiplied by the offer ttl, determines how long to wait before attempting to decline previously claimed offers that were subsequently deleted, then released. see offerStorage.Delete
+	notifyListenersDelay     = 0               // delay between offer listener notification attempts
 )
 
 type OfferFilter func(*mesos.Offer) bool
@@ -281,11 +281,12 @@ func (s *offerStorage) Get(id string) (PerishableOffer, bool) {
 }
 
 type offerListener struct {
-	id       string
-	accepts  OfferFilter
-	notify   chan<- struct{}
-	age      int
-	deadline time.Time
+	id         string
+	accepts    OfferFilter
+	notify     chan<- struct{}
+	age        int
+	deadline   time.Time
+	sawVersion uint64
 }
 
 func (l *offerListener) GetUID() string {
@@ -342,11 +343,20 @@ func (s *offerStorage) nextListener() *offerListener {
 // notify listeners if we find an acceptable offer for them. listeners
 // are garbage collected after a certain age (see offerListenerMaxAge).
 // ids lists offer IDs that are retrievable from offer storage.
-func (s *offerStorage) notifyListeners(ids func() util.StringSet) {
+func (s *offerStorage) notifyListeners(ids func() (util.StringSet, uint64)) {
 	listener := s.nextListener() // blocking
 
+	offerIds, version := ids()
+	if listener.sawVersion == version {
+		// no changes to offer list, avoid growing older - just wait for new offers to arrive
+		listener.deadline = time.Now().Add(s.listenerDelay)
+		s.listeners.Offer(listener, queue.KeepExisting)
+		return
+	}
+	listener.sawVersion = version
+
 	// notify if we find an acceptable offer
-	for id := range ids() {
+	for id := range offerIds {
 		if offer, ok := s.Get(id); !ok || offer.HasExpired() {
 			continue
 		} else if listener.accepts(offer.Details()) {
@@ -378,8 +388,6 @@ func (s *offerStorage) Init() {
 		ttl:    offerIdCacheTTL,
 	}
 
-	// when the listeners queue grows large, this gives a little breathing room to
-	// the offers structure
 	go util.Forever(func() { s.notifyListeners(idCache.Strings) }, notifyListenersDelay)
 }
 
@@ -388,14 +396,16 @@ type stringsCache struct {
 	cached    util.StringSet
 	ttl       time.Duration
 	refill    func() util.StringSet
+	version   uint64
 }
 
 // not thread-safe
-func (c *stringsCache) Strings() util.StringSet {
+func (c *stringsCache) Strings() (util.StringSet, uint64) {
 	now := time.Now()
 	if c.expiresAt.Before(now) {
 		c.cached = c.refill()
 		c.expiresAt = now.Add(c.ttl)
+		c.version++
 	}
-	return c.cached
+	return c.cached, c.version
 }
