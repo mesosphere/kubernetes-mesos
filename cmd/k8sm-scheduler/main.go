@@ -46,7 +46,7 @@ import (
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	mutil "github.com/mesos/mesos-go/mesosutil"
-	sdriver "github.com/mesos/mesos-go/scheduler"
+	bindings "github.com/mesos/mesos-go/scheduler"
 	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
@@ -209,7 +209,7 @@ func main() {
 		log.Fatalf("Misconfigured mesos framework: %v", err)
 	}
 	masterUri := kmcloud.MasterURI()
-	driver, err := sdriver.NewMesosSchedulerDriver(mesosPodScheduler, info, masterUri, cred)
+	driver, err := bindings.NewMesosSchedulerDriver(mesosPodScheduler, info, masterUri, cred)
 	if err != nil {
 		log.Fatalf("failed to create mesos scheduler driver: %v", err)
 	}

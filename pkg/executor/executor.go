@@ -11,7 +11,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	"github.com/gogo/protobuf/proto"
 	log "github.com/golang/glog"
-	edriver "github.com/mesos/mesos-go/executor"
+	bindings "github.com/mesos/mesos-go/executor"
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/messages"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
@@ -55,7 +55,7 @@ func New(kl *kubelet.Kubelet, ch chan<- interface{}, ns string, cl *client.Clien
 }
 
 // Registered is called when the executor is successfully registered with the slave.
-func (k *KubernetesExecutor) Registered(driver edriver.ExecutorDriver,
+func (k *KubernetesExecutor) Registered(driver bindings.ExecutorDriver,
 	executorInfo *mesos.ExecutorInfo, frameworkInfo *mesos.FrameworkInfo, slaveInfo *mesos.SlaveInfo) {
 	log.Infof("Executor %v of framework %v registered with slave %v\n",
 		executorInfo, frameworkInfo, slaveInfo)
@@ -64,19 +64,19 @@ func (k *KubernetesExecutor) Registered(driver edriver.ExecutorDriver,
 
 // Reregistered is called when the executor is successfully re-registered with the slave.
 // This can happen when the slave fails over.
-func (k *KubernetesExecutor) Reregistered(driver edriver.ExecutorDriver, slaveInfo *mesos.SlaveInfo) {
+func (k *KubernetesExecutor) Reregistered(driver bindings.ExecutorDriver, slaveInfo *mesos.SlaveInfo) {
 	log.Infof("Reregistered with slave %v\n", slaveInfo)
 	k.registered = true
 }
 
 // Disconnected is called when the executor is disconnected with the slave.
-func (k *KubernetesExecutor) Disconnected(driver edriver.ExecutorDriver) {
+func (k *KubernetesExecutor) Disconnected(driver bindings.ExecutorDriver) {
 	log.Infof("Slave is disconnected\n")
 	k.registered = false
 }
 
 // LaunchTask is called when the executor receives a request to launch a task.
-func (k *KubernetesExecutor) LaunchTask(driver edriver.ExecutorDriver, taskInfo *mesos.TaskInfo) {
+func (k *KubernetesExecutor) LaunchTask(driver bindings.ExecutorDriver, taskInfo *mesos.TaskInfo) {
 	log.Infof("Launch task %v\n", taskInfo)
 
 	if !k.registered {
@@ -103,7 +103,7 @@ func (k *KubernetesExecutor) getPidInfo(name string) (api.PodInfo, error) {
 	return k.kl.GetPodInfo(name, "")
 }
 
-func (k *KubernetesExecutor) launchTask(driver edriver.ExecutorDriver, taskInfo *mesos.TaskInfo) {
+func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskInfo *mesos.TaskInfo) {
 	// Get the bound pod spec from the taskInfo.
 	var pod api.BoundPod
 	if err := yaml.Unmarshal(taskInfo.GetData(), &pod); err != nil {
@@ -171,7 +171,7 @@ func (k *KubernetesExecutor) launchTask(driver edriver.ExecutorDriver, taskInfo 
 	go k._launchTask(driver, taskInfo, podFullName)
 }
 
-func (k *KubernetesExecutor) _launchTask(driver edriver.ExecutorDriver, taskInfo *mesos.TaskInfo, podFullName string) {
+func (k *KubernetesExecutor) _launchTask(driver bindings.ExecutorDriver, taskInfo *mesos.TaskInfo, podFullName string) {
 	expires := time.Now().Add(launchGracePeriod)
 	taskId := taskInfo.GetTaskId()
 	for {
@@ -224,7 +224,7 @@ func (k *KubernetesExecutor) _launchTask(driver edriver.ExecutorDriver, taskInfo
 	k.reportLostTask(driver, taskId.GetValue(), messages.LaunchTaskFailed)
 }
 
-func (k *KubernetesExecutor) __launchTask(driver edriver.ExecutorDriver, taskInfo *mesos.TaskInfo, podFullName string) {
+func (k *KubernetesExecutor) __launchTask(driver bindings.ExecutorDriver, taskInfo *mesos.TaskInfo, podFullName string) {
 	// TODO(nnielsen): Monitor health of pod and report if lost.
 	// Should we also allow this to fail a couple of times before reporting lost?
 	// What if the docker daemon is restarting and we can't connect, but it's
@@ -247,7 +247,7 @@ func (k *KubernetesExecutor) __launchTask(driver edriver.ExecutorDriver, taskInf
 // whether the pod is running. It will only return false if the task is still registered and the pod is
 // registered in Docker. Otherwise it returns true. If there's still a task record on file, but no pod
 // in Docker, then we'll also send a TASK_LOST event.
-func (k *KubernetesExecutor) checkForLostPodTask(driver edriver.ExecutorDriver, taskInfo *mesos.TaskInfo, isKnownPod func() bool) bool {
+func (k *KubernetesExecutor) checkForLostPodTask(driver bindings.ExecutorDriver, taskInfo *mesos.TaskInfo, isKnownPod func() bool) bool {
 	// TODO (jdefelice) don't send false alarms for deleted pods (KILLED tasks)
 	k.lock.Lock()
 	defer k.lock.Unlock()
@@ -271,7 +271,7 @@ func (k *KubernetesExecutor) checkForLostPodTask(driver edriver.ExecutorDriver, 
 }
 
 // KillTask is called when the executor receives a request to kill a task.
-func (k *KubernetesExecutor) KillTask(driver edriver.ExecutorDriver, taskId *mesos.TaskID) {
+func (k *KubernetesExecutor) KillTask(driver bindings.ExecutorDriver, taskId *mesos.TaskID) {
 	k.lock.Lock()
 	defer k.lock.Unlock()
 
@@ -288,7 +288,7 @@ func (k *KubernetesExecutor) KillTask(driver edriver.ExecutorDriver, taskId *mes
 
 // Kills the pod associated with the given task. Assumes that the caller is locking around
 // pod and task storage.
-func (k *KubernetesExecutor) killPodForTask(driver edriver.ExecutorDriver, tid, reason string) {
+func (k *KubernetesExecutor) killPodForTask(driver bindings.ExecutorDriver, tid, reason string) {
 	task, ok := k.tasks[tid]
 	if !ok {
 		log.Infof("Failed to kill task, unknown task %v\n", tid)
@@ -317,7 +317,7 @@ func (k *KubernetesExecutor) killPodForTask(driver edriver.ExecutorDriver, tid, 
 
 // Reports a lost task to the slave and updates internal task and pod tracking state.
 // Assumes that the caller is locking around pod and task state.
-func (k *KubernetesExecutor) reportLostTask(driver edriver.ExecutorDriver, tid, reason string) {
+func (k *KubernetesExecutor) reportLostTask(driver bindings.ExecutorDriver, tid, reason string) {
 	task, ok := k.tasks[tid]
 	if !ok {
 		log.Infof("Failed to report lost task, unknown task %v\n", tid)
@@ -345,7 +345,7 @@ func (k *KubernetesExecutor) reportLostTask(driver edriver.ExecutorDriver, tid, 
 }
 
 // FrameworkMessage is called when the framework sends some message to the executor
-func (k *KubernetesExecutor) FrameworkMessage(driver edriver.ExecutorDriver, message string) {
+func (k *KubernetesExecutor) FrameworkMessage(driver bindings.ExecutorDriver, message string) {
 	log.Infof("Receives message from framework %v\n", message)
 	//TODO(jdef) master reported a lost task, reconcile this! @see scheduler.go:handleTaskLost
 	if strings.HasPrefix("task-lost:", message) && len(message) > 10 {
@@ -358,7 +358,7 @@ func (k *KubernetesExecutor) FrameworkMessage(driver edriver.ExecutorDriver, mes
 }
 
 // Shutdown is called when the executor receives a shutdown request.
-func (k *KubernetesExecutor) Shutdown(driver edriver.ExecutorDriver) {
+func (k *KubernetesExecutor) Shutdown(driver bindings.ExecutorDriver) {
 	log.Infof("Shutdown the executor\n")
 
 	k.lock.Lock()
@@ -370,11 +370,11 @@ func (k *KubernetesExecutor) Shutdown(driver edriver.ExecutorDriver) {
 }
 
 // Error is called when some error happens.
-func (k *KubernetesExecutor) Error(driver edriver.ExecutorDriver, message string) {
+func (k *KubernetesExecutor) Error(driver bindings.ExecutorDriver, message string) {
 	log.Errorf("Executor error: %v\n", message)
 }
 
-func (k *KubernetesExecutor) sendStatusUpdate(driver edriver.ExecutorDriver, taskId *mesos.TaskID, state mesos.TaskState, message string) {
+func (k *KubernetesExecutor) sendStatusUpdate(driver bindings.ExecutorDriver, taskId *mesos.TaskID, state mesos.TaskState, message string) {
 	statusUpdate := &mesos.TaskStatus{
 		TaskId:  taskId,
 		State:   &state,

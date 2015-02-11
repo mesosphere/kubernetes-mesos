@@ -22,7 +22,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
 	"github.com/fsouza/go-dockerclient"
 	log "github.com/golang/glog"
-	edriver "github.com/mesos/mesos-go/executor"
+	bindings "github.com/mesos/mesos-go/executor"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor"
 )
 
@@ -131,7 +131,7 @@ func main() {
 		}
 
 		exec := executor.New(k.Kubelet, updates, MESOS_CFG_SOURCE, apiClient)
-		if driver, err := edriver.NewMesosExecutorDriver(exec); err != nil {
+		if driver, err := bindings.NewMesosExecutorDriver(exec); err != nil {
 			log.Fatalf("failed to create executor driver: %v", err)
 		} else {
 			k.driver = driver
@@ -161,7 +161,7 @@ func main() {
 type kubeletExecutor struct {
 	*kubelet.Kubelet
 	initialize sync.Once
-	driver     edriver.ExecutorDriver
+	driver     bindings.ExecutorDriver
 }
 
 func (kl *kubeletExecutor) reconcileTasks(dockerClient dockertools.DockerInterface) {
