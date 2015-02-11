@@ -739,7 +739,7 @@ func (s *schedulingPlugin) reconcilePod(oldPod api.Pod) {
 
 			if _, exists := s.api.taskForPod(podKey); exists {
 				//TODO(jdef) reconcile the task
-				log.Error("task already registered for pod %v", pod.Name)
+				log.Errorf("task already registered for pod %v", pod.Name)
 				return
 			}
 
@@ -753,7 +753,7 @@ func (s *schedulingPlugin) reconcilePod(oldPod api.Pod) {
 			// not sure how this happened behind our backs. attempt to reconstruct
 			// at least a partial PodTask record.
 			//TODO(jdef) reconcile the task
-			log.Error("pod already scheduled: %v", pod.Name)
+			log.Errorf("pod already scheduled: %v", pod.Name)
 		}
 	} else {
 		//TODO(jdef) for now, ignore the fact that the rest of the spec may be different

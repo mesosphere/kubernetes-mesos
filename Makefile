@@ -36,7 +36,7 @@ DESTDIR		?= /target
 # default build tags
 TAGS		?=
 
-.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test patch version test.v clean
+.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test patch version test.v clean vet
 
 ifneq ($(WITH_MESOS_DIR),)
 
@@ -98,6 +98,9 @@ clean:
 
 format: require-gopath
 	go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
+
+vet: require-gopath
+	go vet $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
 
 test test.v: require-gopath
 	test "$@" = "test.v" && args="-test.v" || args=""; \
