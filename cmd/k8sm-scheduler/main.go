@@ -19,6 +19,7 @@ limitations under the License.
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -73,7 +74,7 @@ var (
 	mesosAuthPrincipal  = flag.String("mesos_authentication_principal", "", "Mesos authentication principal.")
 	mesosAuthSecretFile = flag.String("mesos_authentication_secret_file", "", "Mesos authentication secret file.")
 	checkpoint          = flag.Bool("checkpoint", false, "Enable/disable checkpointing for the kubernetes-mesos framework.")
-	failoverTimeout     = flag.Float64("failover_timeout", time.Duration((1 <<62)-1).Seconds(), fmt.Sprintf("Framework failover timeout, in ns."))
+	failoverTimeout     = flag.Float64("failover_timeout", time.Duration((1<<62)-1).Seconds(), fmt.Sprintf("Framework failover timeout, in ns."))
 )
 
 func init() {
@@ -285,6 +286,9 @@ func buildFrameworkInfo(client tools.EtcdClient) (info *mesos.FrameworkInfo, cre
 	}
 	if *mesosAuthPrincipal != "" {
 		info.Principal = proto.String(*mesosAuthPrincipal)
+		if *mesosAuthSecretFile == "" {
+			return nil, nil, errors.New("authentication principal specified without the required credentials file")
+		}
 		secret, err := ioutil.ReadFile(*mesosAuthSecretFile)
 		if err != nil {
 			return nil, nil, err
