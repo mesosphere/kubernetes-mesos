@@ -2,6 +2,8 @@ package scheduler
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"sync"
 	"time"
 
@@ -355,6 +357,23 @@ func newQueuer(store queue.FIFO) *queuer {
 	return q
 }
 
+func (q *queuer) installDebugHandlers() {
+	http.HandleFunc("/debug/scheduler/podqueue", func(w http.ResponseWriter, r *http.Request) {
+		for _, x := range q.podQueue.List() {
+			if _, err := io.WriteString(w, fmt.Sprintf("%+v\n", x)); err != nil {
+				break
+			}
+		}
+	})
+	http.HandleFunc("/debug/scheduler/podstore", func(w http.ResponseWriter, r *http.Request) {
+		for _, x := range q.podStore.List() {
+			if _, err := io.WriteString(w, fmt.Sprintf("%+v\n", x)); err != nil {
+				break
+			}
+		}
+	})
+}
+
 // signal that there are probably pod updates waiting to be processed
 func (q *queuer) updatesAvailable() {
 	q.deltaCond.Broadcast()
@@ -416,14 +435,18 @@ func (q *queuer) Run() {
 
 			pod := p.(*Pod)
 			if pod.Status.Host != "" {
+				log.V(3).Infof("dequeuing pod for scheduling: %v", pod.Pod.Name)
 				q.dequeue(pod.GetUID())
 			} else {
 				// use ReplaceExisting because we are always pushing the latest state
 				now := time.Now()
 				pod.deadline = &now
-				q.podQueue.Offer(pod, queue.ReplaceExisting)
-				q.unscheduledCond.Broadcast()
-				log.V(3).Infof("queued pod for scheduling: %v", pod.Pod.Name)
+				if q.podQueue.Offer(pod, queue.ReplaceExisting) {
+					q.unscheduledCond.Broadcast()
+					log.V(3).Infof("queued pod for scheduling: %v", pod.Pod.Name)
+				} else {
+					log.Warningf("failed to queue pod for scheduling: %v", pod.Pod.Name)
+				}
 			}
 		}
 	}, 1*time.Second)
@@ -532,6 +555,7 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 			}))
 		}
 		delay := k.backoff.getBackoff(podKey)
+		log.V(3).Infof("requeuing pod %v with delay %v", podKey, delay)
 		k.qr.requeue(&Pod{Pod: pod, delay: &delay, notify: breakoutEarly})
 	default:
 		log.V(2).Infof("Task is no longer pending, aborting reschedule for pod %v", podKey)
@@ -647,6 +671,7 @@ func (k *KubernetesScheduler) NewPluginConfig(startLatch <-chan struct{}) *Plugi
 			q.Run()
 		}
 	}()
+	q.installDebugHandlers()
 	return &PluginConfig{
 		Config: &plugin.Config{
 			MinionLister: nil,
@@ -744,6 +769,7 @@ func (s *schedulingPlugin) reconcilePod(oldPod api.Pod) {
 			}
 
 			now := time.Now()
+			log.V(3).Infof("reoffering pod %v", podKey)
 			s.qr.reoffer(&Pod{
 				Pod:      pod,
 				deadline: &now,

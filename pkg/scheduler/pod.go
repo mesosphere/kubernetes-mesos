@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
@@ -47,4 +48,9 @@ func (dp *Pod) GetDelay() time.Duration {
 
 func (p *Pod) Breaker() queue.BreakChan {
 	return p.notify
+}
+
+func (p *Pod) String() string {
+	deadline, ok := p.Deadline()
+	return fmt.Sprintf("{pod:%v, deadline:(%v,%v), delay:%v}", p.Pod.Name, ok, deadline, p.GetDelay())
 }

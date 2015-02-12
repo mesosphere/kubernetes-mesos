@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"fmt"
+	"reflect"
 	"sync/atomic"
 	"time"
 
@@ -13,7 +14,7 @@ import (
 )
 
 const (
-	offerListenerMaxAge      = 30              // max number of times we'll attempt to fit an offer to a listener before requiring them to re-register themselves
+	offerListenerMaxAge      = 12              // max number of times we'll attempt to fit an offer to a listener before requiring them to re-register themselves
 	offerIdCacheTTL          = 1 * time.Second // determines expiration of cached offer ids, used in listener notification
 	deferredDeclineTtlFactor = 2               // this factor, multiplied by the offer ttl, determines how long to wait before attempting to decline previously claimed offers that were subsequently deleted, then released. see offerStorage.Delete
 	notifyListenersDelay     = 0               // delay between offer listener notification attempts
@@ -403,9 +404,12 @@ type stringsCache struct {
 func (c *stringsCache) Strings() (util.StringSet, uint64) {
 	now := time.Now()
 	if c.expiresAt.Before(now) {
+		old := c.cached
 		c.cached = c.refill()
 		c.expiresAt = now.Add(c.ttl)
-		c.version++
+		if !reflect.DeepEqual(old, c.cached) {
+			c.version++
+		}
 	}
 	return c.cached, c.version
 }

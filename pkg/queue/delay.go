@@ -65,12 +65,23 @@ func (q *DelayQueue) Add(d Delayed) {
 
 	q.lock.Lock()
 	defer q.lock.Unlock()
+
+	// readd using the original deadline computed from the original delay
+	var readd func(*qitem)
+	readd = func(qp *qitem) {
+		q.lock.Lock()
+		defer q.lock.Unlock()
+		heap.Push(&q.queue, &qitem{
+			value:    d,
+			priority: deadline,
+			readd:    readd,
+		})
+		q.cond.Broadcast()
+	}
 	heap.Push(&q.queue, &qitem{
 		value:    d,
 		priority: deadline,
-		readd: func(qp *qitem) {
-			q.Add(qp.value.(Delayed))
-		},
+		readd:    readd,
 	})
 	q.cond.Broadcast()
 }
@@ -194,7 +205,11 @@ func (q *DelayFIFO) cond() *sync.Cond {
 func (q *DelayFIFO) Add(d UniqueDelayed, rp ReplacementPolicy) {
 	deadline := extractFromDelayed(d)
 	id := d.GetUID()
-	q.add(id, deadline, d, rp, func(qp *qitem) { q.Add(qp.value.(UniqueDelayed), KeepExisting) })
+	var adder func(*qitem)
+	adder = func(*qitem) {
+		q.add(id, deadline, d, KeepExisting, adder)
+	}
+	q.add(id, deadline, d, rp, adder)
 }
 
 func (q *DelayFIFO) Offer(d UniqueDeadlined, rp ReplacementPolicy) bool {
