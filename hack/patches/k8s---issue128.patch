@@ -43,10 +43,10 @@ index cc6aa58..dc3043d 100644
  	health.AddHealthChecker(&health.TCPHealthChecker{})
  }
 diff --git a/pkg/standalone/standalone.go b/pkg/standalone/standalone.go
-index b9af29a..ff5bc4b 100644
+index b9af29a..76846bd 100644
 --- a/pkg/standalone/standalone.go
 +++ b/pkg/standalone/standalone.go
-@@ -143,15 +143,29 @@ func SimpleRunKubelet(etcdClient tools.EtcdClient, dockerClient dockertools.Dock
+@@ -143,16 +143,29 @@ func SimpleRunKubelet(etcdClient tools.EtcdClient, dockerClient dockertools.Dock
  		EnableDebuggingHandlers: true,
  		SyncFrequency:           3 * time.Second,
  	}
@@ -74,11 +74,12 @@ index b9af29a..ff5bc4b 100644
  //   3 Standalone 'kubernetes' binary
  // Eventually, #2 will be replaced with instances of #3
 -func RunKubelet(kcfg *KubeletConfig) {
+-	kubelet.SetupEventSending(kcfg.AuthPath, kcfg.ApiServerList)
 +func RunKubelet(kcfg *KubeletConfig, builder KubeletBuilder) {
- 	kubelet.SetupEventSending(kcfg.AuthPath, kcfg.ApiServerList)
  	kubelet.SetupLogging()
  	kubelet.SetupCapabilities(kcfg.AllowPrivileged)
-@@ -161,8 +175,10 @@ func RunKubelet(kcfg *KubeletConfig) {
+ 
+@@ -161,8 +174,10 @@ func RunKubelet(kcfg *KubeletConfig) {
  		kubelet.SetupRootDirectoryOrDie(kcfg.RootDirectory)
  	}
  
@@ -91,7 +92,7 @@ index b9af29a..ff5bc4b 100644
  	// process pods and exit.
  	if kcfg.Runonce {
  		if _, err := k.RunOnce(cfg.Updates()); err != nil {
-@@ -173,15 +189,15 @@ func RunKubelet(kcfg *KubeletConfig) {
+@@ -173,15 +188,15 @@ func RunKubelet(kcfg *KubeletConfig) {
  	}
  }
  
@@ -110,13 +111,14 @@ index b9af29a..ff5bc4b 100644
  	}
  }
  
-@@ -237,11 +253,14 @@ type KubeletConfig struct {
+@@ -237,11 +252,15 @@ type KubeletConfig struct {
  	Runonce                 bool
  }
  
 -func createAndInitKubelet(kc *KubeletConfig, pc *config.PodConfig) *kubelet.Kubelet {
 +func createAndInitKubelet(kc *KubeletConfig) (k KubeletBootstrap, pc *config.PodConfig) {
 +
++	kubelet.SetupEventSending(kc.AuthPath, kc.ApiServerList)
 +	pc = makePodSourceConfig(kc)
 +
  	// TODO: block until all sources have delivered at least one update to the channel, or break the sync loop

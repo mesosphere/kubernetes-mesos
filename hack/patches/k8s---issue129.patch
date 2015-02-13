@@ -1,8 +1,16 @@
 diff --git a/pkg/kubelet/util.go b/pkg/kubelet/util.go
-index cc6aa58..0fa4fbe 100644
+index cc6aa58..5d4a5b5 100644
 --- a/pkg/kubelet/util.go
 +++ b/pkg/kubelet/util.go
-@@ -98,14 +96,17 @@ func SetupLogging() {
+@@ -30,6 +30,7 @@ import (
+ 	"github.com/GoogleCloudPlatform/kubernetes/pkg/clientauth"
+ 	"github.com/GoogleCloudPlatform/kubernetes/pkg/health"
+ 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
++	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
+ 	"github.com/coreos/go-etcd/etcd"
+ 	"github.com/golang/glog"
+ 	cadvisor "github.com/google/cadvisor/client"
+@@ -98,14 +97,17 @@ func SetupLogging() {
  }
  
  // TODO: move this into pkg/client
@@ -28,7 +36,13 @@ index cc6aa58..0fa4fbe 100644
  	}
  	if len(apiServerList) < 1 {
  		return nil, fmt.Errorf("no apiservers specified.")
-@@ -127,7 +128,7 @@ func SetupEventSending(authPath string, apiServerList util.StringList) {
+@@ -122,22 +124,23 @@ func getApiserverClient(authPath string, apiServerList util.StringList) (*client
+ 	}
+ }
+ 
+-func SetupEventSending(authPath string, apiServerList util.StringList) {
++func SetupEventSending(authPath string, apiServerList util.StringList) watch.Interface {
+ 	// Make an API client if possible.
  	if len(apiServerList) < 1 {
  		glog.Info("No api servers specified.")
  	} else {
@@ -37,3 +51,15 @@ index cc6aa58..0fa4fbe 100644
  			glog.Errorf("Unable to make apiserver client: %v", err)
  		} else {
  			// Send events to APIserver if there is a client.
+ 			hostname := util.GetHostname("")
+ 			glog.Infof("Sending events to APIserver.")
+-			record.StartRecording(apiClient.Events(""),
++			return record.StartRecording(apiClient.Events(""),
+ 				api.EventSource{
+ 					Component: "kubelet",
+ 					Host:      hostname,
+ 				})
+ 		}
+ 	}
++	return nil
+ }

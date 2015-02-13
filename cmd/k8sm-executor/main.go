@@ -15,12 +15,10 @@ import (
 	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	kconfig "github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/config"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/standalone"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
-	"github.com/fsouza/go-dockerclient"
 	log "github.com/golang/glog"
 	bindings "github.com/mesos/mesos-go/executor"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor"
@@ -100,8 +98,10 @@ func main() {
 		EtcdClient:              kubelet.EtcdClientOrDie(etcdServerList, *etcdConfigFile),
 	}
 
+	finished := make(chan struct{})
 	// @see kubernetes/pkg/standalone.go:createAndInitKubelet
 	builder := standalone.KubeletBuilder(func(kc *standalone.KubeletConfig) (standalone.KubeletBootstrap, *kconfig.PodConfig) {
+		watch := kubelet.SetupEventSending(kc.AuthPath, kc.ApiServerList)
 		pc := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
 		updates := pc.Channel(MESOS_CFG_SOURCE)
 
@@ -123,6 +123,7 @@ func main() {
 				pc.SeenAllSources,
 				kc.ClusterDomain,
 				net.IP(kc.ClusterDNS)),
+			finished: finished,
 		}
 		//TODO(jdef) would be nice to share the same api client instance as the kubelet event recorder
 		apiClient, err := kubelet.GetApiserverClient(kc.AuthPath, kc.ApiServerList)
@@ -130,7 +131,7 @@ func main() {
 			log.Fatalf("Failed to configure API server client: %v", err)
 		}
 
-		exec := executor.New(k.Kubelet, updates, MESOS_CFG_SOURCE, apiClient)
+		exec := executor.New(k.Kubelet, updates, MESOS_CFG_SOURCE, apiClient, watch, kc.DockerClient)
 		if driver, err := bindings.NewMesosExecutorDriver(exec); err != nil {
 			log.Fatalf("failed to create executor driver: %v", err)
 		} else {
@@ -140,7 +141,7 @@ func main() {
 		log.V(2).Infof("Initialize executor driver...")
 
 		k.BirthCry()
-		k.reconcileTasks(kc.DockerClient)
+		executor.KillKubeletContainers(kc.DockerClient)
 
 		go k.GarbageCollectLoop()
 		// go k.MonitorCAdvisor(kc.CAdvisorPort) // TODO(jdef) support cadvisor at some point
@@ -155,32 +156,17 @@ func main() {
 	log.Infoln("Waiting for driver initialization to complete")
 
 	// block until driver is shut down
-	select {}
+	select {
+	case <-finished:
+	}
 }
 
+// kubelet decorator
 type kubeletExecutor struct {
 	*kubelet.Kubelet
 	initialize sync.Once
 	driver     bindings.ExecutorDriver
-}
-
-func (kl *kubeletExecutor) reconcileTasks(dockerClient dockertools.DockerInterface) {
-	// TODO(jdef): Destroy existing k8s containers for now - we don't know how to reconcile yet.
-	if containers, err := dockertools.GetKubeletDockerContainers(dockerClient, true); err == nil {
-		opts := docker.RemoveContainerOptions{
-			RemoveVolumes: true,
-			Force:         true,
-		}
-		for _, container := range containers {
-			opts.ID = container.ID
-			log.V(2).Infof("Removing container: %v", opts.ID)
-			if err := dockerClient.RemoveContainer(opts); err != nil {
-				log.Warning(err)
-			}
-		}
-	} else {
-		log.Warningf("Failed to list kubelet docker containers: %v", err)
-	}
+	finished   chan struct{} // closed once driver.Run() completes
 }
 
 func (kl *kubeletExecutor) ListenAndServe(address net.IP, port uint, enableDebuggingHandlers bool) {
@@ -189,11 +175,11 @@ func (kl *kubeletExecutor) ListenAndServe(address net.IP, port uint, enableDebug
 	kl.initialize.Do(func() {
 		go util.Forever(runProxyService, 5*time.Second)
 		go func() {
+			defer close(kl.finished)
 			if _, err := kl.driver.Run(); err != nil {
 				log.Fatalf("failed to start executor driver: %v", err)
-			} else {
-				log.V(2).Infof("Executor driver is running!")
 			}
+			log.Info("executor Run completed")
 		}()
 
 		// TODO(who?) Recover running containers from check pointed pod list.
