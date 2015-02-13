@@ -1,8 +1,6 @@
 package scheduler
 
 import (
-	"container/ring"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -14,18 +12,16 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
-	mutil "github.com/mesos/mesos-go/mesosutil"
 	bindings "github.com/mesos/mesos-go/scheduler"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/messages"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 )
 
 const (
-	defaultFinishedTasksSize = 1024 // size of the finished task history buffer
-	defaultOfferTTL          = 5    // seconds that an offer is viable, prior to being expired
-	defaultOfferLingerTTL    = 120  // seconds that an expired offer lingers in history
-	defaultListenerDelay     = 1    // number of seconds between offer listener notifications
-	defaultUpdatesBacklog    = 2048 // size of the pod updates channel
+	defaultOfferTTL       = 5    // seconds that an offer is viable, prior to being expired
+	defaultOfferLingerTTL = 120  // seconds that an expired offer lingers in history
+	defaultListenerDelay  = 1    // number of seconds between offer listener notifications
+	defaultUpdatesBacklog = 2048 // size of the pod updates channel
 )
 
 type Slave struct {
@@ -57,6 +53,7 @@ type KubernetesScheduler struct {
 	// We use a lock here to avoid races
 	// between invoking the mesos callback
 	// and the invoking the pod registry interfaces.
+	// In particular, changes to PodTask objects are currently guarded by this lock.
 	*sync.RWMutex
 
 	// Mesos context.
@@ -66,23 +63,12 @@ type KubernetesScheduler struct {
 	masterInfo  *mesos.MasterInfo
 	registered  bool
 
-	offers OfferRegistry
+	offers       OfferRegistry
+	slaves       map[string]*Slave // SlaveID => slave.
+	slaveIDs     map[string]string // Slave's hostname => slaveID
+	taskRegistry TaskRegistry
 
-	// SlaveID => slave.
-	slaves map[string]*Slave
-
-	// Slave's hostname => slaveID
-	slaveIDs map[string]string
-
-	// Fields for task information book keeping.
-	pendingTasks  map[string]*PodTask
-	runningTasks  map[string]*PodTask
-	finishedTasks *ring.Ring
-
-	podToTask map[string]string
-
-	// The function that does scheduling.
-	scheduleFunc PodScheduleFunc
+	scheduleFunc PodScheduleFunc // The function that does scheduling.
 
 	client     *client.Client
 	plugin     PluginInterface
@@ -106,31 +92,14 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 			lingerTtl:     defaultOfferLingerTTL * time.Second, // remember expired offers so that we can tell if a previously scheduler offer relies on one
 			listenerDelay: defaultListenerDelay * time.Second,
 		}),
-		slaves:        make(map[string]*Slave),
-		slaveIDs:      make(map[string]string),
-		pendingTasks:  make(map[string]*PodTask),
-		runningTasks:  make(map[string]*PodTask),
-		finishedTasks: ring.New(defaultFinishedTasksSize),
-		podToTask:     make(map[string]string),
-		scheduleFunc:  scheduleFunc,
-		client:        client,
-		etcdClient:    etcdClient,
+		slaves:       make(map[string]*Slave),
+		slaveIDs:     make(map[string]string),
+		taskRegistry: NewInMemoryTaskRegistry(),
+		scheduleFunc: scheduleFunc,
+		client:       client,
+		etcdClient:   etcdClient,
 	}
 	return k
-}
-
-// assume that the caller has already locked around access to task state
-func (k *KubernetesScheduler) getTask(taskId string) (*PodTask, stateType) {
-	if task, found := k.runningTasks[taskId]; found {
-		return task, stateRunning
-	}
-	if task, found := k.pendingTasks[taskId]; found {
-		return task, statePending
-	}
-	if containsTask(k.finishedTasks, taskId) {
-		return nil, stateFinished
-	}
-	return nil, stateUnknown
 }
 
 func (k *KubernetesScheduler) Init(d bindings.SchedulerDriver, pl PluginInterface) {
@@ -206,11 +175,17 @@ func (k *KubernetesScheduler) ResourceOffers(driver bindings.SchedulerDriver, of
 	}
 }
 
-// requires the caller to have locked the offers and slaves state
-func (k *KubernetesScheduler) deleteOffer(oid string) {
+// OfferRescinded is called when the resources are recinded from the scheduler.
+func (k *KubernetesScheduler) OfferRescinded(driver bindings.SchedulerDriver, offerId *mesos.OfferID) {
+	log.Infof("Offer rescinded %v\n", offerId)
+
+	oid := offerId.GetValue()
 	if offer, ok := k.offers.Get(oid); ok {
 		k.offers.Delete(oid)
 		if details := offer.Details(); details != nil {
+			k.Lock()
+			defer k.Unlock()
+
 			slaveId := details.GetSlaveId().GetValue()
 
 			if slave, found := k.slaves[slaveId]; !found {
@@ -222,201 +197,51 @@ func (k *KubernetesScheduler) deleteOffer(oid string) {
 	}
 }
 
-// OfferRescinded is called when the resources are recinded from the scheduler.
-func (k *KubernetesScheduler) OfferRescinded(driver bindings.SchedulerDriver, offerId *mesos.OfferID) {
-	log.Infof("Offer rescinded %v\n", offerId)
-
-	k.Lock()
-	defer k.Unlock()
-	oid := offerId.GetValue()
-	k.deleteOffer(oid)
-}
-
 // StatusUpdate is called when a status update message is sent to the scheduler.
 func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
-	log.Infof("Received status update %v\n", taskStatus)
-
+	//TODO(jdef) we're going to make changes to PodTask objects in here and since the current TaskRegistry
+	//implementation is in-memory we need a critical section for this.
 	k.Lock()
 	defer k.Unlock()
+
+	log.Infof("Received status update %v\n", taskStatus)
 
 	switch taskStatus.GetState() {
 	case mesos.TaskState_TASK_STAGING:
-		k.handleTaskStaging(taskStatus)
-	case mesos.TaskState_TASK_STARTING:
-		k.handleTaskStarting(taskStatus)
-	case mesos.TaskState_TASK_RUNNING:
-		k.handleTaskRunning(taskStatus)
-	case mesos.TaskState_TASK_FINISHED:
-		k.handleTaskFinished(taskStatus)
-	case mesos.TaskState_TASK_FAILED:
-		k.handleTaskFailed(taskStatus)
+		log.Errorf("Not implemented: task staging")
+	case mesos.TaskState_TASK_RUNNING, mesos.TaskState_TASK_FINISHED, mesos.TaskState_TASK_STARTING:
+		if !func() (exists bool) {
+			slaveId := taskStatus.GetSlaveId().GetValue()
+			_, exists = k.slaves[slaveId]
+			return
+		}() {
+			log.Warningf("Ignore status %+v because the slave does not exist", taskStatus)
+			return
+		}
+		fallthrough
 	case mesos.TaskState_TASK_KILLED:
-		k.handleTaskKilled(taskStatus)
-	case mesos.TaskState_TASK_LOST:
-		k.handleTaskLost(driver, taskStatus)
-	}
-}
-
-func (k *KubernetesScheduler) handleTaskStaging(taskStatus *mesos.TaskStatus) {
-	log.Errorf("Not implemented: task staging")
-}
-
-func (k *KubernetesScheduler) handleTaskStarting(taskStatus *mesos.TaskStatus) {
-	// we expect to receive this when a launched task is finally "bound"
-	// via the API server. however, there's nothing specific for us to do
-	// here.
-
-	taskId := taskStatus.GetTaskId().GetValue()
-	switch task, state := k.getTask(taskId); state {
-	case statePending:
-		task.updatedTime = time.Now()
-		//TODO(jdef) properly emit metric, or event type instead of just logging
-		task.bindTime = task.updatedTime
-		log.V(1).Infof("metric time_to_bind %v task %v pod %v", task.bindTime.Sub(task.launchTime), task.ID, task.Pod.Name)
-	default:
-		log.Warningf("Ignore status TASK_STARTING because the the task is not pending")
-	}
-}
-
-func (k *KubernetesScheduler) handleTaskRunning(taskStatus *mesos.TaskStatus) {
-	taskId, slaveId := taskStatus.GetTaskId().GetValue(), taskStatus.GetSlaveId().GetValue()
-	if _, exists := k.slaves[slaveId]; !exists {
-		log.Warningf("Ignore status TASK_RUNNING because the slave does not exist\n")
-		return
-	}
-	switch task, state := k.getTask(taskId); state {
-	case statePending:
-		task.updatedTime = time.Now()
-		log.Infof("Received running status for pending task: %+v", taskStatus)
-		k.fillRunningPodInfo(task, taskStatus)
-		k.runningTasks[taskId] = task
-		delete(k.pendingTasks, taskId)
-	case stateRunning:
-		task.updatedTime = time.Now()
-		log.V(2).Info("Ignore status TASK_RUNNING because the the task is already running")
-	case stateFinished:
-		log.Warningf("Ignore status TASK_RUNNING because the the task is already finished")
-	default:
-		log.Warningf("Ignore status TASK_RUNNING (%s) because the the task is discarded", taskId)
-	}
-}
-
-func (k *KubernetesScheduler) fillRunningPodInfo(task *PodTask, taskStatus *mesos.TaskStatus) {
-	task.Pod.Status.Phase = api.PodRunning
-	if taskStatus.Data != nil {
-		var info api.PodInfo
-		err := json.Unmarshal(taskStatus.Data, &info)
-		if err == nil {
-			task.Pod.Status.Info = info
-			/// TODO(jdef) this is problematic using default Docker networking on a default
-			/// Docker bridge -- meaning that pod IP's are not routable across the
-			/// k8s-mesos cluster. For now, I've duplicated logic from k8s fillPodInfo
-			netContainerInfo, ok := info["net"] // docker.Container
-			if ok {
-				if netContainerInfo.PodIP != "" {
-					task.Pod.Status.PodIP = netContainerInfo.PodIP
-				} else {
-					log.Warningf("No network settings: %#v", netContainerInfo)
-				}
-			} else {
-				log.Warningf("Couldn't find network container for %s in %v", task.podKey, info)
+		k.taskRegistry.updateStatus(taskStatus)
+	case mesos.TaskState_TASK_FAILED:
+		if task, _ := k.taskRegistry.updateStatus(taskStatus); task != nil {
+			if task.Has(Launched) && messages.CreateBindingFailure == taskStatus.GetMessage() {
+				go k.plugin.reconcilePod(*task.Pod)
 			}
-		} else {
-			log.Errorf("Invalid TaskStatus.Data for task '%v': %v", task.ID, err)
 		}
-	} else {
-		log.Errorf("Missing TaskStatus.Data for task '%v'", task.ID)
-	}
-}
-
-func (k *KubernetesScheduler) handleTaskFinished(taskStatus *mesos.TaskStatus) {
-	taskId, slaveId := taskStatus.GetTaskId().GetValue(), taskStatus.GetSlaveId().GetValue()
-	if _, exists := k.slaves[slaveId]; !exists {
-		log.Warningf("Ignore status TASK_FINISHED because the slave does not exist\n")
-		return
-	}
-	switch task, state := k.getTask(taskId); state {
-	case statePending:
-		panic("Pending task finished, this couldn't happen")
-	case stateRunning:
-		log.V(2).Infof(
-			"received finished status for running task: %+v, running/pod task queue length = %d/%d",
-			taskStatus, len(k.runningTasks), len(k.podToTask))
-		delete(k.podToTask, task.podKey)
-		k.finishedTasks.Next().Value = taskId
-		delete(k.runningTasks, taskId)
-	case stateFinished:
-		log.Warningf("Ignore status TASK_FINISHED because the the task is already finished")
-	default:
-		log.Warningf("Ignore status TASK_FINISHED because the the task is not running")
-	}
-}
-
-func (k *KubernetesScheduler) handleTaskFailed(taskStatus *mesos.TaskStatus) {
-	log.Errorf("task failed: %+v", taskStatus)
-	taskId := taskStatus.GetTaskId().GetValue()
-
-	switch task, state := k.getTask(taskId); state {
-	case statePending:
-		delete(k.pendingTasks, taskId)
-		delete(k.podToTask, task.podKey)
-		if task.launched && messages.CreateBindingFailure == taskStatus.GetMessage() {
-			go k.plugin.reconcilePod(*task.Pod)
-		}
-	case stateRunning:
-		delete(k.runningTasks, taskId)
-		delete(k.podToTask, task.podKey)
-	}
-}
-
-func (k *KubernetesScheduler) handleTaskKilled(taskStatus *mesos.TaskStatus) {
-	var task *PodTask
-	defer func() {
-		msg := fmt.Sprintf("task killed: %+v, task %+v", taskStatus, task)
-		if task != nil && task.deleted {
-			// we were expecting this, nothing out of the ordinary
-			log.V(2).Infoln(msg)
-		} else {
-			log.Errorln(msg)
-		}
-	}()
-
-	taskId := taskStatus.GetTaskId().GetValue()
-	task, state := k.getTask(taskId)
-	switch state {
-	case statePending:
-		delete(k.pendingTasks, taskId)
-		fallthrough
-	case stateRunning:
-		delete(k.runningTasks, taskId)
-		delete(k.podToTask, task.podKey)
-	}
-}
-
-func (k *KubernetesScheduler) handleTaskLost(driver bindings.SchedulerDriver, status *mesos.TaskStatus) {
-	log.Errorf("task lost: %+v", status)
-	taskId := status.GetTaskId().GetValue()
-
-	switch task, state := k.getTask(taskId); state {
-	case statePending:
-		delete(k.pendingTasks, taskId)
-		fallthrough
-	case stateRunning:
-		if status.ExecutorId != nil && status.SlaveId != nil {
+	case mesos.TaskState_TASK_LOST:
+		task, state := k.taskRegistry.updateStatus(taskStatus)
+		if state == StateRunning && taskStatus.ExecutorId != nil && taskStatus.SlaveId != nil {
 			//TODO(jdef) this may not be meaningful once we have proper checkpointing and master detection
 			//If we're reconciling and receive this then the executor may be
 			//running a task that we need it to kill. It's possible that the framework
 			//is unrecognized by the master at this point, so KillTask is not guaranteed
 			//to do anything. The underlying driver transport may be able to send a
 			//FrameworkMessage directly to the slave to terminate the task.
-			log.V(2).Info("forwarding TASK_LOST message to executor %v on slave %v", status.ExecutorId, status.SlaveId)
-			data := fmt.Sprintf("task-lost:%s", taskId) //TODO(jdef) use a real message type
-			if _, err := driver.SendFrameworkMessage(status.ExecutorId, status.SlaveId, data); err != nil {
+			log.V(2).Info("forwarding TASK_LOST message to executor %v on slave %v", taskStatus.ExecutorId, taskStatus.SlaveId)
+			data := fmt.Sprintf("task-lost:%s", task.ID) //TODO(jdef) use a real message type
+			if _, err := driver.SendFrameworkMessage(taskStatus.ExecutorId, taskStatus.SlaveId, data); err != nil {
 				log.Error(err)
 			}
 		}
-		delete(k.runningTasks, taskId)
-		delete(k.podToTask, task.podKey)
 	}
 }
 
@@ -459,39 +284,21 @@ func (k *KubernetesScheduler) Error(driver bindings.SchedulerDriver, message str
 	log.Fatalf("fatal scheduler error: %v\n", message)
 }
 
-func containsTask(finishedTasks *ring.Ring, taskId string) bool {
-	for i := 0; i < defaultFinishedTasksSize; i++ {
-		value := finishedTasks.Next().Value
-		if value == nil {
-			continue
-		}
-		if value.(string) == taskId {
-			return true
-		}
-	}
-	return false
-}
-
 // intended to be invoked as a Reconciler.Action by Reconciler.Run
 func (k *KubernetesScheduler) ReconcileRunningTasks(driver bindings.SchedulerDriver, canceled <-chan struct{}) error {
 	log.Info("reconcile running tasks")
-	remaining := make(map[string]bool)
+	remaining := util.NewStringSet()
 	statusList := []*mesos.TaskStatus{}
-	func() {
-		k.RLock()
-		defer k.RUnlock()
-		for taskId := range k.runningTasks {
-			remaining[taskId] = true
-			statusList = append(statusList, mutil.NewTaskStatus(mutil.NewTaskID(taskId), mesos.TaskState_TASK_RUNNING))
-		}
-	}()
+
+	filter := StateRunning
+	remaining.Insert(k.taskRegistry.list(&filter)...)
 	if _, err := driver.ReconcileTasks(statusList); err != nil {
 		return err
 	}
 	start := time.Now()
 	const maxBackoff = 120 * time.Second
 	first := true
-	for backoff := 1 * time.Second; first || len(remaining) > 0; backoff = backoff * 2 {
+	for backoff := 1 * time.Second; first || remaining.Len() > 0; backoff = backoff * 2 {
 		first = false
 		//TODO(jdef) reconcileTasks(remaining, canceled)
 		if backoff > maxBackoff {
@@ -505,11 +312,11 @@ func (k *KubernetesScheduler) ReconcileRunningTasks(driver bindings.SchedulerDri
 				k.RLock()
 				defer k.RUnlock()
 				for taskId := range remaining {
-					if task, found := k.runningTasks[taskId]; found && task.updatedTime.Before(start) {
+					if task, state := k.taskRegistry.get(taskId); state == StateRunning && task.UpdatedTime.Before(start) {
 						// keep this task in remaining list
 						continue
 					}
-					delete(remaining, taskId)
+					remaining.Delete(taskId)
 				}
 			}()
 		}

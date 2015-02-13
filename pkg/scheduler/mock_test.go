@@ -41,14 +41,14 @@ func (m *MockScheduler) createPodTask(ctx api.Context, pod *api.Pod) (task *PodT
 	err = args.Error(1)
 	return
 }
-func (m *MockScheduler) getTask(taskId string) (task *PodTask, currentState stateType) {
+func (m *MockScheduler) getTask(taskId string) (task *PodTask, currentState StateType) {
 	args := m.Called(taskId)
 	x := args.Get(0)
 	if x != nil {
 		task = x.(*PodTask)
 	}
 	y := args.Get(1)
-	currentState = y.(stateType)
+	currentState = y.(StateType)
 	return
 }
 func (m *MockScheduler) offers() (f OfferRegistry) {

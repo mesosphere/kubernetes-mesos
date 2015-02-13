@@ -51,6 +51,9 @@ func (p *Pod) Breaker() queue.BreakChan {
 }
 
 func (p *Pod) String() string {
-	deadline, ok := p.Deadline()
-	return fmt.Sprintf("{pod:%v, deadline:(%v,%v), delay:%v}", p.Pod.Name, ok, deadline, p.GetDelay())
+	displayDeadline := "<none>"
+	if deadline, ok := p.Deadline(); ok {
+		displayDeadline = deadline.String()
+	}
+	return fmt.Sprintf("{pod:%v, deadline:%v, delay:%v}", p.Pod.Name, displayDeadline, p.GetDelay())
 }

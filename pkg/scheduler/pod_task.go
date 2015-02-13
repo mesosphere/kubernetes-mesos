@@ -16,21 +16,28 @@ const (
 	containerMem  = 64   // initial MB of memory allocated for executor
 )
 
+type FlagType string
+
+const (
+	Launched = FlagType("launched")
+	Deleted  = FlagType("deleted")
+)
+
 // A struct that describes a pod task.
 type PodTask struct {
 	ID          string
 	Pod         *api.Pod
 	TaskInfo    *mesos.TaskInfo
 	Offer       PerishableOffer
-	launched    bool
-	deleted     bool
+	State       StateType
+	Ports       []HostPortMapping
+	Flags       map[FlagType]struct{}
 	podKey      string
-	createTime  time.Time
+	CreateTime  time.Time
+	UpdatedTime time.Time // time of the most recent StatusUpdate we've seen from the mesos master
 	launchTime  time.Time
 	bindTime    time.Time
-	updatedTime time.Time // time of the most recent StatusUpdate we've seen from the mesos master
-	mapper      hostPortMappingFunc
-	ports       []hostPortMapping
+	mapper      HostPortMappingFunc
 }
 
 func (t *PodTask) hasAcceptedOffer() bool {
@@ -66,9 +73,9 @@ func (t *PodTask) FillFromDetails(details *mesos.Offer) error {
 	} else {
 		ports := []uint64{}
 		for _, entry := range mapping {
-			ports = append(ports, entry.offerPort)
+			ports = append(ports, entry.OfferPort)
 		}
-		t.ports = mapping
+		t.Ports = mapping
 		if portsResource := rangeResource("ports", ports); portsResource != nil {
 			t.TaskInfo.Resources = append(t.TaskInfo.Resources, portsResource)
 		}
@@ -85,7 +92,7 @@ func (t *PodTask) ClearTaskInfo() {
 	t.TaskInfo.SlaveId = nil
 	t.TaskInfo.Resources = nil
 	t.TaskInfo.Data = nil
-	t.ports = nil
+	t.Ports = nil
 }
 
 func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
@@ -116,6 +123,15 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 	return true
 }
 
+func (t *PodTask) Set(f FlagType) {
+	t.Flags[f] = struct{}{}
+}
+
+func (t *PodTask) Has(f FlagType) (exists bool) {
+	_, exists = t.Flags[f]
+	return
+}
+
 // create a duplicate task, one that refers to the same pod specification and
 // executor as the current task. all other state is reset to "factory settings"
 // (as if returned from newPodTask)
@@ -140,22 +156,24 @@ func newPodTask(ctx api.Context, pod *api.Pod, executor *mesos.ExecutorInfo) (*P
 		ID:       taskId,
 		Pod:      pod,
 		TaskInfo: newTaskInfo("PodTask"),
+		State:    StatePending,
 		podKey:   key,
 		mapper:   defaultHostPortMapping,
+		Flags:    make(map[FlagType]struct{}),
 	}
 	task.TaskInfo.Executor = executor
-	task.createTime = time.Now()
+	task.CreateTime = time.Now()
 	return task, nil
 }
 
-type hostPortMapping struct {
-	cindex    int // containerIndex
-	pindex    int // portIndex
-	offerPort uint64
+type HostPortMapping struct {
+	ContainerIdx int // index of the container in the pod spec
+	PortIdx      int // index of the port in a container's port spec
+	OfferPort    uint64
 }
 
 // abstracts the way that host ports are mapped to pod container ports
-type hostPortMappingFunc func(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error)
+type HostPortMappingFunc func(t *PodTask, offer *mesos.Offer) ([]HostPortMapping, error)
 
 type PortAllocationError struct {
 	PodId string
@@ -167,19 +185,19 @@ func (err *PortAllocationError) Error() string {
 }
 
 type DuplicateHostPortError struct {
-	m1, m2 hostPortMapping
+	m1, m2 HostPortMapping
 }
 
 func (err *DuplicateHostPortError) Error() string {
 	return fmt.Sprintf(
 		"Host port %d is specified for container %d, pod %d and container %d, pod %d",
-		err.m1.offerPort, err.m1.cindex, err.m1.pindex, err.m2.cindex, err.m2.pindex)
+		err.m1.OfferPort, err.m1.ContainerIdx, err.m1.PortIdx, err.m2.ContainerIdx, err.m2.PortIdx)
 }
 
 // default k8s host port mapping implementation: hostPort == 0 means containerPort remains pod-private
-func defaultHostPortMapping(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error) {
-	requiredPorts := make(map[uint64]hostPortMapping)
-	mapping := []hostPortMapping{}
+func defaultHostPortMapping(t *PodTask, offer *mesos.Offer) ([]HostPortMapping, error) {
+	requiredPorts := make(map[uint64]HostPortMapping)
+	mapping := []HostPortMapping{}
 	if t.Pod == nil {
 		// programming error
 		panic("task.Pod is nil")
@@ -192,10 +210,10 @@ func defaultHostPortMapping(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, 
 			if port.HostPort == 0 {
 				continue // ignore
 			}
-			m := hostPortMapping{
-				cindex:    i,
-				pindex:    pi,
-				offerPort: uint64(port.HostPort),
+			m := HostPortMapping{
+				ContainerIdx: i,
+				PortIdx:      pi,
+				OfferPort:    uint64(port.HostPort),
 			}
 			if entry, inuse := requiredPorts[uint64(port.HostPort)]; inuse {
 				return nil, &DuplicateHostPortError{entry, m}

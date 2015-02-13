@@ -42,7 +42,7 @@ func TestDeleteOne_PendingPod(t *testing.T) {
 
 	// set expectations
 	obj.On("taskForPod", podKey).Return(task.ID, true)
-	obj.On("getTask", task.ID).Return(task, statePending)
+	obj.On("getTask", task.ID).Return(task, StatePending)
 	obj.On("unregisterPodTask", task).Return()
 
 	// preconditions
@@ -80,7 +80,7 @@ func TestDeleteOne_Running(t *testing.T) {
 
 	// set expectations
 	obj.On("taskForPod", podKey).Return(task.ID, true)
-	obj.On("getTask", task.ID).Return(task, statePending)
+	obj.On("getTask", task.ID).Return(task, StatePending)
 	obj.On("killTask", task.ID).Return(nil)
 
 	// preconditions
@@ -118,7 +118,7 @@ func TestDeleteOne_Unknown(t *testing.T) {
 
 	// set expectations
 	obj.On("taskForPod", podKey).Return(taskId, true)
-	obj.On("getTask", taskId).Return(nil, stateUnknown)
+	obj.On("getTask", taskId).Return(nil, StateUnknown)
 
 	// exec & post conditions
 	d := &deleter{

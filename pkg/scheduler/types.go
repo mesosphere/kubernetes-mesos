@@ -22,13 +22,13 @@ type PodScheduleFunc func(r OfferRegistry, slaves SlaveIndex, task *PodTask) (Pe
 // A minimal placeholder
 type empty struct{}
 
-type stateType int
+type StateType int
 
 const (
-	statePending stateType = iota
-	stateRunning
-	stateFinished
-	stateUnknown
+	StatePending StateType = iota
+	StateRunning
+	StateFinished
+	StateUnknown
 )
 
 var (

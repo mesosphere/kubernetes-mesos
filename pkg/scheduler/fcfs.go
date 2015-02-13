@@ -27,7 +27,7 @@ func FCFSScheduleFunc(r OfferRegistry, unused SlaveIndex, task *PodTask) (Perish
 		if task.AcceptOffer(offer) {
 			if p.Acquire() {
 				acceptedOffer = p
-				log.V(3).Infof("Pod %v accepted offer %v", task.podKey, offer.Id.GetValue())
+				log.V(3).Infof("Pod %v accepted offer %v", task.Pod.Name, offer.Id.GetValue())
 				return true, nil // stop, we found an offer
 			}
 		}
@@ -40,9 +40,9 @@ func FCFSScheduleFunc(r OfferRegistry, unused SlaveIndex, task *PodTask) (Perish
 		return acceptedOffer, nil
 	}
 	if err != nil {
-		log.V(2).Infof("failed to find a fit for pod: %v, err = %v", task.podKey, err)
+		log.V(2).Infof("failed to find a fit for pod: %v, err = %v", task.Pod.Name, err)
 		return nil, err
 	}
-	log.V(2).Infof("failed to find a fit for pod: %v", task.podKey)
+	log.V(2).Infof("failed to find a fit for pod: %v", task.Pod.Name)
 	return nil, noSuitableOffersErr
 }
