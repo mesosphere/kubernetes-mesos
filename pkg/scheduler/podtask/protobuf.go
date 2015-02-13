@@ -1,4 +1,4 @@
-package scheduler
+package podtask
 
 import (
 	"github.com/gogo/protobuf/proto"
@@ -28,16 +28,8 @@ func newRanges(ports []uint64) *mesos.Value_Ranges {
 	return &mesos.Value_Ranges{Range: r}
 }
 
-func newTaskID(id string) *mesos.TaskID {
-	return &mesos.TaskID{Value: proto.String(id)}
-}
-
 func newTaskInfo(name string) *mesos.TaskInfo {
 	return &mesos.TaskInfo{
 		Name: proto.String(name),
 	}
-}
-
-func newOfferID(id string) *mesos.OfferID {
-	return &mesos.OfferID{Value: proto.String(id)}
 }

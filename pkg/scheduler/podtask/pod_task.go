@@ -1,4 +1,4 @@
-package scheduler
+package podtask
 
 import (
 	"fmt"
@@ -9,11 +9,21 @@ import (
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	mutil "github.com/mesos/mesos-go/mesosutil"
+	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 )
 
 const (
 	containerCpus = 0.25 // initial CPU allocated for executor
 	containerMem  = 64   // initial MB of memory allocated for executor
+)
+
+type StateType int
+
+const (
+	StatePending StateType = iota
+	StateRunning
+	StateFinished
+	StateUnknown
 )
 
 type FlagType string
@@ -24,11 +34,11 @@ const (
 )
 
 // A struct that describes a pod task.
-type PodTask struct {
+type T struct {
 	ID          string
 	Pod         *api.Pod
 	TaskInfo    *mesos.TaskInfo
-	Offer       PerishableOffer
+	Offer       offers.Perishable
 	State       StateType
 	Ports       []HostPortMapping
 	Flags       map[FlagType]struct{}
@@ -40,20 +50,20 @@ type PodTask struct {
 	mapper      HostPortMappingFunc
 }
 
-func (t *PodTask) hasAcceptedOffer() bool {
+func (t *T) HasAcceptedOffer() bool {
 	return t.TaskInfo != nil && t.TaskInfo.TaskId != nil
 }
 
-func (t *PodTask) GetOfferId() string {
+func (t *T) GetOfferId() string {
 	if t.Offer == nil {
 		return ""
 	}
 	return t.Offer.Details().Id.GetValue()
 }
 
-// Fill the TaskInfo in the PodTask, should be called during k8s scheduling,
+// Fill the TaskInfo in the T, should be called during k8s scheduling,
 // before binding.
-func (t *PodTask) FillFromDetails(details *mesos.Offer) error {
+func (t *T) FillFromDetails(details *mesos.Offer) error {
 	if details == nil {
 		//programming error
 		panic("offer details are nil")
@@ -61,7 +71,7 @@ func (t *PodTask) FillFromDetails(details *mesos.Offer) error {
 
 	log.V(3).Infof("Recording offer(s) %v against pod %v", details.Id, t.Pod.Name)
 
-	t.TaskInfo.TaskId = newTaskID(t.ID)
+	t.TaskInfo.TaskId = mutil.NewTaskID(t.ID)
 	t.TaskInfo.SlaveId = details.GetSlaveId()
 	t.TaskInfo.Resources = []*mesos.Resource{
 		mutil.NewScalarResource("cpus", containerCpus),
@@ -85,7 +95,7 @@ func (t *PodTask) FillFromDetails(details *mesos.Offer) error {
 
 // Clear offer-related details from the task, should be called if/when an offer
 // has already been assigned to a task but for some reason is no longer valid.
-func (t *PodTask) ClearTaskInfo() {
+func (t *T) ClearTaskInfo() {
 	log.V(3).Infof("Clearing offer(s) from pod %v", t.Pod.Name)
 	t.Offer = nil
 	t.TaskInfo.TaskId = nil
@@ -95,7 +105,7 @@ func (t *PodTask) ClearTaskInfo() {
 	t.Ports = nil
 }
 
-func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
+func (t *T) AcceptOffer(offer *mesos.Offer) bool {
 	if offer == nil {
 		return false
 	}
@@ -123,39 +133,44 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 	return true
 }
 
-func (t *PodTask) Set(f FlagType) {
+func (t *T) Set(f FlagType) {
 	t.Flags[f] = struct{}{}
+	if Launched == f {
+		//TODO(jdef) properly emit metric, or event type instead of just logging
+		t.launchTime = time.Now()
+		log.V(1).Infof("metric time_to_launch %v task %v pod %v", t.launchTime.Sub(t.CreateTime), t.ID, t.Pod.Name)
+	}
 }
 
-func (t *PodTask) Has(f FlagType) (exists bool) {
+func (t *T) Has(f FlagType) (exists bool) {
 	_, exists = t.Flags[f]
 	return
 }
 
 // create a duplicate task, one that refers to the same pod specification and
 // executor as the current task. all other state is reset to "factory settings"
-// (as if returned from newPodTask)
-func (t *PodTask) dup() (*PodTask, error) {
+// (as if returned from New())
+func (t *T) dup() (*T, error) {
 	ctx := api.WithNamespace(api.NewDefaultContext(), t.Pod.Namespace)
-	return newPodTask(ctx, t.Pod, t.TaskInfo.Executor)
+	return New(ctx, t.Pod, t.TaskInfo.Executor)
 }
 
-func newPodTask(ctx api.Context, pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
+func New(ctx api.Context, pod *api.Pod, executor *mesos.ExecutorInfo) (*T, error) {
 	if pod == nil {
 		return nil, fmt.Errorf("illegal argument: pod was nil")
 	}
 	if executor == nil {
 		return nil, fmt.Errorf("illegal argument: executor was nil")
 	}
-	key, err := makePodKey(ctx, pod.Name)
+	key, err := MakePodKey(ctx, pod.Name)
 	if err != nil {
 		return nil, err
 	}
 	taskId := uuid.NewUUID().String()
-	task := &PodTask{
+	task := &T{
 		ID:       taskId,
 		Pod:      pod,
-		TaskInfo: newTaskInfo("PodTask"),
+		TaskInfo: newTaskInfo("Pod"),
 		State:    StatePending,
 		podKey:   key,
 		mapper:   defaultHostPortMapping,
@@ -173,7 +188,7 @@ type HostPortMapping struct {
 }
 
 // abstracts the way that host ports are mapped to pod container ports
-type HostPortMappingFunc func(t *PodTask, offer *mesos.Offer) ([]HostPortMapping, error)
+type HostPortMappingFunc func(t *T, offer *mesos.Offer) ([]HostPortMapping, error)
 
 type PortAllocationError struct {
 	PodId string
@@ -195,7 +210,7 @@ func (err *DuplicateHostPortError) Error() string {
 }
 
 // default k8s host port mapping implementation: hostPort == 0 means containerPort remains pod-private
-func defaultHostPortMapping(t *PodTask, offer *mesos.Offer) ([]HostPortMapping, error) {
+func defaultHostPortMapping(t *T, offer *mesos.Offer) ([]HostPortMapping, error) {
 	requiredPorts := make(map[uint64]HostPortMapping)
 	mapping := []HostPortMapping{}
 	if t.Pod == nil {

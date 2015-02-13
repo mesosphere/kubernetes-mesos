@@ -3,11 +3,14 @@ package scheduler
 import (
 	"fmt"
 	log "github.com/golang/glog"
+
+	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 )
 
 // A first-come-first-serve scheduler: acquires the first offer that can support the task
-func FCFSScheduleFunc(r OfferRegistry, unused SlaveIndex, task *PodTask) (PerishableOffer, error) {
-	if task.hasAcceptedOffer() {
+func FCFSScheduleFunc(r offers.Registry, unused SlaveIndex, task *podtask.T) (offers.Perishable, error) {
+	if task.HasAcceptedOffer() {
 		// verify that the offer is still on the table
 		offerId := task.GetOfferId()
 		if offer, ok := r.Get(offerId); ok && !offer.HasExpired() {
@@ -18,8 +21,8 @@ func FCFSScheduleFunc(r OfferRegistry, unused SlaveIndex, task *PodTask) (Perish
 		task.ClearTaskInfo()
 	}
 
-	var acceptedOffer PerishableOffer
-	err := r.Walk(func(p PerishableOffer) (bool, error) {
+	var acceptedOffer offers.Perishable
+	err := r.Walk(func(p offers.Perishable) (bool, error) {
 		offer := p.Details()
 		if offer == nil {
 			return false, fmt.Errorf("nil offer while scheduling task %v", task.ID)

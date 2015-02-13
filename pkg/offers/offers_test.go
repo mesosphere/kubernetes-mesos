@@ -1,4 +1,4 @@
-package scheduler
+package offers
 
 import (
 	"errors"
@@ -45,18 +45,18 @@ func TestTimedOffer(t *testing.T) {
 
 func TestWalk(t *testing.T) {
 	t.Parallel()
-	config := OfferRegistryConfig{
-		declineOffer: func(offerId string) error {
+	config := RegistryConfig{
+		DeclineOffer: func(offerId string) error {
 			return nil
 		},
-		ttl:           0 * time.Second,
-		lingerTtl:     0 * time.Second,
-		listenerDelay: 0 * time.Second,
+		TTL:           0 * time.Second,
+		LingerTTL:     0 * time.Second,
+		ListenerDelay: 0 * time.Second,
 	}
-	storage := CreateOfferRegistry(config)
+	storage := CreateRegistry(config)
 	acceptedOfferId := ""
 	walked := 0
-	walker1 := func(p PerishableOffer) (bool, error) {
+	walker1 := func(p Perishable) (bool, error) {
 		walked++
 		if p.Acquire() {
 			acceptedOfferId = "foo"
@@ -120,7 +120,7 @@ func TestWalk(t *testing.T) {
 		t.Fatalf("found offer %v", acceptedOfferId)
 	}
 
-	walker2 := func(p PerishableOffer) (bool, error) {
+	walker2 := func(p Perishable) (bool, error) {
 		walked++
 		return true, nil
 	}
@@ -135,7 +135,7 @@ func TestWalk(t *testing.T) {
 		t.Fatalf("found offer %v", acceptedOfferId)
 	}
 
-	walker3 := func(p PerishableOffer) (bool, error) {
+	walker3 := func(p Perishable) (bool, error) {
 		walked++
 		return true, errors.New("baz")
 	}

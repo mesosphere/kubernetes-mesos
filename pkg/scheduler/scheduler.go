@@ -12,9 +12,12 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
+	mutil "github.com/mesos/mesos-go/mesosutil"
 	bindings "github.com/mesos/mesos-go/scheduler"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/messages"
+	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 )
 
 const (
@@ -53,7 +56,7 @@ type KubernetesScheduler struct {
 	// We use a lock here to avoid races
 	// between invoking the mesos callback
 	// and the invoking the pod registry interfaces.
-	// In particular, changes to PodTask objects are currently guarded by this lock.
+	// In particular, changes to podtask.T objects are currently guarded by this lock.
 	*sync.RWMutex
 
 	// Mesos context.
@@ -63,10 +66,10 @@ type KubernetesScheduler struct {
 	masterInfo  *mesos.MasterInfo
 	registered  bool
 
-	offers       OfferRegistry
+	offers       offers.Registry
 	slaves       map[string]*Slave // SlaveID => slave.
 	slaveIDs     map[string]string // Slave's hostname => slaveID
-	taskRegistry TaskRegistry
+	taskRegistry podtask.Registry
 
 	scheduleFunc PodScheduleFunc // The function that does scheduling.
 
@@ -81,20 +84,20 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 	k = &KubernetesScheduler{
 		RWMutex:  new(sync.RWMutex),
 		executor: executor,
-		offers: CreateOfferRegistry(OfferRegistryConfig{
-			declineOffer: func(id string) error {
-				offerId := newOfferID(id)
+		offers: offers.CreateRegistry(offers.RegistryConfig{
+			DeclineOffer: func(id string) error {
+				offerId := mutil.NewOfferID(id)
 				filters := &mesos.Filters{}
 				_, err := k.driver.DeclineOffer(offerId, filters)
 				return err
 			},
-			ttl:           defaultOfferTTL * time.Second,
-			lingerTtl:     defaultOfferLingerTTL * time.Second, // remember expired offers so that we can tell if a previously scheduler offer relies on one
-			listenerDelay: defaultListenerDelay * time.Second,
+			TTL:           defaultOfferTTL * time.Second,
+			LingerTTL:     defaultOfferLingerTTL * time.Second, // remember expired offers so that we can tell if a previously scheduler offer relies on one
+			ListenerDelay: defaultListenerDelay * time.Second,
 		}),
 		slaves:       make(map[string]*Slave),
 		slaveIDs:     make(map[string]string),
-		taskRegistry: NewInMemoryTaskRegistry(),
+		taskRegistry: podtask.NewInMemoryRegistry(),
 		scheduleFunc: scheduleFunc,
 		client:       client,
 		etcdClient:   etcdClient,
@@ -199,7 +202,7 @@ func (k *KubernetesScheduler) OfferRescinded(driver bindings.SchedulerDriver, of
 
 // StatusUpdate is called when a status update message is sent to the scheduler.
 func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
-	//TODO(jdef) we're going to make changes to PodTask objects in here and since the current TaskRegistry
+	//TODO(jdef) we're going to make changes to podtask.T objects in here and since the current TaskRegistry
 	//implementation is in-memory we need a critical section for this.
 	k.Lock()
 	defer k.Unlock()
@@ -220,16 +223,16 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 		}
 		fallthrough
 	case mesos.TaskState_TASK_KILLED:
-		k.taskRegistry.updateStatus(taskStatus)
+		k.taskRegistry.UpdateStatus(taskStatus)
 	case mesos.TaskState_TASK_FAILED:
-		if task, _ := k.taskRegistry.updateStatus(taskStatus); task != nil {
-			if task.Has(Launched) && messages.CreateBindingFailure == taskStatus.GetMessage() {
+		if task, _ := k.taskRegistry.UpdateStatus(taskStatus); task != nil {
+			if task.Has(podtask.Launched) && messages.CreateBindingFailure == taskStatus.GetMessage() {
 				go k.plugin.reconcilePod(*task.Pod)
 			}
 		}
 	case mesos.TaskState_TASK_LOST:
-		task, state := k.taskRegistry.updateStatus(taskStatus)
-		if state == StateRunning && taskStatus.ExecutorId != nil && taskStatus.SlaveId != nil {
+		task, state := k.taskRegistry.UpdateStatus(taskStatus)
+		if state == podtask.StateRunning && taskStatus.ExecutorId != nil && taskStatus.SlaveId != nil {
 			//TODO(jdef) this may not be meaningful once we have proper checkpointing and master detection
 			//If we're reconciling and receive this then the executor may be
 			//running a task that we need it to kill. It's possible that the framework
@@ -290,8 +293,8 @@ func (k *KubernetesScheduler) ReconcileRunningTasks(driver bindings.SchedulerDri
 	remaining := util.NewStringSet()
 	statusList := []*mesos.TaskStatus{}
 
-	filter := StateRunning
-	remaining.Insert(k.taskRegistry.list(&filter)...)
+	filter := podtask.StateRunning
+	remaining.Insert(k.taskRegistry.List(&filter)...)
 	if _, err := driver.ReconcileTasks(statusList); err != nil {
 		return err
 	}
@@ -312,7 +315,7 @@ func (k *KubernetesScheduler) ReconcileRunningTasks(driver bindings.SchedulerDri
 				k.RLock()
 				defer k.RUnlock()
 				for taskId := range remaining {
-					if task, state := k.taskRegistry.get(taskId); state == StateRunning && task.UpdatedTime.Before(start) {
+					if task, state := k.taskRegistry.Get(taskId); state == podtask.StateRunning && task.UpdatedTime.Before(start) {
 						// keep this task in remaining list
 						continue
 					}
