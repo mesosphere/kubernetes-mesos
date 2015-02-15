@@ -210,24 +210,43 @@ func runProxyService() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	proxylogs, err := cmd.StderrPipe()
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	//TODO(jdef) append instead of truncate? what if the disk is full?
 	logfile, err := os.Create("./proxy-log")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer logfile.Close()
-	writer := bufio.NewWriter(logfile)
-	defer writer.Flush()
 
+	go func() {
+		defer func() {
+			log.Infof("killing proxy process..")
+			if err = cmd.Process.Kill(); err != nil {
+				log.Errorf("failed to kill proxy process: %v", err)
+			}
+		}()
+
+		writer := bufio.NewWriter(logfile)
+		defer writer.Flush()
+
+		written, err := io.Copy(writer, proxylogs)
+		if err != nil {
+			log.Errorf("error writing data to proxy log: %v", err)
+		}
+
+		log.Infof("wrote %d bytes to proxy log", written)
+	}()
+
+	// if the proxy fails to start then we exit the executor, otherwise
+	// wait for the proxy process to end (and release resources after).
 	if err := cmd.Start(); err != nil {
 		log.Fatal(err)
+	} else if err := cmd.Wait(); err != nil {
+		log.Error(err)
 	}
-	defer func() {
-		log.V(2).Infof("Cleaning up proxy process...")
-		cmd.Process.Kill()
-	}()
-	io.Copy(writer, proxylogs)
 }
