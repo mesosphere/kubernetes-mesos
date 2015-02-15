@@ -1,7 +1,7 @@
 #!/bin/bash
 
 docker build -t kubernetes-mesos:build-base .
-docker tag kubernetes-mesos:build-base jdef/kubernetes-mesos:build-base
+docker tag -f kubernetes-mesos:build-base jdef/kubernetes-mesos:build-base
 
 versions=(
   mesos-0.20.1-compat
@@ -10,7 +10,7 @@ versions=(
 )
 
 for i in "${versions[@]}"; do
-  test -d $i && docker build -t kubernetes-mesos:build-$i $i && docker tag kubernetes-mesos:build-$i kubernetes-mesos:build-latest
-  docker tag kubernetes-mesos:build-$i jdef/kubernetes-mesos:build-$i
-  docker tag kubernetes-mesos:build-$i jdef/kubernetes-mesos:build-latest
+  test -d $i && docker build -t kubernetes-mesos:build-$i $i && docker tag -f kubernetes-mesos:build-$i kubernetes-mesos:build-latest
+  docker tag -f kubernetes-mesos:build-$i jdef/kubernetes-mesos:build-$i
+  docker tag -f kubernetes-mesos:build-$i jdef/kubernetes-mesos:build-latest
 done
