@@ -109,7 +109,7 @@ func serveExecutorArtifact(path string) (*string, string) {
 
 func prepareExecutorInfo() *mesos.ExecutorInfo {
 	executorUris := []*mesos.CommandInfo_URI{}
-	uri, _ := serveExecutorArtifact(*proxyPath)
+	uri, proxyCmd := serveExecutorArtifact(*proxyPath)
 	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri, Executable: proto.Bool(true)})
 	uri, executorCmd := serveExecutorArtifact(*executorPath)
 	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri, Executable: proto.Bool(true)})
@@ -117,7 +117,14 @@ func prepareExecutorInfo() *mesos.ExecutorInfo {
 	//TODO(jdef): provide some way (env var?) for user's to customize executor config
 	//TODO(jdef): set -hostname_override and -address to 127.0.0.1 if `address` is 127.0.0.1
 	apiServerArgs := strings.Join(apiServerList, ",")
-	executorCommand := fmt.Sprintf("./%s -v=2 -hostname_override=0.0.0.0 -allow_privileged=%t -api_servers=%s", executorCmd, *allowPrivileged, apiServerArgs)
+
+	// propagate log verbosity from the scheduler to the executor,
+	// but not to the proxy because it's too noisy already
+	logv := flag.Lookup("v").Value.String()
+
+	executorCommand := fmt.Sprintf("./%s -v=%s -hostname_override=0.0.0.0 -allow_privileged=%t -api_servers=%s -proxy_exec=./%s",
+		executorCmd, logv, *allowPrivileged, apiServerArgs, proxyCmd)
+
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
 		executorCommand = fmt.Sprintf("%s -etcd_servers=%s", executorCommand, etcdServerArguments)
