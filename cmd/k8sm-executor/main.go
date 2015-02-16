@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"flag"
+	"fmt"
 	"io"
 	"math/rand"
 	"net"
@@ -51,6 +52,13 @@ var (
 	apiServerList           util.StringList
 	clusterDomain           = flag.String("cluster_domain", "", "Domain for this cluster.  If set, kubelet will configure all containers to search this domain in addition to the host's search domains")
 	clusterDNS              = util.IP(nil)
+
+	//.. mesos-specific flags ..
+
+	runProxy  = flag.Bool("run_proxy", true, "Maintain a running kube-proxy instance as a child proc of this kubelet-executor.")
+	proxyLogV = flag.Int("proxy_logv", 0, "Log verbosity of the child kube-proxy.")
+	proxyExec = flag.String("proxy_exec", "./kube-proxy", "Path to the kube-proxy executable.")
+	proxyLog  = flag.String("proxy_logfile", "./proxy-log", "Path to the kube-proxy log file.")
 )
 
 func init() {
@@ -173,7 +181,9 @@ func (kl *kubeletExecutor) ListenAndServe(address net.IP, port uint, enableDebug
 	// this func could be called many times, depending how often the HTTP server crashes,
 	// so only execute certain initialization procs once
 	kl.initialize.Do(func() {
-		go util.Forever(runProxyService, 5*time.Second)
+		if *runProxy {
+			go util.Forever(runProxyService, 5*time.Second)
+		}
 		go func() {
 			defer close(kl.finished)
 			if _, err := kl.driver.Run(); err != nil {
@@ -197,15 +207,15 @@ func runProxyService() {
 	// not sure that k8s supports host-networking space for pods
 	log.Infof("Starting proxy process...")
 
-	args := []string{"-bind_address=" + address.String(), "-logtostderr=true", "-v=1"}
+	args := []string{"-bind_address=" + address.String(), "-logtostderr=true", fmt.Sprintf("-v=%d", *proxyLogV)}
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
 		args = append(args, "-etcd_servers="+etcdServerArguments)
 	} else if *etcdConfigFile != "" {
 		args = append(args, "-etcd_config="+*etcdConfigFile)
 	}
-	//TODO(jdef): don't hardcode name of the proxy executable here
-	cmd := exec.Command("./kube-proxy", args...)
+
+	cmd := exec.Command(*proxyExec, args...)
 	_, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Fatal(err)
@@ -217,7 +227,7 @@ func runProxyService() {
 	}
 
 	//TODO(jdef) append instead of truncate? what if the disk is full?
-	logfile, err := os.Create("./proxy-log")
+	logfile, err := os.Create(*proxyLog)
 	if err != nil {
 		log.Fatal(err)
 	}
