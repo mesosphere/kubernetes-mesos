@@ -32,9 +32,9 @@ const (
 
 var (
 	syncFrequency           = flag.Duration("sync_frequency", 10*time.Second, "Max period between synchronizing running containers and config")
-	address                 = util.IP(net.ParseIP("0.0.0.0"))
+	address                 = util.IP(net.ParseIP(defaultBindingAddress()))
 	port                    = flag.Uint("port", ports.KubeletPort, "The port for the info server to serve on")
-	hostnameOverride        = flag.String("hostname_override", "", "If non-empty, will use this string as identification instead of the actual hostname.")
+	hostnameOverride        = flag.String("hostname_override", defaultBindingAddress(), "If non-empty, will use this string as identification instead of the actual hostname.")
 	networkContainerImage   = flag.String("network_container_image", kubelet.NetworkContainerImage, "The image that network containers in each pod will use.")
 	dockerEndpoint          = flag.String("docker_endpoint", "", "If non-empty, use this for the docker endpoint to communicate with")
 	etcdServerList          util.StringList
@@ -55,17 +55,27 @@ var (
 
 	//.. mesos-specific flags ..
 
-	runProxy  = flag.Bool("run_proxy", true, "Maintain a running kube-proxy instance as a child proc of this kubelet-executor.")
-	proxyLogV = flag.Int("proxy_logv", 0, "Log verbosity of the child kube-proxy.")
-	proxyExec = flag.String("proxy_exec", "./kube-proxy", "Path to the kube-proxy executable.")
-	proxyLog  = flag.String("proxy_logfile", "./proxy-log", "Path to the kube-proxy log file.")
+	runProxy     = flag.Bool("run_proxy", true, "Maintain a running kube-proxy instance as a child proc of this kubelet-executor.")
+	proxyLogV    = flag.Int("proxy_logv", 0, "Log verbosity of the child kube-proxy.")
+	proxyExec    = flag.String("proxy_exec", "./kube-proxy", "Path to the kube-proxy executable.")
+	proxyLog     = flag.String("proxy_logfile", "./proxy-log", "Path to the kube-proxy log file.")
+	proxyBindall = flag.Bool("proxy_bindall", false, "When true will cause kube-proxy to bind to 0.0.0.0. Defaults to false.")
 )
 
 func init() {
 	flag.Var(&etcdServerList, "etcd_servers", "List of etcd servers to watch (http://ip:port), comma separated")
-	flag.Var(&address, "address", "The IP address for the info and proxy servers to serve on. Default to 0.0.0.0.")
+	flag.Var(&address, "address", "The IP address for the info and proxy servers to serve on. Default to $LIBPROCESS_IP or else 0.0.0.0.")
 	flag.Var(&apiServerList, "api_servers", "List of Kubernetes API servers to publish events to. (ip:port), comma separated.")
 	flag.Var(&clusterDNS, "cluster_dns", "IP address for a cluster DNS server.  If set, kubelet will configure all containers to use this for DNS resolution in addition to the host's DNS servers")
+}
+
+func defaultBindingAddress() string {
+	libProcessIP := os.Getenv("LIBPROCESS_IP")
+	if libProcessIP == "" {
+		return "0.0.0.0"
+	} else {
+		return libProcessIP
+	}
 }
 
 func main() {
@@ -207,7 +217,15 @@ func runProxyService() {
 	// not sure that k8s supports host-networking space for pods
 	log.Infof("Starting proxy process...")
 
-	args := []string{"-bind_address=" + address.String(), "-logtostderr=true", fmt.Sprintf("-v=%d", *proxyLogV)}
+	bindAddress := "0.0.0.0"
+	if !*proxyBindall {
+		bindAddress = address.String()
+	}
+	args := []string{
+		fmt.Sprintf("-bind_address=%s", bindAddress),
+		fmt.Sprintf("-v=%d", *proxyLogV),
+		"-logtostderr=true",
+	}
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
 		args = append(args, "-etcd_servers="+etcdServerArguments)

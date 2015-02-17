@@ -67,14 +67,17 @@ var (
 	authPath        = flag.String("auth_path", "", "Path to .kubernetes_auth file, specifying how to authenticate to API server.")
 	apiServerList   util.StringList
 
-	executorPath        = flag.String("executor_path", "", "Location of the kubernetes executor executable")
-	proxyPath           = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
-	mesosUser           = flag.String("mesos_user", "", "Mesos user for this framework, defaults to the username that owns the framework process.")
-	mesosRole           = flag.String("mesos_role", "", "Mesos role for this framework, defaults to none.")
-	mesosAuthPrincipal  = flag.String("mesos_authentication_principal", "", "Mesos authentication principal.")
-	mesosAuthSecretFile = flag.String("mesos_authentication_secret_file", "", "Mesos authentication secret file.")
-	checkpoint          = flag.Bool("checkpoint", false, "Enable/disable checkpointing for the kubernetes-mesos framework.")
-	failoverTimeout     = flag.Float64("failover_timeout", time.Duration((1<<62)-1).Seconds(), fmt.Sprintf("Framework failover timeout, in ns."))
+	executorPath         = flag.String("executor_path", "", "Location of the kubernetes executor executable")
+	proxyPath            = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
+	mesosUser            = flag.String("mesos_user", "", "Mesos user for this framework, defaults to the username that owns the framework process.")
+	mesosRole            = flag.String("mesos_role", "", "Mesos role for this framework, defaults to none.")
+	mesosAuthPrincipal   = flag.String("mesos_authentication_principal", "", "Mesos authentication principal.")
+	mesosAuthSecretFile  = flag.String("mesos_authentication_secret_file", "", "Mesos authentication secret file.")
+	checkpoint           = flag.Bool("checkpoint", false, "Enable/disable checkpointing for the kubernetes-mesos framework.")
+	failoverTimeout      = flag.Float64("failover_timeout", time.Duration((1<<62)-1).Seconds(), fmt.Sprintf("Framework failover timeout, in ns."))
+	executorBindall      = flag.Bool("executor_bindall", false, "When true will set -address and -hostname_override of the executor to 0.0.0.0. Defaults to false.")
+	executorRunProxy     = flag.Bool("executor_run_proxy", true, "Run the kube-proxy as a child process of the executor. Defaults to true.")
+	executorProxyBindall = flag.Bool("executor_proxy_bindall", false, "When true pass -proxy_bindall to the executor. Defaults to false.")
 )
 
 func init() {
@@ -122,8 +125,20 @@ func prepareExecutorInfo() *mesos.ExecutorInfo {
 	// but not to the proxy because it's too noisy already
 	logv := flag.Lookup("v").Value.String()
 
-	executorCommand := fmt.Sprintf("./%s -v=%s -hostname_override=0.0.0.0 -allow_privileged=%t -api_servers=%s -proxy_exec=./%s",
+	executorCommand := fmt.Sprintf("./%s -v=%s -allow_privileged=%t -api_servers=%s -proxy_exec=./%s",
 		executorCmd, logv, *allowPrivileged, apiServerArgs, proxyCmd)
+
+	if *executorBindall {
+		executorCommand = fmt.Sprintf("%s -hostname_override=0.0.0.0 -address=0.0.0.0", executorCommand)
+	}
+
+	if *executorProxyBindall {
+		executorCommand = fmt.Sprintf("%s -proxy_bindall=%v", executorCommand, *executorProxyBindall)
+	}
+
+	if *executorRunProxy {
+		executorCommand = fmt.Sprintf("%s -run_proxy=%v", executorCommand, *executorRunProxy)
+	}
 
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
