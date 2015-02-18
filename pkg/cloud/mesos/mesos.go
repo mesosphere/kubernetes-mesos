@@ -9,6 +9,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
 	log "github.com/golang/glog"
+	"github.com/mesos/mesos-go/detector"
 	"golang.org/x/net/context"
 )
 
@@ -36,9 +37,13 @@ func MasterURI() string {
 }
 
 func newMesosCloud() (*MesosCloud, error) {
-	return &MesosCloud{
-		client: newMesosClient(),
-	}, nil
+	if d, err := detector.New(*mesosMaster); err != nil {
+		return nil, err
+	} else if cl, err := newMesosClient(d); err != nil {
+		return nil, err
+	} else {
+		return &MesosCloud{client: cl}, nil
+	}
 }
 
 // Mesos natively provides minimal cloud-type resources. More robust cloud
