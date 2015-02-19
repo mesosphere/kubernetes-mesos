@@ -34,7 +34,7 @@ var (
 	syncFrequency           = flag.Duration("sync_frequency", 10*time.Second, "Max period between synchronizing running containers and config")
 	address                 = util.IP(net.ParseIP(defaultBindingAddress()))
 	port                    = flag.Uint("port", ports.KubeletPort, "The port for the info server to serve on")
-	hostnameOverride        = flag.String("hostname_override", defaultBindingAddress(), "If non-empty, will use this string as identification instead of the actual hostname.")
+	hostnameOverride        = flag.String("hostname_override", "", "If non-empty, will use this string as identification instead of the actual hostname.")
 	networkContainerImage   = flag.String("network_container_image", kubelet.NetworkContainerImage, "The image that network containers in each pod will use.")
 	dockerEndpoint          = flag.String("docker_endpoint", "", "If non-empty, use this for the docker endpoint to communicate with")
 	etcdServerList          util.StringList
@@ -150,7 +150,12 @@ func main() {
 		}
 
 		exec := executor.New(k.Kubelet, updates, MESOS_CFG_SOURCE, apiClient, watch, kc.DockerClient)
-		if driver, err := bindings.NewMesosExecutorDriver(exec); err != nil {
+		dconfig := bindings.DriverConfig{
+			Executor:         exec,
+			HostnameOverride: *hostnameOverride,
+			BindingAddress:   net.IP(address),
+		}
+		if driver, err := bindings.NewMesosExecutorDriver(dconfig); err != nil {
 			log.Fatalf("failed to create executor driver: %v", err)
 		} else {
 			k.driver = driver

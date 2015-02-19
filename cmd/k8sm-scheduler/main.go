@@ -44,6 +44,9 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
 	"github.com/gogo/protobuf/proto"
 	log "github.com/golang/glog"
+	"github.com/mesos/mesos-go/auth"
+	"github.com/mesos/mesos-go/auth/sasl"
+	"github.com/mesos/mesos-go/auth/sasl/mech"
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	mutil "github.com/mesos/mesos-go/mesosutil"
 	bindings "github.com/mesos/mesos-go/scheduler"
@@ -52,6 +55,7 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
 	sconfig "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
+	"golang.org/x/net/context"
 )
 
 const (
@@ -78,6 +82,9 @@ var (
 	executorBindall      = flag.Bool("executor_bindall", false, "When true will set -address and -hostname_override of the executor to 0.0.0.0. Defaults to false.")
 	executorRunProxy     = flag.Bool("executor_run_proxy", true, "Run the kube-proxy as a child process of the executor. Defaults to true.")
 	executorProxyBindall = flag.Bool("executor_proxy_bindall", false, "When true pass -proxy_bindall to the executor. Defaults to false.")
+	authProvider         = flag.String("mesos_authentication_provider", sasl.ProviderName, fmt.Sprintf("Authentication provider to use, default is SASL that supports mechanisms: %+v", mech.ListSupported()))
+	driverPort           = flag.Uint("driver_port", 0, "Port that the Mesos scheduler driver process should listen on. Defaults to 0 (ephemeral).")
+	hostnameOverride     = flag.String("hostname_override", "", "If non-empty, will use this string as identification instead of the actual hostname.")
 )
 
 func init() {
@@ -231,7 +238,21 @@ func main() {
 		log.Fatalf("Misconfigured mesos framework: %v", err)
 	}
 	masterUri := kmcloud.MasterURI()
-	driver, err := bindings.NewMesosSchedulerDriver(mesosPodScheduler, info, masterUri, cred)
+	dconfig := bindings.DriverConfig{
+		Scheduler:        mesosPodScheduler,
+		Framework:        info,
+		Master:           masterUri,
+		Credential:       cred,
+		BindingAddress:   net.IP(address),
+		BindingPort:      uint16(*driverPort),
+		HostnameOverride: *hostnameOverride,
+		WithAuthContext: func(ctx context.Context) context.Context {
+			ctx = auth.WithLoginProvider(ctx, *authProvider)
+			ctx = sasl.WithBindingAddress(ctx, net.IP(address))
+			return ctx
+		},
+	}
+	driver, err := bindings.NewMesosSchedulerDriver(dconfig)
 	if err != nil {
 		log.Fatalf("failed to create mesos scheduler driver: %v", err)
 	}
