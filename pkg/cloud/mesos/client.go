@@ -40,7 +40,7 @@ func newMesosClient(md detector.Master) (*mesosClient, error) {
 		},
 		tr: tr,
 	}
-	if err := md.Detect(detector.AsMasterChanged(func(info *mesos.MasterInfo) {
+	if err := md.Detect(detector.OnMasterChanged(func(info *mesos.MasterInfo) {
 		client.masterLock.Lock()
 		defer client.masterLock.Unlock()
 		if info == nil {
