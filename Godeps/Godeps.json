@@ -207,7 +207,7 @@
 		{
 			"ImportPath": "github.com/mesos/mesos-go/mesos",
 			"Comment": "zk2",
-			"Rev": "801092348dbdca622f848e3f40a3978a058b191f"
+			"Rev": "b4b02aaea548a050210a752d40c364cebc2b36f0"
 		},
 		{
 			"ImportPath": "github.com/mitchellh/mapstructure",
