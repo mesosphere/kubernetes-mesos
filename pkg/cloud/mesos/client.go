@@ -57,7 +57,9 @@ func newMesosClient(md detector.Master) (*mesosClient, error) {
 		if len(client.master) > 0 {
 			client.master = fmt.Sprintf("%s:%d", client.master, info.GetPort())
 		}
+		log.Infof("cloud master changed to '%v'", client.master)
 	})); err != nil {
+		log.V(1).Infof("detector initialization failed: %v", err)
 		return nil, err
 	}
 	return client, nil
