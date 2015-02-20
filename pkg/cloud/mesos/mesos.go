@@ -37,9 +37,12 @@ func MasterURI() string {
 }
 
 func newMesosCloud() (*MesosCloud, error) {
+	log.V(1).Infof("new mesos cloud, master='%v'", *mesosMaster)
 	if d, err := detector.New(*mesosMaster); err != nil {
+		log.V(1).Infof("failed to create master detector: %v", err)
 		return nil, err
 	} else if cl, err := newMesosClient(d); err != nil {
+		log.V(1).Infof("failed to mesos cloud client: %v", err)
 		return nil, err
 	} else {
 		return &MesosCloud{client: cl}, nil
