@@ -68,6 +68,7 @@ If needed you may download and install Mesos binaries through your OS package ma
 Once your Mesos cluster is up and running you're ready to fire up kubernetes-mesos.
 
 To keep things simple the following guide also assumes that you intend to run the mesos-master, etcd, and the kubernetes-mesos framework processes on the same host, exposed on an IP address referred to hereafter as `${servicehost}`.
+Alternatively, the instructions also support a multi-mesos-master cluster running with Zookeeper.
 
 #### etcd
 
