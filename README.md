@@ -128,7 +128,7 @@ For simpler execution of `kubecfg`:
 $ export KUBERNETES_MASTER=http://${servicehost}:8888
 ```
 
-You can increase logging for both the framework and the controller by including, for example, `-v=2`.
+You can increase the verbosity of the logging for the API server, scheduler, and/or the controller-manager by including, for example, `-v=2`.
 This can be very helpful while debugging.
 
 ###Launch a Pod
@@ -393,7 +393,7 @@ $ curl -L ${KUBERNETES_MASTER}/api/v1beta1/replicationControllers
 Run test suite with:
 
 ```shell
-$ go test github.com/mesosphere/kubernetes-mesos/kubernetes-mesos -v
+$ make test.v
 ```
 
 [1]: DEVELOP.md
