@@ -97,7 +97,7 @@ Or if you have multiple Mesos masters registered with a Zookeeper cluster then s
 $ export mesos_master=zk://${zkserver1}:2181,${zkserver2}:2181,${zkserver3}:2181/mesos
 ```
 
-Assuming that the mesos-master and etcd are running on `${servicehost}`, then:
+Fire up the kubernetes-mesos framework components (yes, these are **all** required for a working framework):
 
 ```shell
 $ ./bin/kube-apiserver \
