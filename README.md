@@ -27,14 +27,14 @@ Assuming you are running the latest official binary release of Mesos, the follow
 ```shell
 # chcon needed for systems protected by SELinux
 $ mkdir bin && chcon -Rt svirt_sandbox_file_t bin
-$ docker run --rm -v $(pwd)/bin:/target jdef/kubernetes-mesos:build-latest
+$ docker run --rm -v $(pwd)/bin:/target mesosphere/kubernetes-mesos:build
 ```
 
 ### Build
 
 To build from source follow the instructions below.
 
-**NOTE:** Building Kubernetes for Mesos requires Go 1.3+, [godep][5], protobuf 2.5.0, and Mesos 0.19+.
+**NOTE:** Building Kubernetes for Mesos requires Go 1.3+, [godep][5], and Mesos 0.19+.
 Building the project is greatly simplified by using godep.
 
 * To install Mesos, see [mesosphere.io/downloads][4]
