@@ -342,7 +342,7 @@ func (r *Reconciler) Run(driver bindings.SchedulerDriver) <-chan struct{} {
 			defer atomic.StoreInt32(&r.running, 0)
 			err := r.Action(driver, canceled)
 			if err != nil {
-				log.Error(err)
+				log.Errorf("reconciler action failed: %v", err)
 			}
 		}()
 		return canceled
