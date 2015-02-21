@@ -160,7 +160,7 @@ func (k *inMemoryRegistry) handleTaskRunning(task *T, state StateType, status *m
 	case StateFinished:
 		log.Warningf("Ignore status TASK_RUNNING because the the task is already finished")
 	default:
-		log.Warningf("Ignore status TASK_RUNNING (%s) because the the task is discarded", task.ID)
+		log.Warningf("Ignore status TASK_RUNNING (%+v) because the the task is discarded", status.GetTaskId())
 	}
 }
 
