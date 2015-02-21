@@ -23,7 +23,7 @@ Please use a release from the [0.3.x series][11] for the best experience with th
 ### Binaries
 
 For a binary-only install of the Kubernetes-Mesos framework you can use the Docker-based builder.
-Assuming you are running the latest official binary release of Mesos, the following commands will build and copy the resulting binaries to `./bin`:
+The following commands will build and copy the resulting binaries to `./bin`:
 ```shell
 # chcon needed for systems protected by SELinux
 $ mkdir bin && chcon -Rt svirt_sandbox_file_t bin
@@ -34,20 +34,20 @@ $ docker run --rm -v $(pwd)/bin:/target mesosphere/kubernetes-mesos:build
 
 To build from source follow the instructions below.
 
-**NOTE:** Building Kubernetes for Mesos requires Go 1.3+, [godep][5], and Mesos 0.19+.
-Building the project is greatly simplified by using godep.
+**NOTE:** Building Kubernetes for Mesos requires Go 1.3+ and [godep][5].
+Dependency management for the project is greatly simplified by using godep.
 
-* To install Mesos, see [mesosphere.io/downloads][4]
 * To install godep, see [github.com/tools/godep][5]
 * See the [development][1] page for sample environment setup steps.
 
-Kubernetes-Mesos is built using a Makefile to greatly simplify the process of patching the vanilla Kubernetes code.
+Kubernetes-Mesos is built using a Makefile to automate the process of patching the vanilla Kubernetes code.
 At this time it is **highly recommended** to use the Makefile instead of building components manually using `go build`.
 ```shell
 $ cd $GOPATH # If you don't have one, create directory and set GOPATH accordingly.
 
 $ mkdir -p src/github.com/mesosphere/kubernetes-mesos
-$ git clone https://github.com/mesosphere/kubernetes-mesos.git src/github.com/mesosphere/kubernetes-mesos
+$ git clone https://github.com/mesosphere/kubernetes-mesos.git \
+     src/github.com/mesosphere/kubernetes-mesos
 $ cd src/github.com/mesosphere/kubernetes-mesos
 $ make bootstrap                   # downloads dependencies using godep
 $ make                             # compile the binaries
@@ -62,7 +62,14 @@ A consequence of this is that you must provide the Kubernetes-Mesos framework wi
 Please keep this in mind when reviewing (and attempting) the example below - the CIDR subnet may need to be adjusted for your network.
 See the Kubernetes [release notes][9] for additional details regarding the new services model.
 
-The examples that follow assume that you are running the mesos-master, etcd, and the kubernetes-mesos framework on the same host, exposed on an IP address referred to hereafter as `${servicehost}`.
+The examples that follow assume that you have a running Mesos cluster.
+If needed you may download and install Mesos binaries through your OS package manager, or else download them directly from [Mesosphere][4] and install them manually.
+Once your Mesos cluster is up and running you're ready to fire up kubernetes-mesos.
+
+To keep things simple the following guide also assumes that you intend to run the mesos-master, etcd, and the kubernetes-mesos framework processes on the same host, exposed on an IP address referred to hereafter as `${servicehost}`.
+
+#### etcd
+
 If you are not running in a production setting then a single etcd instance will suffice.
 To run etcd, see [github.com/coreos/etcd][6], or run it via docker:
 
@@ -75,6 +82,8 @@ $ sudo docker run -d --net=host coreos/etcd go-wrapper run \
    -initial-advertise-peer-urls=http://${servicehost}:7001 \
    -listen-peer-urls=http://${servicehost}:7001
 ```
+
+#### kubernetes-mesos
 
 Ensure that your Mesos cluster is started.
 If you're running a standalone Mesos master on `${servicehost}` then set:
