@@ -77,21 +77,35 @@ $ sudo docker run -d --net=host coreos/etcd go-wrapper run \
 ```
 
 Ensure that your mesos cluster is started.
+If you're running a standalone mesos master on `${servicehost}` then set:
+```shell
+$ export mesos_master=${servicehost}:5050
+```
+
+Or if you have multiple Mesos masters registered with a Zookeeper cluster then set:
+```shell
+$ export mesos_master=zk://${zkserver1}:2181,${zkserver2}:2181,${zkserver3}:2181/mesos
+```
+
 Assuming that the mesos-master and etcd are running on `${servicehost}`, then:
 
 ```shell
 $ ./bin/kube-apiserver \
   -address=${servicehost} \
-  -mesos_master=${servicehost}:5050 \
+  -mesos_master=${mesos_master} \
   -etcd_servers=http://${servicehost}:4001 \
   -portal_net=10.10.10.0/24 \
   -port=8888 \
   -cloud_provider=mesos \
   -health_check_minions=false
 
+$ ./bin/k8sm-controller-manager \
+  -master=$servicehost:8888 \
+  -mesos_master=${mesos_master}
+
 $ ./bin/k8sm-scheduler \
   -address=${servicehost} \
-  -mesos_master=${servicehost}:5050 \
+  -mesos_master=${mesos_master} \
   -etcd_servers=http://${servicehost}:4001 \
   -executor_path=$(pwd)/bin/k8sm-executor \
   -proxy_path=$(pwd)/bin/kube-proxy \
@@ -102,13 +116,6 @@ $ ./bin/k8sm-scheduler \
 For simpler execution of `kubecfg`:
 ```shell
 $ export KUBERNETES_MASTER=http://${servicehost}:8888
-```
-
-To enable replication control, start a kubernetes replication controller instance:
-```shell
-$ ./bin/k8sm-controller-manager \
-  -master=$servicehost:8888 \
-  -mesos_master=$servicehost:5050
 ```
 
 You can increase logging for both the framework and the controller by including, for example, `-v=2`.
