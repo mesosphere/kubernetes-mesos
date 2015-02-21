@@ -76,8 +76,8 @@ $ sudo docker run -d --net=host coreos/etcd go-wrapper run \
    -listen-peer-urls=http://${servicehost}:7001
 ```
 
-Ensure that your mesos cluster is started.
-If you're running a standalone mesos master on `${servicehost}` then set:
+Ensure that your Mesos cluster is started.
+If you're running a standalone Mesos master on `${servicehost}` then set:
 ```shell
 $ export mesos_master=${servicehost}:5050
 ```
@@ -293,7 +293,7 @@ ca87f2981e6d        dockerfile/nginx:latest   "nginx"             30 seconds ago
 
 ###Launch a Replication Controller
 
-Assuming your framework is running on `${KUBERNETES_MASTER}` and that you have multiple mesos slaves in your cluster, then:
+Assuming your framework is running on `${KUBERNETES_MASTER}` and that you have multiple Mesos slaves in your cluster, then:
 
 ```shell
 $ bin/kubecfg -c examples/controller-nginx.json create replicationControllers
