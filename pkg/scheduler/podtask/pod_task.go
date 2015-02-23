@@ -30,6 +30,7 @@ type FlagType string
 
 const (
 	Launched = FlagType("launched")
+	Bound    = FlagType("bound")
 	Deleted  = FlagType("deleted")
 )
 

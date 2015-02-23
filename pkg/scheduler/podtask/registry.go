@@ -139,9 +139,12 @@ func (k *inMemoryRegistry) handleTaskStarting(task *T, state StateType, status *
 	switch state {
 	case StatePending:
 		task.UpdatedTime = time.Now()
-		//TODO(jdef) properly emit metric, or event type instead of just logging
-		task.bindTime = task.UpdatedTime
-		log.V(1).Infof("metric time_to_bind %v task %v pod %v", task.bindTime.Sub(task.launchTime), task.ID, task.Pod.Name)
+		if !task.Has(Bound) {
+			task.Set(Bound)
+			//TODO(jdef) properly emit metric, or event type instead of just logging
+			task.bindTime = task.UpdatedTime
+			log.V(1).Infof("metric time_to_bind %v task %v pod %v", task.bindTime.Sub(task.launchTime), task.ID, task.Pod.Name)
+		}
 	default:
 		log.Warningf("Ignore status TASK_STARTING because the the task is not pending")
 	}
