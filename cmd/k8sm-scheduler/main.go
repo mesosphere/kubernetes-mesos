@@ -365,9 +365,17 @@ func clearOldPods(c *client.Client) {
 		return
 	}
 	for _, pod := range podList.Items {
-		err := c.Pods(pod.Namespace).Delete(pod.Name)
+		podName := pod.Name
+		if podName == "" {
+			podName = pod.UID
+			if podName == "" {
+				log.Warningf("failed to delete pod, it has no Name or UID: '%+v'", pod)
+				continue
+			}
+		}
+		err := c.Pods(pod.Namespace).Delete(podName)
 		if err != nil {
-			log.Warningf("failed to delete pod %v: %v", pod.Name, err)
+			log.Warningf("failed to delete pod '%v': %v", podName, err)
 		}
 	}
 }
