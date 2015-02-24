@@ -7,26 +7,17 @@ Development of Kubernetes-Mesos
 * [Profiling](#profiling)
 
 ### Prerequisites
-To get started with development you'll need to install some prerequisites:
-* Install Mesos, C++, and some configuration management tools
-* Install protobuf and Go
-* Install [godep][2]
+To get started with development you'll need to install some prerequisites.
+See the following sections for distro-specific instructions.
+* Go and some configuration management tools
+* [godep][2]
 
-The steps for installing prerequisites assume that you are logged in as `root`, otherwise you will need to insert `sudo` where appropriate.
+The following distro-specific steps for installing prerequisites assume that you are logged in as `root`, otherwise you will need to insert `sudo` where appropriate.
 
 #### Debian
 
 ```shell
-$ export DEB_VERSION_MESOS=0.20.1-1.0.debian75
-$ apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv E56151BF &&
-    echo "deb http://repos.mesosphere.io/debian wheezy main" |
-          tee /etc/apt/sources.list.d/mesosphere.list &&
-    apt-get -y update &&
-    apt-get -y install mesos=$DEB_VERSION_MESOS g++ make curl mercurial git
-
-$ curl -L https://protobuf.googlecode.com/files/protobuf-2.5.0.tar.gz |
-  tar xz && (cd protobuf-2.5.0/ && ./configure --prefix=/usr && make &&
-    make install)
+$ apt-get -y install make curl mercurial git
 
 $ (cd /usr/local &&
   curl -L https://storage.googleapis.com/golang/go1.3.3.linux-amd64.tar.gz |
@@ -41,13 +32,7 @@ $ mkdir -pv /opt && (export GOPATH=/opt; cd /opt &&
 
 #### Ubuntu
 ```shell
-$ DISTRO=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
-$ CODENAME=$(lsb_release -cs)
-$ apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv E56151BF &&
-    echo "deb http://repos.mesosphere.io/${DISTRO} ${CODENAME} main" |
-          tee /etc/apt/sources.list.d/mesosphere.list &&
-    apt-get -y update &&
-    apt-get -y install mesos g++ make curl mercurial git golang libprotobuf-dev
+$ apt-get -y install make curl mercurial git golang
 
 $ mkdir -pv /opt && (export GOPATH=/opt; cd /opt &&
   go get github.com/tools/godep &&
@@ -56,14 +41,8 @@ $ mkdir -pv /opt && (export GOPATH=/opt; cd /opt &&
 
 #### CentOS 6
 ```shell
-$ rpm -Uvh http://repos.mesosphere.io/el/6/noarch/RPMS/mesosphere-el-repo-6-2.noarch.rpm &&
-    rpm -Uvh http://mirrors.einstein.yu.edu/epel/6/i386/epel-release-6-8.noarch.rpm &&
-    yum -y update &&
-    yum -y install mesos git mercurial curl gcc gcc-c++ tar golang which
-
-$ curl -L https://protobuf.googlecode.com/files/protobuf-2.5.0.tar.gz |
-    tar xz && (cd protobuf-2.5.0/ && ./configure --prefix=/usr && make &&
-    make install)
+$ rpm -Uvh http://mirrors.einstein.yu.edu/epel/6/i386/epel-release-6-8.noarch.rpm &&
+    yum -y install git mercurial curl tar golang which
 
 $ mkdir -pv /opt && (export GOPATH=/opt; cd /opt &&
     go get github.com/tools/godep &&
@@ -98,7 +77,7 @@ $ curl http://10.132.189.${slave}:10250/debug/pprof/heap >${slave}.heap.$ts
 If you have captured two or more heaps it's trivial to use the Go pprof tooling to generate reports:
 ```shell
 $ go tool pprof --base=./${slave}.heap.20141117175634 --inuse_objects --pdf \
-  ./bin/kubernetes-executor ./${slave}.heap.20141120162503 >${slave}-20141120a.pdf
+  ./bin/k8sm-executor ./${slave}.heap.20141120162503 >${slave}-20141120a.pdf
 ```
 
 [1]: https://github.com/mesosphere/kubernetes-mesos#build

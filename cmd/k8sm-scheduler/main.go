@@ -19,6 +19,7 @@ limitations under the License.
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -31,21 +32,30 @@ import (
 
 	_ "github.com/mesosphere/kubernetes-mesos/pkg/profile"
 
-	"code.google.com/p/goprotobuf/proto"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/clientauth"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
+	"github.com/gogo/protobuf/proto"
 	log "github.com/golang/glog"
-	"github.com/mesos/mesos-go/mesos"
+	"github.com/mesos/mesos-go/auth"
+	"github.com/mesos/mesos-go/auth/sasl"
+	"github.com/mesos/mesos-go/auth/sasl/mech"
+	mesos "github.com/mesos/mesos-go/mesosproto"
+	mutil "github.com/mesos/mesos-go/mesosutil"
+	bindings "github.com/mesos/mesos-go/scheduler"
 	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
 	sconfig "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
+	"golang.org/x/net/context"
 )
 
 const (
@@ -61,12 +71,20 @@ var (
 	authPath        = flag.String("auth_path", "", "Path to .kubernetes_auth file, specifying how to authenticate to API server.")
 	apiServerList   util.StringList
 
-	executorPath        = flag.String("executor_path", "", "Location of the kubernetes executor executable")
-	proxyPath           = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
-	mesosUser           = flag.String("mesos_user", "", "Mesos user for this framework, defaults to the username that owns the framework process.")
-	mesosRole           = flag.String("mesos_role", "", "Mesos role for this framework, defaults to none.")
-	mesosAuthPrincipal  = flag.String("mesos_authentication_principal", "", "Mesos authentication principal.")
-	mesosAuthSecretFile = flag.String("mesos_authentication_secret_file", "", "Mesos authentication secret file.")
+	executorPath         = flag.String("executor_path", "", "Location of the kubernetes executor executable")
+	proxyPath            = flag.String("proxy_path", "", "Location of the kubernetes proxy executable")
+	mesosUser            = flag.String("mesos_user", "", "Mesos user for this framework, defaults to the username that owns the framework process.")
+	mesosRole            = flag.String("mesos_role", "", "Mesos role for this framework, defaults to none.")
+	mesosAuthPrincipal   = flag.String("mesos_authentication_principal", "", "Mesos authentication principal.")
+	mesosAuthSecretFile  = flag.String("mesos_authentication_secret_file", "", "Mesos authentication secret file.")
+	checkpoint           = flag.Bool("checkpoint", false, "Enable/disable checkpointing for the kubernetes-mesos framework.")
+	failoverTimeout      = flag.Float64("failover_timeout", time.Duration((1<<62)-1).Seconds(), fmt.Sprintf("Framework failover timeout, in ns."))
+	executorBindall      = flag.Bool("executor_bindall", false, "When true will set -address and -hostname_override of the executor to 0.0.0.0. Defaults to false.")
+	executorRunProxy     = flag.Bool("executor_run_proxy", true, "Run the kube-proxy as a child process of the executor. Defaults to true.")
+	executorProxyBindall = flag.Bool("executor_proxy_bindall", false, "When true pass -proxy_bindall to the executor. Defaults to false.")
+	authProvider         = flag.String("mesos_authentication_provider", sasl.ProviderName, fmt.Sprintf("Authentication provider to use, default is SASL that supports mechanisms: %+v", mech.ListSupported()))
+	driverPort           = flag.Uint("driver_port", 0, "Port that the Mesos scheduler driver process should listen on. Defaults to 0 (ephemeral).")
+	hostnameOverride     = flag.String("hostname_override", "", "If non-empty, will use this string as identification instead of the actual hostname.")
 )
 
 func init() {
@@ -101,7 +119,7 @@ func serveExecutorArtifact(path string) (*string, string) {
 
 func prepareExecutorInfo() *mesos.ExecutorInfo {
 	executorUris := []*mesos.CommandInfo_URI{}
-	uri, _ := serveExecutorArtifact(*proxyPath)
+	uri, proxyCmd := serveExecutorArtifact(*proxyPath)
 	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri, Executable: proto.Bool(true)})
 	uri, executorCmd := serveExecutorArtifact(*executorPath)
 	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri, Executable: proto.Bool(true)})
@@ -109,7 +127,26 @@ func prepareExecutorInfo() *mesos.ExecutorInfo {
 	//TODO(jdef): provide some way (env var?) for user's to customize executor config
 	//TODO(jdef): set -hostname_override and -address to 127.0.0.1 if `address` is 127.0.0.1
 	apiServerArgs := strings.Join(apiServerList, ",")
-	executorCommand := fmt.Sprintf("./%s -v=2 -hostname_override=0.0.0.0 -allow_privileged=%t -api_servers=%s", executorCmd, *allowPrivileged, apiServerArgs)
+
+	// propagate log verbosity from the scheduler to the executor,
+	// but not to the proxy because it's too noisy already
+	logv := flag.Lookup("v").Value.String()
+
+	executorCommand := fmt.Sprintf("./%s -v=%s -allow_privileged=%t -api_servers=%s -proxy_exec=./%s",
+		executorCmd, logv, *allowPrivileged, apiServerArgs, proxyCmd)
+
+	if *executorBindall {
+		executorCommand = fmt.Sprintf("%s -hostname_override=0.0.0.0 -address=0.0.0.0", executorCommand)
+	}
+
+	if *executorProxyBindall {
+		executorCommand = fmt.Sprintf("%s -proxy_bindall=%v", executorCommand, *executorProxyBindall)
+	}
+
+	if *executorRunProxy {
+		executorCommand = fmt.Sprintf("%s -run_proxy=%v", executorCommand, *executorRunProxy)
+	}
+
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
 		executorCommand = fmt.Sprintf("%s -etcd_servers=%s", executorCommand, etcdServerArguments)
@@ -171,7 +208,13 @@ func main() {
 	verflag.PrintAndExitIfRequested()
 
 	// we'll need this for the kubelet-executor
-	if (*etcdConfigFile != "" && len(etcdServerList) != 0) || (*etcdConfigFile == "" && len(etcdServerList) == 0) {
+	/*
+		if (*etcdConfigFile != "" && len(etcdServerList) != 0) || (*etcdConfigFile == "" && len(etcdServerList) == 0) {
+			log.Fatalf("specify either -etcd_servers or -etcd_config")
+		}
+	*/
+	etcdClient := kubelet.EtcdClientOrDie(etcdServerList, *etcdConfigFile)
+	if etcdClient == nil {
 		log.Fatalf("specify either -etcd_servers or -etcd_config")
 	}
 
@@ -189,39 +232,51 @@ func main() {
 
 	// Create mesos scheduler driver.
 	executor := prepareExecutorInfo()
-	mesosPodScheduler := scheduler.New(executor, scheduler.FCFSScheduleFunc, client)
-	info, cred, err := buildFrameworkInfo()
+	mesosPodScheduler := scheduler.New(executor, scheduler.FCFSScheduleFunc, client, etcdClient)
+	info, cred, err := buildFrameworkInfo(etcdClient)
 	if err != nil {
 		log.Fatalf("Misconfigured mesos framework: %v", err)
 	}
 	masterUri := kmcloud.MasterURI()
-	driver := &mesos.MesosSchedulerDriver{
-		Master:    masterUri,
-		Framework: *info,
-		Scheduler: mesosPodScheduler,
-		Cred:      cred,
+	dconfig := bindings.DriverConfig{
+		Scheduler:        mesosPodScheduler,
+		Framework:        info,
+		Master:           masterUri,
+		Credential:       cred,
+		BindingAddress:   net.IP(address),
+		BindingPort:      uint16(*driverPort),
+		HostnameOverride: *hostnameOverride,
+		WithAuthContext: func(ctx context.Context) context.Context {
+			ctx = auth.WithLoginProvider(ctx, *authProvider)
+			ctx = sasl.WithBindingAddress(ctx, net.IP(address))
+			return ctx
+		},
+	}
+	driver, err := bindings.NewMesosSchedulerDriver(dconfig)
+	if err != nil {
+		log.Fatalf("failed to create mesos scheduler driver: %v", err)
 	}
 
 	pluginStart := make(chan struct{})
 	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(pluginStart))
 	mesosPodScheduler.Init(driver, kpl)
-	driver.Init()
-	defer driver.Destroy()
 
-	go func() {
-		if st, err := driver.Start(); err == nil {
-			if st != mesos.Status_DRIVER_RUNNING {
-				log.Fatalf("Scheduler driver failed to start, has status: %v", st)
-			}
+	if st, err := driver.Start(); err == nil {
+		if st != mesos.Status_DRIVER_RUNNING {
+			log.Fatalf("Scheduler driver failed to start, has status: %v", st)
+		}
+		go func() {
 			if st, err = driver.Join(); err != nil {
 				log.Fatal(err)
 			} else if st != mesos.Status_DRIVER_RUNNING {
 				log.Fatalf("Scheduler driver failed to join, has status: %v", st)
+			} else {
+				log.Fatalf("Driver stopped, aborting scheduler") //TODO(jdef) should probably exit(0) here?
 			}
-		} else {
-			log.Fatalf("Failed to start driver: %v", err)
-		}
-	}()
+		}()
+	} else {
+		log.Fatalf("Failed to start driver: %v", err)
+	}
 
 	//TODO(jdef) we need real task reconciliation at some point
 	log.V(1).Info("Clearing old pods from the registry")
@@ -239,7 +294,23 @@ func main() {
 	select {}
 }
 
-func buildFrameworkInfo() (info *mesos.FrameworkInfo, cred *mesos.Credential, err error) {
+func buildFrameworkInfo(client tools.EtcdClient) (info *mesos.FrameworkInfo, cred *mesos.Credential, err error) {
+
+	var frameworkId *mesos.FrameworkID
+	var failover *float64
+
+	if *checkpoint {
+		response, err := client.Get(meta.FrameworkIDKey, false, false)
+		if err != nil {
+			if !tools.IsEtcdNotFound(err) {
+				log.Fatal(err)
+			}
+		} else if response.Node.Value != "" {
+			log.Infof("configuring FrameworkInfo with Id found in etcd: '%s'", response.Node.Value)
+			frameworkId = mutil.NewFrameworkID(response.Node.Value)
+		}
+		failover = proto.Float64(*failoverTimeout)
+	}
 
 	username, err := getUsername()
 	if err != nil {
@@ -247,14 +318,20 @@ func buildFrameworkInfo() (info *mesos.FrameworkInfo, cred *mesos.Credential, er
 	}
 	log.V(2).Infof("Framework configured with mesos user %v", username)
 	info = &mesos.FrameworkInfo{
-		Name: proto.String(sconfig.DefaultInfoName),
-		User: proto.String(username),
+		Name:            proto.String(sconfig.DefaultInfoName),
+		User:            proto.String(username),
+		Checkpoint:      proto.Bool(*checkpoint),
+		Id:              frameworkId,
+		FailoverTimeout: failover,
 	}
 	if *mesosRole != "" {
 		info.Role = proto.String(*mesosRole)
 	}
 	if *mesosAuthPrincipal != "" {
 		info.Principal = proto.String(*mesosAuthPrincipal)
+		if *mesosAuthSecretFile == "" {
+			return nil, nil, errors.New("authentication principal specified without the required credentials file")
+		}
 		secret, err := ioutil.ReadFile(*mesosAuthSecretFile)
 		if err != nil {
 			return nil, nil, err
@@ -288,9 +365,17 @@ func clearOldPods(c *client.Client) {
 		return
 	}
 	for _, pod := range podList.Items {
-		err := c.Pods(pod.Namespace).Delete(pod.Name)
+		podName := pod.Name
+		if podName == "" {
+			podName = pod.UID
+			if podName == "" {
+				log.Warningf("failed to delete pod, it has no Name or UID: '%+v'", pod)
+				continue
+			}
+		}
+		err := c.Pods(pod.Namespace).Delete(podName)
 		if err != nil {
-			log.Warning("failed to delete pod %v: %v", pod.Name, err)
+			log.Warningf("failed to delete pod '%v': %v", podName, err)
 		}
 	}
 }

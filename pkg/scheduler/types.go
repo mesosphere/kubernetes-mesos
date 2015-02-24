@@ -5,6 +5,8 @@ import (
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
+	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 )
 
 // PodScheduleFunc implements how to schedule pods among slaves.
@@ -17,19 +19,10 @@ import (
 // details.
 //
 // See the FCFSScheduleFunc for example.
-type PodScheduleFunc func(r OfferRegistry, slaves SlaveIndex, task *PodTask) (PerishableOffer, error)
+type PodScheduleFunc func(r offers.Registry, slaves SlaveIndex, task *podtask.T) (offers.Perishable, error)
 
 // A minimal placeholder
 type empty struct{}
-
-type stateType int
-
-const (
-	statePending stateType = iota
-	stateRunning
-	stateFinished
-	stateUnknown
-)
 
 var (
 	noSuitableOffersErr = errors.New("No suitable offers for pod/task")

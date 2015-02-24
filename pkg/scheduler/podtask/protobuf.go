@@ -1,8 +1,8 @@
-package scheduler
+package podtask
 
 import (
-	"code.google.com/p/goprotobuf/proto"
-	"github.com/mesos/mesos-go/mesos"
+	"github.com/gogo/protobuf/proto"
+	mesos "github.com/mesos/mesos-go/mesosproto"
 )
 
 // create a range resource for the listed ports
@@ -28,16 +28,8 @@ func newRanges(ports []uint64) *mesos.Value_Ranges {
 	return &mesos.Value_Ranges{Range: r}
 }
 
-func newTaskID(id string) *mesos.TaskID {
-	return &mesos.TaskID{Value: proto.String(id)}
-}
-
 func newTaskInfo(name string) *mesos.TaskInfo {
 	return &mesos.TaskInfo{
 		Name: proto.String(name),
 	}
-}
-
-func newOfferID(id string) *mesos.OfferID {
-	return &mesos.OfferID{Value: proto.String(id)}
 }

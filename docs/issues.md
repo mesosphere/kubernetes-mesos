@@ -33,3 +33,14 @@ To disable the work-around and revert to vanilla Kubernetes service endpoint ter
 * execute the k8sm controller-manager with `-host_port_endpoints=false`
 
 Future support for IPv6 addressing in Docker and Kubernetes should obviate the need for this work-around.
+
+### Orphan Pods
+
+The default `executor_shutdown_grace_period` of a Mesos slave is 3 seconds.
+When the executor is shut down it forcefully terminates the Docker containers that it manages.
+However, if terminating the Docker containers takes longer than the `executor_shutdown_grace_period` then some containers may not get a termination signal at all.
+A consequence of this is that some pod containers, previously managed by the framework's executor, will remaining running on the slave indefinitely.
+
+There are two work-arounds to this problem:
+* Restart the framework and it should terminate the orphaned tasks.
+* Adjust the value of `executor_shutdown_grace_period` to something greater than 3 seconds.

@@ -1,10 +1,11 @@
-package scheduler
+package podtask
 
 import (
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/mesos/mesos-go/mesos"
+	mesos "github.com/mesos/mesos-go/mesosproto"
+	mutil "github.com/mesos/mesos-go/mesosutil"
 )
 
 const (
@@ -12,8 +13,8 @@ const (
 	t_min_mem = 128
 )
 
-func fakePodTask(id string) (*PodTask, error) {
-	return newPodTask(api.NewDefaultContext(), &api.Pod{
+func fakePodTask(id string) (*T, error) {
+	return New(api.NewDefaultContext(), &api.Pod{
 		ObjectMeta: api.ObjectMeta{
 			Name:      id,
 			Namespace: api.NamespaceDefault,
@@ -44,8 +45,8 @@ func TestNoPortsInPodOrOffer(t *testing.T) {
 
 	offer := &mesos.Offer{
 		Resources: []*mesos.Resource{
-			mesos.ScalarResource("cpus", 0.001),
-			mesos.ScalarResource("mem", 0.001),
+			mutil.NewScalarResource("cpus", 0.001),
+			mutil.NewScalarResource("mem", 0.001),
 		},
 	}
 	if ok := task.AcceptOffer(offer); ok {
@@ -54,8 +55,8 @@ func TestNoPortsInPodOrOffer(t *testing.T) {
 
 	offer = &mesos.Offer{
 		Resources: []*mesos.Resource{
-			mesos.ScalarResource("cpus", t_min_cpu),
-			mesos.ScalarResource("mem", t_min_mem),
+			mutil.NewScalarResource("cpus", t_min_cpu),
+			mutil.NewScalarResource("mem", t_min_mem),
 		},
 	}
 	if ok := task.AcceptOffer(offer); !ok {
@@ -91,14 +92,14 @@ func TestDefaultHostPortMatching(t *testing.T) {
 			}},
 		}},
 	}
-	task, err = newPodTask(api.NewDefaultContext(), pod, &mesos.ExecutorInfo{})
+	task, err = New(api.NewDefaultContext(), pod, &mesos.ExecutorInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = defaultHostPortMapping(task, offer)
 	if err, _ := err.(*DuplicateHostPortError); err == nil {
 		t.Fatal("Expected duplicate port error")
-	} else if err.m1.offerPort != 123 {
+	} else if err.m1.OfferPort != 123 {
 		t.Fatal("Expected duplicate host port 123")
 	}
 }
@@ -110,8 +111,8 @@ func TestAcceptOfferPorts(t *testing.T) {
 
 	offer := &mesos.Offer{
 		Resources: []*mesos.Resource{
-			mesos.ScalarResource("cpus", t_min_cpu),
-			mesos.ScalarResource("mem", t_min_mem),
+			mutil.NewScalarResource("cpus", t_min_cpu),
+			mutil.NewScalarResource("mem", t_min_mem),
 			rangeResource("ports", []uint64{1, 1}),
 		},
 	}
@@ -141,8 +142,8 @@ func TestAcceptOfferPorts(t *testing.T) {
 	}
 
 	offer.Resources = []*mesos.Resource{
-		mesos.ScalarResource("cpus", t_min_cpu),
-		mesos.ScalarResource("mem", t_min_mem),
+		mutil.NewScalarResource("cpus", t_min_cpu),
+		mutil.NewScalarResource("mem", t_min_mem),
 	}
 	if ok := task.AcceptOffer(offer); !ok {
 		t.Fatalf("did not accepted offer %v:", offer)

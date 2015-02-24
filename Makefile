@@ -15,11 +15,11 @@ K8S_CMD		:= \
                    ${KUBE_GO_PACKAGE}/cmd/kube-apiserver	\
                    ${KUBE_GO_PACKAGE}/cmd/kube-proxy
 
-CMD_DIRS := $(shell cd $(current_dir) && find . -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|uniq|cut -f1 -d/ --complement|grep ^cmd/)
+CMD_DIRS := $(shell cd $(current_dir) && find . -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|sort|uniq|cut -f1 -d/ --complement|grep ^cmd/)
 
 FRAMEWORK_CMD	:= ${CMD_DIRS:%=${K8SM_GO_PACKAGE}/%}
 
-LIB_DIRS := $(shell cd $(current_dir) && find . -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|uniq|cut -f1 -d/ --complement|grep -v ^cmd/)
+LIB_DIRS := $(shell cd $(current_dir) && find . -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|sort|uniq|cut -f1 -d/ --complement|grep -v ^cmd/)
 
 FRAMEWORK_LIB	:= ${LIB_DIRS:%=${K8SM_GO_PACKAGE}/%}
 
@@ -36,35 +36,9 @@ DESTDIR		?= /target
 # default build tags
 TAGS		?=
 
-.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test patch version test.v clean
-
-ifneq ($(WITH_MESOS_DIR),)
-
-CFLAGS		+= -I$(WITH_MESOS_DIR)/include
-CPPFLAGS	+= -I$(WITH_MESOS_DIR)/include
-CXXFLAGS	+= -I$(WITH_MESOS_DIR)/include
-LDFLAGS		+= -L$(WITH_MESOS_DIR)/lib
-
-CGO_CFLAGS	+= -I$(WITH_MESOS_DIR)/include
-CGO_CPPFLAGS	+= -I$(WITH_MESOS_DIR)/include
-CGO_CXXFLAGS	+= -I$(WITH_MESOS_DIR)/include
-CGO_LDFLAGS	+= -L$(WITH_MESOS_DIR)/lib
-
-WITH_MESOS_CGO_FLAGS :=  \
-	  CGO_CFLAGS="$(CGO_CFLAGS)" \
-	  CGO_CPPFLAGS="$(CGO_CPPFLAGS)" \
-	  CGO_CXXFLAGS="$(CGO_CXXFLAGS)" \
-	  CGO_LDFLAGS="$(CGO_LDFLAGS)"
-
-WITH_MESOS_LD_FLAGS := LD_LIBRARY_PATH=$(WITH_MESOS_DIR)/lib
-
-endif
+.PHONY: all error require-godep framework require-vendor proxy install info bootstrap require-gopath format test patch version test.v clean vet
 
 FRAMEWORK_FLAGS := -v -x -tags '$(TAGS)'
-
-ifneq ($(STATIC),)
-FRAMEWORK_FLAGS += --ldflags '-extldflags "-static"'
-endif
 
 ifneq ($(WITH_RACE),)
 FRAMEWORK_FLAGS += -race
@@ -91,7 +65,7 @@ proxy: require-godep $(KUBE_GIT_VERSION_FILE) patch
 require-vendor:
 
 framework: require-godep
-	env $(WITH_MESOS_CGO_FLAGS) go install $(FRAMEWORK_FLAGS) $(FRAMEWORK_CMD)
+	go install $(FRAMEWORK_FLAGS) $(FRAMEWORK_CMD)
 
 clean:
 	go clean -r -i -x $(K8S_CMD) $(FRAMEWORK_CMD)
@@ -99,9 +73,12 @@ clean:
 format: require-gopath
 	go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
 
+vet: require-gopath
+	go vet $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
+
 test test.v: require-gopath
 	test "$@" = "test.v" && args="-test.v" || args=""; \
-		env $(WITH_MESOS_CGO_FLAGS) $(WITH_MESOS_LD_FLAGS) go test $$args $(FRAMEWORK_LIB)
+		go test $$args $(FRAMEWORK_LIB)
 
 install: all
 	mkdir -p $(DESTDIR)
@@ -110,10 +87,6 @@ install: all
 
 info:
 	@echo GOPATH=$(GOPATH)
-	@echo CGO_CFLAGS="$(CGO_CFLAGS)"
-	@echo CGO_CPPFLAGS="$(CGO_CPPFLAGS)"
-	@echo CGO_CXXFLAGS="$(CGO_CXXFLAGS)"
-	@echo CGO_LDFLAGS="$(CGO_LDFLAGS)"
 	@echo RACE_FLAGS=$${WITH_RACE:+-race}
 	@echo TAGS=$(TAGS)
 	@echo LIB_DIRS=$(LIB_DIRS)

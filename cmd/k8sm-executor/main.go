@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"flag"
+	"fmt"
 	"io"
 	"math/rand"
 	"net"
@@ -15,14 +16,12 @@ import (
 	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	kconfig "github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/config"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/standalone"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
-	"github.com/fsouza/go-dockerclient"
 	log "github.com/golang/glog"
-	"github.com/mesos/mesos-go/mesos"
+	bindings "github.com/mesos/mesos-go/executor"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor"
 )
 
@@ -33,7 +32,7 @@ const (
 
 var (
 	syncFrequency           = flag.Duration("sync_frequency", 10*time.Second, "Max period between synchronizing running containers and config")
-	address                 = util.IP(net.ParseIP("0.0.0.0"))
+	address                 = util.IP(net.ParseIP(defaultBindingAddress()))
 	port                    = flag.Uint("port", ports.KubeletPort, "The port for the info server to serve on")
 	hostnameOverride        = flag.String("hostname_override", "", "If non-empty, will use this string as identification instead of the actual hostname.")
 	networkContainerImage   = flag.String("network_container_image", kubelet.NetworkContainerImage, "The image that network containers in each pod will use.")
@@ -53,13 +52,30 @@ var (
 	apiServerList           util.StringList
 	clusterDomain           = flag.String("cluster_domain", "", "Domain for this cluster.  If set, kubelet will configure all containers to search this domain in addition to the host's search domains")
 	clusterDNS              = util.IP(nil)
+
+	//.. mesos-specific flags ..
+
+	runProxy     = flag.Bool("run_proxy", true, "Maintain a running kube-proxy instance as a child proc of this kubelet-executor.")
+	proxyLogV    = flag.Int("proxy_logv", 0, "Log verbosity of the child kube-proxy.")
+	proxyExec    = flag.String("proxy_exec", "./kube-proxy", "Path to the kube-proxy executable.")
+	proxyLog     = flag.String("proxy_logfile", "./proxy-log", "Path to the kube-proxy log file.")
+	proxyBindall = flag.Bool("proxy_bindall", false, "When true will cause kube-proxy to bind to 0.0.0.0. Defaults to false.")
 )
 
 func init() {
 	flag.Var(&etcdServerList, "etcd_servers", "List of etcd servers to watch (http://ip:port), comma separated")
-	flag.Var(&address, "address", "The IP address for the info and proxy servers to serve on. Default to 0.0.0.0.")
+	flag.Var(&address, "address", "The IP address for the info and proxy servers to serve on. Default to $LIBPROCESS_IP or else 0.0.0.0.")
 	flag.Var(&apiServerList, "api_servers", "List of Kubernetes API servers to publish events to. (ip:port), comma separated.")
 	flag.Var(&clusterDNS, "cluster_dns", "IP address for a cluster DNS server.  If set, kubelet will configure all containers to use this for DNS resolution in addition to the host's DNS servers")
+}
+
+func defaultBindingAddress() string {
+	libProcessIP := os.Getenv("LIBPROCESS_IP")
+	if libProcessIP == "" {
+		return "0.0.0.0"
+	} else {
+		return libProcessIP
+	}
 }
 
 func main() {
@@ -100,11 +116,10 @@ func main() {
 		EtcdClient:              kubelet.EtcdClientOrDie(etcdServerList, *etcdConfigFile),
 	}
 
-	driver := new(mesos.MesosExecutorDriver)
-
+	finished := make(chan struct{})
 	// @see kubernetes/pkg/standalone.go:createAndInitKubelet
-	initialized := make(chan struct{})
 	builder := standalone.KubeletBuilder(func(kc *standalone.KubeletConfig) (standalone.KubeletBootstrap, *kconfig.PodConfig) {
+		watch := kubelet.SetupEventSending(kc.AuthPath, kc.ApiServerList)
 		pc := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
 		updates := pc.Channel(MESOS_CFG_SOURCE)
 
@@ -126,22 +141,30 @@ func main() {
 				pc.SeenAllSources,
 				kc.ClusterDomain,
 				net.IP(kc.ClusterDNS)),
-			driver:      driver,
-			initialized: initialized,
+			finished: finished,
 		}
 		//TODO(jdef) would be nice to share the same api client instance as the kubelet event recorder
 		apiClient, err := kubelet.GetApiserverClient(kc.AuthPath, kc.ApiServerList)
 		if err != nil {
-			log.Fatal("Failed to configure API server client: %v", err)
+			log.Fatalf("Failed to configure API server client: %v", err)
 		}
 
-		driver.Executor = executor.New(driver, k.Kubelet, updates, MESOS_CFG_SOURCE, apiClient)
+		exec := executor.New(k.Kubelet, updates, MESOS_CFG_SOURCE, apiClient, watch, kc.DockerClient)
+		dconfig := bindings.DriverConfig{
+			Executor:         exec,
+			HostnameOverride: *hostnameOverride,
+			BindingAddress:   net.IP(address),
+		}
+		if driver, err := bindings.NewMesosExecutorDriver(dconfig); err != nil {
+			log.Fatalf("failed to create executor driver: %v", err)
+		} else {
+			k.driver = driver
+		}
 
 		log.V(2).Infof("Initialize executor driver...")
-		driver.Init()
 
 		k.BirthCry()
-		k.reconcileTasks(kc.DockerClient)
+		executor.KillKubeletContainers(kc.DockerClient)
 
 		go k.GarbageCollectLoop()
 		// go k.MonitorCAdvisor(kc.CAdvisorPort) // TODO(jdef) support cadvisor at some point
@@ -154,47 +177,35 @@ func main() {
 	standalone.RunKubelet(&kcfg, builder)
 
 	log.Infoln("Waiting for driver initialization to complete")
-	<-initialized
-	defer driver.Destroy()
 
 	// block until driver is shut down
-	driver.Join()
+	select {
+	case <-finished:
+	}
 }
 
+// kubelet decorator
 type kubeletExecutor struct {
 	*kubelet.Kubelet
-	driver      *mesos.MesosExecutorDriver
-	initialize  sync.Once
-	initialized chan struct{}
-}
-
-func (kl *kubeletExecutor) reconcileTasks(dockerClient dockertools.DockerInterface) {
-	// TODO(jdef): Destroy existing k8s containers for now - we don't know how to reconcile yet.
-	if containers, err := dockertools.GetKubeletDockerContainers(dockerClient, true); err == nil {
-		opts := docker.RemoveContainerOptions{
-			RemoveVolumes: true,
-			Force:         true,
-		}
-		for _, container := range containers {
-			opts.ID = container.ID
-			log.V(2).Infof("Removing container: %v", opts.ID)
-			if err := dockerClient.RemoveContainer(opts); err != nil {
-				log.Warning(err)
-			}
-		}
-	} else {
-		log.Warningf("Failed to list kubelet docker containers: %v", err)
-	}
+	initialize sync.Once
+	driver     bindings.ExecutorDriver
+	finished   chan struct{} // closed once driver.Run() completes
 }
 
 func (kl *kubeletExecutor) ListenAndServe(address net.IP, port uint, enableDebuggingHandlers bool) {
 	// this func could be called many times, depending how often the HTTP server crashes,
 	// so only execute certain initialization procs once
 	kl.initialize.Do(func() {
-		defer close(kl.initialized)
-		go util.Forever(runProxyService, 5*time.Second)
-		kl.driver.Start()
-		log.V(2).Infof("Executor driver is running!")
+		if *runProxy {
+			go util.Forever(runProxyService, 5*time.Second)
+		}
+		go func() {
+			defer close(kl.finished)
+			if _, err := kl.driver.Run(); err != nil {
+				log.Fatalf("failed to start executor driver: %v", err)
+			}
+			log.Info("executor Run completed")
+		}()
 
 		// TODO(who?) Recover running containers from check pointed pod list.
 		// @see reconcileTasks
@@ -211,37 +222,64 @@ func runProxyService() {
 	// not sure that k8s supports host-networking space for pods
 	log.Infof("Starting proxy process...")
 
-	args := []string{"-bind_address=" + address.String(), "-logtostderr=true", "-v=1"}
+	bindAddress := "0.0.0.0"
+	if !*proxyBindall {
+		bindAddress = address.String()
+	}
+	args := []string{
+		fmt.Sprintf("-bind_address=%s", bindAddress),
+		fmt.Sprintf("-v=%d", *proxyLogV),
+		"-logtostderr=true",
+	}
 	if len(etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(etcdServerList, ",")
 		args = append(args, "-etcd_servers="+etcdServerArguments)
 	} else if *etcdConfigFile != "" {
 		args = append(args, "-etcd_config="+*etcdConfigFile)
 	}
-	//TODO(jdef): don't hardcode name of the proxy executable here
-	cmd := exec.Command("./kube-proxy", args...)
+
+	cmd := exec.Command(*proxyExec, args...)
 	_, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	proxylogs, err := cmd.StderrPipe()
 	if err != nil {
 		log.Fatal(err)
 	}
-	logfile, err := os.Create("./proxy-log")
+
+	//TODO(jdef) append instead of truncate? what if the disk is full?
+	logfile, err := os.Create(*proxyLog)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer logfile.Close()
-	writer := bufio.NewWriter(logfile)
-	defer writer.Flush()
 
+	go func() {
+		defer func() {
+			log.Infof("killing proxy process..")
+			if err = cmd.Process.Kill(); err != nil {
+				log.Errorf("failed to kill proxy process: %v", err)
+			}
+		}()
+
+		writer := bufio.NewWriter(logfile)
+		defer writer.Flush()
+
+		written, err := io.Copy(writer, proxylogs)
+		if err != nil {
+			log.Errorf("error writing data to proxy log: %v", err)
+		}
+
+		log.Infof("wrote %d bytes to proxy log", written)
+	}()
+
+	// if the proxy fails to start then we exit the executor, otherwise
+	// wait for the proxy process to end (and release resources after).
 	if err := cmd.Start(); err != nil {
 		log.Fatal(err)
+	} else if err := cmd.Wait(); err != nil {
+		log.Error(err)
 	}
-	defer func() {
-		log.V(2).Infof("Cleaning up proxy process...")
-		cmd.Process.Kill()
-	}()
-	io.Copy(writer, proxylogs)
 }

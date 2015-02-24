@@ -21,7 +21,7 @@ This example copies the resulting binaries into the host-mounted volume `/tmp/ta
 
 To build and copy the binaries:
 
-    $ docker run --rm -v /tmp/target:/target jdef/kubernetes-mesos:build-latest
+    $ docker run --rm -v /tmp/target:/target mesosphere/kubernetes-mesos:build
     ...
     git clone https://${GOPKG}.git .
     Cloning into '.'...
@@ -43,32 +43,30 @@ To build and copy the binaries:
 
 Alternatively, it can be used to generate binaries from a branch:
 
-    $ docker run --rm -v /tmp/target:/target -e GIT_BRANCH=default_port jdef/kubernetes-mesos:build-latest
+    $ docker run --rm -v /tmp/target:/target -e GIT_BRANCH=default_port mesosphere/kubernetes-mesos:build
 
 Want a quick-and-dirty development environment to start hacking?
 
-    $ docker run -ti -v /tmp/target:/target jdef/kubernetes-mesos:build-latest bash
+    $ docker run -ti -v /tmp/target:/target mesosphere/kubernetes-mesos:build bash
     root@5883c3a460a6$ make bootstrap all
 
 Need to build the project, but from a forked git repo?
 
     $ docker run --rm -v /tmp/target:/target -e GIT_REPO=https://github.com/whoami/kubernetes-mesos \
-        jdef/kubernetes-mesos:build-latest
+        mesosphere/kubernetes-mesos:build
 
 To hack in your currently checked out repo mount the root of the github repo to `/snapshot`:
 
     $ docker run -ti -v /tmp/target:/target -v /home/jdef/kubernetes-mesos:/snapshot \
-        jdef/kubernetes-mesos:build-latest bash
+        mesosphere/kubernetes-mesos:build bash
 
 ## Profiling
 
 Profiling in the cloud with Kubernetes-Mesos is easy!
 First, ssh into your Mesos cluster and generate a set of project binaries with profiling enabled (the `TAGS` variable is important here):
 
-    $ dpkg -l | grep -e mesos  # verify the mesos version
-    ii  mesos                               0.20.1-1.0.debian75           amd64        Cluster resouce manager with efficient resource isolation
     $ docker run --rm -ti -e GIT_BRANCH=offer_storage -e TAGS=profile \
-        -v $(pwd)/bin:/target jdef/kubernetes-mesos:build-mesos-0.20.1-compat
+        -v $(pwd)/bin:/target mesosphere/kubernetes-mesos:build
 
 Next, [start the framework](https://github.com/mesosphere/kubernetes-mesos/#start-the-framework) and schedule some pods.
 Once the framework and executors are up and running you can start capturing heaps:

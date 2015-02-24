@@ -5,6 +5,7 @@ import (
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -38,11 +39,11 @@ func TestDeleteOne_PendingPod(t *testing.T) {
 			UID:       "foo0",
 			Namespace: api.NamespaceDefault,
 		}}}
-	task := &PodTask{ID: "bar", Pod: pod.Pod}
+	task := &podtask.T{ID: "bar", Pod: pod.Pod}
 
 	// set expectations
 	obj.On("taskForPod", podKey).Return(task.ID, true)
-	obj.On("getTask", task.ID).Return(task, statePending)
+	obj.On("getTask", task.ID).Return(task, podtask.StatePending)
 	obj.On("unregisterPodTask", task).Return()
 
 	// preconditions
@@ -76,11 +77,12 @@ func TestDeleteOne_Running(t *testing.T) {
 			UID:       "foo0",
 			Namespace: api.NamespaceDefault,
 		}}}
-	task := &PodTask{ID: "bar", Pod: pod.Pod, launched: true}
+	task := &podtask.T{ID: "bar", Pod: pod.Pod, Flags: make(map[podtask.FlagType]struct{})}
+	task.Set(podtask.Launched)
 
 	// set expectations
 	obj.On("taskForPod", podKey).Return(task.ID, true)
-	obj.On("getTask", task.ID).Return(task, statePending)
+	obj.On("getTask", task.ID).Return(task, podtask.StatePending)
 	obj.On("killTask", task.ID).Return(nil)
 
 	// preconditions
@@ -118,7 +120,7 @@ func TestDeleteOne_Unknown(t *testing.T) {
 
 	// set expectations
 	obj.On("taskForPod", podKey).Return(taskId, true)
-	obj.On("getTask", taskId).Return(nil, stateUnknown)
+	obj.On("getTask", taskId).Return(nil, podtask.StateUnknown)
 
 	// exec & post conditions
 	d := &deleter{

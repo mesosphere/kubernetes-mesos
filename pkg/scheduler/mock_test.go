@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/mesos/mesos-go/mesos"
+	mesos "github.com/mesos/mesos-go/mesosproto"
+	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -32,38 +34,38 @@ func (m *MockScheduler) algorithm() (f PodScheduleFunc) {
 	}
 	return
 }
-func (m *MockScheduler) createPodTask(ctx api.Context, pod *api.Pod) (task *PodTask, err error) {
+func (m *MockScheduler) createPodTask(ctx api.Context, pod *api.Pod) (task *podtask.T, err error) {
 	args := m.Called(ctx, pod)
 	x := args.Get(0)
 	if x != nil {
-		task = x.(*PodTask)
+		task = x.(*podtask.T)
 	}
 	err = args.Error(1)
 	return
 }
-func (m *MockScheduler) getTask(taskId string) (task *PodTask, currentState stateType) {
+func (m *MockScheduler) getTask(taskId string) (task *podtask.T, currentState podtask.StateType) {
 	args := m.Called(taskId)
 	x := args.Get(0)
 	if x != nil {
-		task = x.(*PodTask)
+		task = x.(*podtask.T)
 	}
 	y := args.Get(1)
-	currentState = y.(stateType)
+	currentState = y.(podtask.StateType)
 	return
 }
-func (m *MockScheduler) offers() (f OfferRegistry) {
+func (m *MockScheduler) offers() (f offers.Registry) {
 	args := m.Called()
 	x := args.Get(0)
 	if x != nil {
-		f = x.(OfferRegistry)
+		f = x.(offers.Registry)
 	}
 	return
 }
-func (m *MockScheduler) registerPodTask(tin *PodTask, ein error) (tout *PodTask, eout error) {
+func (m *MockScheduler) registerPodTask(tin *podtask.T, ein error) (tout *podtask.T, eout error) {
 	args := m.Called(tin, ein)
 	x := args.Get(0)
 	if x != nil {
-		tout = x.(*PodTask)
+		tout = x.(*podtask.T)
 	}
 	eout = args.Error(1)
 	return
@@ -74,14 +76,14 @@ func (m *MockScheduler) taskForPod(podID string) (taskID string, ok bool) {
 	ok = args.Bool(1)
 	return
 }
-func (m *MockScheduler) unregisterPodTask(task *PodTask) {
+func (m *MockScheduler) unregisterPodTask(task *podtask.T) {
 	m.Called(task)
 }
 func (m *MockScheduler) killTask(taskId string) error {
 	args := m.Called(taskId)
 	return args.Error(0)
 }
-func (m *MockScheduler) launchTask(task *PodTask) error {
+func (m *MockScheduler) launchTask(task *podtask.T) error {
 	args := m.Called(task)
 	return args.Error(0)
 }

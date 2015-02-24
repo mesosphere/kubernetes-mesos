@@ -1,4 +1,4 @@
-package scheduler
+package podtask
 
 import (
 	"fmt"
@@ -7,7 +7,9 @@ import (
 	"code.google.com/p/go-uuid/uuid"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	log "github.com/golang/glog"
-	"github.com/mesos/mesos-go/mesos"
+	mesos "github.com/mesos/mesos-go/mesosproto"
+	mutil "github.com/mesos/mesos-go/mesosutil"
+	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 )
 
 const (
@@ -15,36 +17,54 @@ const (
 	containerMem  = 64   // initial MB of memory allocated for executor
 )
 
+type StateType int
+
+const (
+	StatePending StateType = iota
+	StateRunning
+	StateFinished
+	StateUnknown
+)
+
+type FlagType string
+
+const (
+	Launched = FlagType("launched")
+	Bound    = FlagType("bound")
+	Deleted  = FlagType("deleted")
+)
+
 // A struct that describes a pod task.
-type PodTask struct {
-	ID         string
-	Pod        *api.Pod
-	TaskInfo   *mesos.TaskInfo
-	Offer      PerishableOffer
-	launched   bool
-	deleted    bool
-	podKey     string
-	createTime time.Time
-	launchTime time.Time
-	bindTime   time.Time
-	mapper     hostPortMappingFunc
-	ports      []hostPortMapping
+type T struct {
+	ID          string
+	Pod         *api.Pod
+	TaskInfo    *mesos.TaskInfo
+	Offer       offers.Perishable
+	State       StateType
+	Ports       []HostPortMapping
+	Flags       map[FlagType]struct{}
+	podKey      string
+	CreateTime  time.Time
+	UpdatedTime time.Time // time of the most recent StatusUpdate we've seen from the mesos master
+	launchTime  time.Time
+	bindTime    time.Time
+	mapper      HostPortMappingFunc
 }
 
-func (t *PodTask) hasAcceptedOffer() bool {
+func (t *T) HasAcceptedOffer() bool {
 	return t.TaskInfo != nil && t.TaskInfo.TaskId != nil
 }
 
-func (t *PodTask) GetOfferId() string {
+func (t *T) GetOfferId() string {
 	if t.Offer == nil {
 		return ""
 	}
 	return t.Offer.Details().Id.GetValue()
 }
 
-// Fill the TaskInfo in the PodTask, should be called during k8s scheduling,
+// Fill the TaskInfo in the T, should be called during k8s scheduling,
 // before binding.
-func (t *PodTask) FillFromDetails(details *mesos.Offer) error {
+func (t *T) FillFromDetails(details *mesos.Offer) error {
 	if details == nil {
 		//programming error
 		panic("offer details are nil")
@@ -52,11 +72,11 @@ func (t *PodTask) FillFromDetails(details *mesos.Offer) error {
 
 	log.V(3).Infof("Recording offer(s) %v against pod %v", details.Id, t.Pod.Name)
 
-	t.TaskInfo.TaskId = newTaskID(t.ID)
+	t.TaskInfo.TaskId = mutil.NewTaskID(t.ID)
 	t.TaskInfo.SlaveId = details.GetSlaveId()
 	t.TaskInfo.Resources = []*mesos.Resource{
-		mesos.ScalarResource("cpus", containerCpus),
-		mesos.ScalarResource("mem", containerMem),
+		mutil.NewScalarResource("cpus", containerCpus),
+		mutil.NewScalarResource("mem", containerMem),
 	}
 	if mapping, err := t.mapper(t, details); err != nil {
 		t.ClearTaskInfo()
@@ -64,9 +84,9 @@ func (t *PodTask) FillFromDetails(details *mesos.Offer) error {
 	} else {
 		ports := []uint64{}
 		for _, entry := range mapping {
-			ports = append(ports, entry.offerPort)
+			ports = append(ports, entry.OfferPort)
 		}
-		t.ports = mapping
+		t.Ports = mapping
 		if portsResource := rangeResource("ports", ports); portsResource != nil {
 			t.TaskInfo.Resources = append(t.TaskInfo.Resources, portsResource)
 		}
@@ -76,17 +96,17 @@ func (t *PodTask) FillFromDetails(details *mesos.Offer) error {
 
 // Clear offer-related details from the task, should be called if/when an offer
 // has already been assigned to a task but for some reason is no longer valid.
-func (t *PodTask) ClearTaskInfo() {
+func (t *T) ClearTaskInfo() {
 	log.V(3).Infof("Clearing offer(s) from pod %v", t.Pod.Name)
 	t.Offer = nil
 	t.TaskInfo.TaskId = nil
 	t.TaskInfo.SlaveId = nil
 	t.TaskInfo.Resources = nil
 	t.TaskInfo.Data = nil
-	t.ports = nil
+	t.Ports = nil
 }
 
-func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
+func (t *T) AcceptOffer(offer *mesos.Offer) bool {
 	if offer == nil {
 		return false
 	}
@@ -114,46 +134,62 @@ func (t *PodTask) AcceptOffer(offer *mesos.Offer) bool {
 	return true
 }
 
-// create a duplicate task, one that refers to the same pod specification and
-// executor as the current task. all other state is reset to "factory settings"
-// (as if returned from newPodTask)
-func (t *PodTask) dup() (*PodTask, error) {
-	ctx := api.WithNamespace(api.NewDefaultContext(), t.Pod.Namespace)
-	return newPodTask(ctx, t.Pod, t.TaskInfo.Executor)
+func (t *T) Set(f FlagType) {
+	t.Flags[f] = struct{}{}
+	if Launched == f {
+		//TODO(jdef) properly emit metric, or event type instead of just logging
+		t.launchTime = time.Now()
+		log.V(1).Infof("metric time_to_launch %v task %v pod %v", t.launchTime.Sub(t.CreateTime), t.ID, t.Pod.Name)
+	}
 }
 
-func newPodTask(ctx api.Context, pod *api.Pod, executor *mesos.ExecutorInfo) (*PodTask, error) {
+func (t *T) Has(f FlagType) (exists bool) {
+	_, exists = t.Flags[f]
+	return
+}
+
+// create a duplicate task, one that refers to the same pod specification and
+// executor as the current task. all other state is reset to "factory settings"
+// (as if returned from New())
+func (t *T) dup() (*T, error) {
+	ctx := api.WithNamespace(api.NewDefaultContext(), t.Pod.Namespace)
+	return New(ctx, t.Pod, t.TaskInfo.Executor)
+}
+
+func New(ctx api.Context, pod *api.Pod, executor *mesos.ExecutorInfo) (*T, error) {
 	if pod == nil {
 		return nil, fmt.Errorf("illegal argument: pod was nil")
 	}
 	if executor == nil {
 		return nil, fmt.Errorf("illegal argument: executor was nil")
 	}
-	key, err := makePodKey(ctx, pod.Name)
+	key, err := MakePodKey(ctx, pod.Name)
 	if err != nil {
 		return nil, err
 	}
 	taskId := uuid.NewUUID().String()
-	task := &PodTask{
+	task := &T{
 		ID:       taskId,
 		Pod:      pod,
-		TaskInfo: newTaskInfo("PodTask"),
+		TaskInfo: newTaskInfo("Pod"),
+		State:    StatePending,
 		podKey:   key,
 		mapper:   defaultHostPortMapping,
+		Flags:    make(map[FlagType]struct{}),
 	}
 	task.TaskInfo.Executor = executor
-	task.createTime = time.Now()
+	task.CreateTime = time.Now()
 	return task, nil
 }
 
-type hostPortMapping struct {
-	cindex    int // containerIndex
-	pindex    int // portIndex
-	offerPort uint64
+type HostPortMapping struct {
+	ContainerIdx int // index of the container in the pod spec
+	PortIdx      int // index of the port in a container's port spec
+	OfferPort    uint64
 }
 
 // abstracts the way that host ports are mapped to pod container ports
-type hostPortMappingFunc func(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error)
+type HostPortMappingFunc func(t *T, offer *mesos.Offer) ([]HostPortMapping, error)
 
 type PortAllocationError struct {
 	PodId string
@@ -165,19 +201,19 @@ func (err *PortAllocationError) Error() string {
 }
 
 type DuplicateHostPortError struct {
-	m1, m2 hostPortMapping
+	m1, m2 HostPortMapping
 }
 
 func (err *DuplicateHostPortError) Error() string {
 	return fmt.Sprintf(
 		"Host port %d is specified for container %d, pod %d and container %d, pod %d",
-		err.m1.offerPort, err.m1.cindex, err.m1.pindex, err.m2.cindex, err.m2.pindex)
+		err.m1.OfferPort, err.m1.ContainerIdx, err.m1.PortIdx, err.m2.ContainerIdx, err.m2.PortIdx)
 }
 
 // default k8s host port mapping implementation: hostPort == 0 means containerPort remains pod-private
-func defaultHostPortMapping(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, error) {
-	requiredPorts := make(map[uint64]hostPortMapping)
-	mapping := []hostPortMapping{}
+func defaultHostPortMapping(t *T, offer *mesos.Offer) ([]HostPortMapping, error) {
+	requiredPorts := make(map[uint64]HostPortMapping)
+	mapping := []HostPortMapping{}
 	if t.Pod == nil {
 		// programming error
 		panic("task.Pod is nil")
@@ -190,10 +226,10 @@ func defaultHostPortMapping(t *PodTask, offer *mesos.Offer) ([]hostPortMapping, 
 			if port.HostPort == 0 {
 				continue // ignore
 			}
-			m := hostPortMapping{
-				cindex:    i,
-				pindex:    pi,
-				offerPort: uint64(port.HostPort),
+			m := HostPortMapping{
+				ContainerIdx: i,
+				PortIdx:      pi,
+				OfferPort:    uint64(port.HostPort),
 			}
 			if entry, inuse := requiredPorts[uint64(port.HostPort)]; inuse {
 				return nil, &DuplicateHostPortError{entry, m}

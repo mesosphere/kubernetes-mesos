@@ -1,27 +1,28 @@
-package scheduler
+package offers
 
 import (
 	"fmt"
+	"reflect"
 	"sync/atomic"
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
-	"github.com/mesos/mesos-go/mesos"
+	mesos "github.com/mesos/mesos-go/mesosproto"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 )
 
 const (
-	offerListenerMaxAge      = 30                     // max number of times we'll attempt to fit an offer to a listener before requiring them to re-register themselves
-	offerIdCacheTTL          = 500 * time.Millisecond // determines expiration of cached offer ids, used in listener notification
-	deferredDeclineTtlFactor = 2                      // this factor, multiplied by the offer ttl, determines how long to wait before attempting to decline previously claimed offers that were subsequently deleted, then released. see offerStorage.Delete
-	notifyListenersDelay     = 10 * time.Millisecond  // delay between offer listener notification attempts
+	offerListenerMaxAge      = 12              // max number of times we'll attempt to fit an offer to a listener before requiring them to re-register themselves
+	offerIdCacheTTL          = 1 * time.Second // determines expiration of cached offer ids, used in listener notification
+	deferredDeclineTtlFactor = 2               // this factor, multiplied by the offer ttl, determines how long to wait before attempting to decline previously claimed offers that were subsequently deleted, then released. see offerStorage.Delete
+	notifyListenersDelay     = 0               // delay between offer listener notification attempts
 )
 
-type OfferFilter func(*mesos.Offer) bool
+type Filter func(*mesos.Offer) bool
 
-type OfferRegistry interface {
+type Registry interface {
 	// Initialize the instance, spawning necessary housekeeping go routines.
 	Init()
 	Add([]*mesos.Offer)
@@ -29,12 +30,12 @@ type OfferRegistry interface {
 	// Listen for arriving offers that are acceptable to the filter, sending
 	// a signal on (by closing) the returned channel. A listener will only
 	// ever be notified once, if at all.
-	Listen(id string, f OfferFilter) <-chan struct{}
+	Listen(id string, f Filter) <-chan struct{}
 
 	// invoked when offers are rescinded or expired
 	Delete(string)
 
-	Get(offerId string) (PerishableOffer, bool)
+	Get(offerId string) (Perishable, bool)
 
 	Walk(Walker) error
 
@@ -45,18 +46,18 @@ type OfferRegistry interface {
 
 // callback that is invoked during a walk through a series of live offers,
 // returning with stop=true (or err != nil) if the walk should stop permaturely.
-type Walker func(offer PerishableOffer) (stop bool, err error)
+type Walker func(offer Perishable) (stop bool, err error)
 
-type OfferRegistryConfig struct {
-	declineOffer  func(offerId string) error
-	ttl           time.Duration // determines a perishable offer's expiration deadline: now+ttl
-	lingerTtl     time.Duration // if zero, offers will not linger in the FIFO past their expiration deadline
-	listenerDelay time.Duration // specifies the sleep time between offer listener notifications
+type RegistryConfig struct {
+	DeclineOffer  func(offerId string) error
+	TTL           time.Duration // determines a perishable offer's expiration deadline: now+ttl
+	LingerTTL     time.Duration // if zero, offers will not linger in the FIFO past their expiration deadline
+	ListenerDelay time.Duration // specifies the sleep time between offer listener notifications
 }
 
 type offerStorage struct {
-	OfferRegistryConfig
-	offers    *cache.FIFO       // collection of PerishableOffer, both live and expired
+	RegistryConfig
+	offers    *cache.FIFO       // collection of Perishable, both live and expired
 	listeners *queue.DelayFIFO  // collection of *offerListener
 	delayed   *queue.DelayQueue // deadline-oriented offer-event queue
 }
@@ -72,7 +73,7 @@ type expiredOffer struct {
 	deadline time.Time
 }
 
-type PerishableOffer interface {
+type Perishable interface {
 	queue.Delayed
 	// returns true if this offer has expired
 	HasExpired() bool
@@ -135,12 +136,12 @@ func (to *liveOffer) GetDelay() time.Duration {
 	return to.expiration.Sub(time.Now())
 }
 
-func CreateOfferRegistry(c OfferRegistryConfig) OfferRegistry {
+func CreateRegistry(c RegistryConfig) Registry {
 	return &offerStorage{
-		OfferRegistryConfig: c,
-		offers:              cache.NewFIFO(),
-		listeners:           queue.NewDelayFIFO(),
-		delayed:             queue.NewDelayQueue(),
+		RegistryConfig: c,
+		offers:         cache.NewFIFO(),
+		listeners:      queue.NewDelayFIFO(),
+		delayed:        queue.NewDelayQueue(),
 	}
 }
 
@@ -149,7 +150,7 @@ func (s *offerStorage) Add(offers []*mesos.Offer) {
 	for _, offer := range offers {
 		offerId := offer.Id.GetValue()
 		log.V(3).Infof("Receiving offer %v", offerId)
-		timed := &liveOffer{offer, now.Add(s.ttl), 0}
+		timed := &liveOffer{offer, now.Add(s.TTL), 0}
 		s.offers.Add(offerId, timed)
 		s.delayed.Add(timed)
 	}
@@ -166,7 +167,7 @@ func (s *offerStorage) Delete(offerId string) {
 		if offer.Details() != nil {
 			if myoffer {
 				log.V(3).Infof("Declining offer %v", offerId)
-				if err := s.declineOffer(offerId); err != nil {
+				if err := s.DeclineOffer(offerId); err != nil {
 					log.Warningf("Failed to decline offer %v: %v", offerId, err)
 				}
 			} else {
@@ -176,7 +177,7 @@ func (s *offerStorage) Delete(offerId string) {
 					// TODO(jdef): not sure what a good value is here. the goal is to provide a
 					// launchTasks (driver) operation enough time to complete so that we don't end
 					// up declining an offer that we're actually attempting to use.
-					time.Sleep(deferredDeclineTtlFactor * s.ttl)
+					time.Sleep(deferredDeclineTtlFactor * s.TTL)
 
 					// at this point the offer is in one of five states:
 					// a) permanently deleted: expired due to timeout
@@ -188,7 +189,7 @@ func (s *offerStorage) Delete(offerId string) {
 					if offer.Acquire() {
 						// previously claimed offer was released, perhaps due to a launch
 						// failure, so we should attempt to decline
-						if err := s.declineOffer(offerId); err != nil {
+						if err := s.DeclineOffer(offerId); err != nil {
 							log.Warningf("Failed to decline (previously claimed) offer %v: %v", offerId, err)
 						}
 					}
@@ -207,7 +208,7 @@ func (s *offerStorage) Invalidate(offerId string) {
 	}
 	obj := s.offers.List()
 	for _, o := range obj {
-		offer, ok := o.(PerishableOffer)
+		offer, ok := o.(Perishable)
 		if !ok {
 			log.Errorf("Expected perishable offer, not %v", o)
 			continue
@@ -249,16 +250,16 @@ func (s *offerStorage) Walk(w Walker) error {
 	return nil
 }
 
-func (s *offerStorage) expireOffer(offer PerishableOffer) {
+func (s *offerStorage) expireOffer(offer Perishable) {
 	// the offer may or may not be expired due to TTL so check for details
 	// since that's a more reliable determinant of lingering status
 	if details := offer.Details(); details != nil {
 		// recently expired, should linger
 		offerId := details.Id.GetValue()
 		log.V(3).Infof("Expiring offer %v", offerId)
-		if s.lingerTtl > 0 {
+		if s.LingerTTL > 0 {
 			log.V(3).Infof("offer will linger: %v", offerId)
-			expired := &expiredOffer{offerId, time.Now().Add(s.lingerTtl)}
+			expired := &expiredOffer{offerId, time.Now().Add(s.LingerTTL)}
 			s.offers.Update(offerId, expired)
 			s.delayed.Add(expired)
 		} else {
@@ -268,11 +269,11 @@ func (s *offerStorage) expireOffer(offer PerishableOffer) {
 	} // else, it's still lingering...
 }
 
-func (s *offerStorage) Get(id string) (PerishableOffer, bool) {
+func (s *offerStorage) Get(id string) (Perishable, bool) {
 	if obj, ok := s.offers.Get(id); !ok {
 		return nil, false
 	} else {
-		to, ok := obj.(PerishableOffer)
+		to, ok := obj.(Perishable)
 		if !ok {
 			log.Errorf("invalid offer object in fifo '%v'", obj)
 		}
@@ -281,11 +282,12 @@ func (s *offerStorage) Get(id string) (PerishableOffer, bool) {
 }
 
 type offerListener struct {
-	id       string
-	accepts  OfferFilter
-	notify   chan<- struct{}
-	age      int
-	deadline time.Time
+	id         string
+	accepts    Filter
+	notify     chan<- struct{}
+	age        int
+	deadline   time.Time
+	sawVersion uint64
 }
 
 func (l *offerListener) GetUID() string {
@@ -298,7 +300,7 @@ func (l *offerListener) Deadline() (time.Time, bool) {
 
 // register a listener for new offers, whom we'll notify upon receiving such.
 // notification is delivered in the form of closing the channel, nothing is ever sent.
-func (s *offerStorage) Listen(id string, f OfferFilter) <-chan struct{} {
+func (s *offerStorage) Listen(id string, f Filter) <-chan struct{} {
 	if f == nil {
 		return nil
 	}
@@ -307,7 +309,7 @@ func (s *offerStorage) Listen(id string, f OfferFilter) <-chan struct{} {
 		id:       id,
 		accepts:  f,
 		notify:   ch,
-		deadline: time.Now().Add(s.listenerDelay),
+		deadline: time.Now().Add(s.ListenerDelay),
 	}
 	log.V(3).Infof("Registering offer listener %s", listen.id)
 	s.listeners.Offer(listen, queue.ReplaceExisting)
@@ -315,9 +317,9 @@ func (s *offerStorage) Listen(id string, f OfferFilter) <-chan struct{} {
 }
 
 func (s *offerStorage) ageOffers() {
-	offer, ok := s.delayed.Pop().(PerishableOffer)
+	offer, ok := s.delayed.Pop().(Perishable)
 	if !ok {
-		log.Errorf("Expected PerishableOffer, not %v", offer)
+		log.Errorf("Expected Perishable, not %v", offer)
 		return
 	}
 	if details := offer.Details(); details != nil && !offer.HasExpired() {
@@ -342,11 +344,20 @@ func (s *offerStorage) nextListener() *offerListener {
 // notify listeners if we find an acceptable offer for them. listeners
 // are garbage collected after a certain age (see offerListenerMaxAge).
 // ids lists offer IDs that are retrievable from offer storage.
-func (s *offerStorage) notifyListeners(ids func() util.StringSet) {
+func (s *offerStorage) notifyListeners(ids func() (util.StringSet, uint64)) {
 	listener := s.nextListener() // blocking
 
+	offerIds, version := ids()
+	if listener.sawVersion == version {
+		// no changes to offer list, avoid growing older - just wait for new offers to arrive
+		listener.deadline = time.Now().Add(s.ListenerDelay)
+		s.listeners.Offer(listener, queue.KeepExisting)
+		return
+	}
+	listener.sawVersion = version
+
 	// notify if we find an acceptable offer
-	for id := range ids() {
+	for id := range offerIds {
 		if offer, ok := s.Get(id); !ok || offer.HasExpired() {
 			continue
 		} else if listener.accepts(offer.Details()) {
@@ -359,7 +370,7 @@ func (s *offerStorage) notifyListeners(ids func() util.StringSet) {
 	// no interesting offers found, re-queue the listener
 	listener.age++
 	if listener.age < offerListenerMaxAge {
-		listener.deadline = time.Now().Add(s.listenerDelay)
+		listener.deadline = time.Now().Add(s.ListenerDelay)
 		s.listeners.Offer(listener, queue.KeepExisting)
 	} else {
 		// garbage collection is as simple as not re-adding the listener to the queue
@@ -378,8 +389,6 @@ func (s *offerStorage) Init() {
 		ttl:    offerIdCacheTTL,
 	}
 
-	// when the listeners queue grows large, this gives a little breathing room to
-	// the offers structure
 	go util.Forever(func() { s.notifyListeners(idCache.Strings) }, notifyListenersDelay)
 }
 
@@ -388,14 +397,19 @@ type stringsCache struct {
 	cached    util.StringSet
 	ttl       time.Duration
 	refill    func() util.StringSet
+	version   uint64
 }
 
 // not thread-safe
-func (c *stringsCache) Strings() util.StringSet {
+func (c *stringsCache) Strings() (util.StringSet, uint64) {
 	now := time.Now()
 	if c.expiresAt.Before(now) {
+		old := c.cached
 		c.cached = c.refill()
 		c.expiresAt = now.Add(c.ttl)
+		if !reflect.DeepEqual(old, c.cached) {
+			c.version++
+		}
 	}
-	return c.cached
+	return c.cached, c.version
 }

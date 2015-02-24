@@ -12,8 +12,11 @@ test -n "$servicehost" || {
 }
 
 ts=$(date +'%Y%m%d%H%M%S')
-curl http://${servicehost}:10251/debug/pprof/heap >framework.$ts.heap
-minions=$($KUBECFG list minions|sed -e '1,2d' -e '/^$/d')
-for m in $minions; do
-    curl http://${m}:10250/debug/pprof/heap >minion.${m}.$ts.heap
+
+for prof in heap block; do
+    curl http://${servicehost}:10251/debug/pprof/$prof >framework.$ts.$prof
+    minions=$($KUBECFG list minions|sed -e '1,2d' -e '/^$/d')
+    for m in $minions; do
+        curl http://${m}:10250/debug/pprof/$prof >minion.${m}.$ts.$prof
+    done
 done
