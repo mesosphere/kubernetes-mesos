@@ -649,8 +649,10 @@ func (k *KubernetesScheduler) NewPluginConfig(startLatch <-chan struct{}) *Plugi
 	eh := &errorHandler{
 		api: kapi,
 		backoff: &podBackoff{
-			perPodBackoff: map[string]*backoffEntry{},
-			clock:         realClock{},
+			perPodBackoff:   map[string]*backoffEntry{},
+			clock:           realClock{},
+			defaultDuration: 1 * time.Second,
+			maxDuration:     60 * time.Second,
 		},
 		qr: q,
 	}

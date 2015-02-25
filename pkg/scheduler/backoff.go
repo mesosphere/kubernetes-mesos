@@ -34,9 +34,11 @@ type backoffEntry struct {
 }
 
 type podBackoff struct {
-	perPodBackoff map[string]*backoffEntry
-	lock          sync.Mutex
-	clock         clock
+	perPodBackoff   map[string]*backoffEntry
+	lock            sync.Mutex
+	clock           clock
+	defaultDuration time.Duration
+	maxDuration     time.Duration
 }
 
 func (p *podBackoff) getEntry(podID string) *backoffEntry {
@@ -44,7 +46,7 @@ func (p *podBackoff) getEntry(podID string) *backoffEntry {
 	defer p.lock.Unlock()
 	entry, ok := p.perPodBackoff[podID]
 	if !ok {
-		entry = &backoffEntry{backoff: 1 * time.Second}
+		entry = &backoffEntry{backoff: p.defaultDuration}
 		p.perPodBackoff[podID] = entry
 	}
 	entry.lastUpdate = p.clock.Now()
@@ -59,8 +61,8 @@ func (p *podBackoff) getBackoff(podID string) time.Duration {
 	entry := p.getEntry(podID)
 	duration := entry.backoff
 	entry.backoff *= 2
-	if entry.backoff > 60*time.Second {
-		entry.backoff = 60 * time.Second
+	if entry.backoff > p.maxDuration {
+		entry.backoff = p.maxDuration
 	}
 	log.V(3).Infof("Backing off %s for pod %s", duration.String(), podID)
 	return duration
@@ -71,7 +73,7 @@ func (p *podBackoff) gc() {
 	defer p.lock.Unlock()
 	now := p.clock.Now()
 	for podID, entry := range p.perPodBackoff {
-		if now.Sub(entry.lastUpdate) > 60*time.Second {
+		if now.Sub(entry.lastUpdate) > p.maxDuration {
 			delete(p.perPodBackoff, podID)
 		}
 	}
