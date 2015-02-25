@@ -1,5 +1,5 @@
   {
-    "id": "nginxController",
+    "id": "nginxcontroller",
     "kind": "ReplicationController",
     "apiVersion": "v1beta1",
     "desiredState": {
@@ -9,7 +9,7 @@
         "desiredState": {
            "manifest": {
              "version": "v1beta1",
-             "id": "nginxController",
+             "id": "nginxcontroller",
              "containers": [{
                "name": "nginx",
                "image": "dockerfile/nginx",
