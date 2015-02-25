@@ -20,7 +20,6 @@ funcs that were stolen from:
 
 const (
 	PodPath                  = "/pods"
-	NetContainerID           = "net" // container the defines the network and ipc namespaces for a pod
 	defaultFinishedTasksSize = 1024
 )
 
