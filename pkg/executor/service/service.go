@@ -43,7 +43,11 @@ func NewKubeletExecutorServer() *KubeletExecutorServer {
 	k := &KubeletExecutorServer{
 		KubeletServer: server.NewKubeletServer(),
 	}
-	k.RootDirectory = "." // mesos sandbox dir
+	if pwd, err := os.Getwd(); err != nil {
+		log.Warningf("failed to determine current directory: %v", err)
+	} else {
+		k.RootDirectory = pwd // mesos sandbox dir
+	}
 	k.Address = util.IP(net.ParseIP(defaultBindingAddress()))
 	return k
 }
@@ -62,27 +66,15 @@ func (s *KubeletExecutorServer) Run(_ []string) error {
 	util.ReallyCrash = s.ReallyCrashForTesting
 	rand.Seed(time.Now().UTC().UnixNano())
 
-	// Cluster creation scripts support both kubernetes versions that 1)
-	// support kublet watching apiserver for pods, and 2) ones that don't. So
-	// they can set both --etcd_servers and --api_servers.  The current code
-	// will ignore the --etcd_servers flag, while older kubelet code will use
-	// the --etcd_servers flag for pods, and use --api_servers for event
-	// publising.
-	//
-	// TODO(erictune): convert all cloud provider scripts and Google Container Engine to
-	// use only --api_servers, then delete --etcd_servers flag and the resulting dead code.
-	if len(s.EtcdServerList) > 0 && len(s.APIServerList) > 0 {
-		log.Infof("Both --etcd_servers and --api_servers are set.  Not using etcd source.")
-		s.EtcdServerList = util.StringList{}
-	}
-
 	if err := util.ApplyOomScoreAdj(s.OOMScoreAdj); err != nil {
 		log.Info(err)
 	}
 
 	client, err := s.CreateAPIServerClient()
 	if err != nil && len(s.APIServerList) > 0 {
-		log.Warningf("No API client: %v", err)
+		// required for k8sm since we need to send api.Binding information
+		// back to the apiserver
+		log.Fatalf("No API client: %v", err)
 	}
 
 	credentialprovider.SetPreferredDockercfgPath(s.RootDirectory)
@@ -108,7 +100,7 @@ func (s *KubeletExecutorServer) Run(_ []string) error {
 		EnableDebuggingHandlers: s.EnableDebuggingHandlers,
 		DockerClient:            dockertools.ConnectToDockerOrDie(s.DockerEndpoint),
 		KubeClient:              client,
-		EtcdClient:              kubelet.EtcdClientOrDie(s.EtcdServerList, s.EtcdConfigFile),
+		EtcdClient:              kubelet.EtcdClientOrDie(util.StringList{}, ""), // this kubelet doesn't use etcd
 		MasterServiceNamespace:  s.MasterServiceNamespace,
 		VolumePlugins:           server.ProbeVolumePlugins(),
 	}
@@ -250,16 +242,18 @@ func (kl *kubeletExecutor) runProxyService() {
 		bindAddress = kl.address.String()
 	}
 	args := []string{
-		fmt.Sprintf("-bind_address=%s", bindAddress),
-		fmt.Sprintf("-v=%d", kl.proxyLogV),
-		"-logtostderr=true",
+		fmt.Sprintf("--bind_address=%s", bindAddress),
+		fmt.Sprintf("--v=%d", kl.proxyLogV),
+		"--logtostderr=true",
 	}
 	if len(kl.etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(kl.etcdServerList, ",")
-		args = append(args, "-etcd_servers="+etcdServerArguments)
+		args = append(args, "--etcd_servers="+etcdServerArguments)
 	} else if kl.etcdConfigFile != "" {
-		args = append(args, "-etcd_config="+kl.etcdConfigFile)
+		args = append(args, "--etcd_config="+kl.etcdConfigFile)
 	}
+
+	log.Infof("Spawning process executable %s with args '%+v'", kl.proxyExec, args)
 
 	cmd := exec.Command(kl.proxyExec, args...)
 	_, err := cmd.StdoutPipe()

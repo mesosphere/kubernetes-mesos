@@ -18,7 +18,6 @@ package service
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -79,6 +78,7 @@ type SchedulerServer struct {
 	ExecutorBindall      bool
 	ExecutorRunProxy     bool
 	ExecutorProxyBindall bool
+	ExecutorLogV         int
 	MesosAuthProvider    string
 	DriverPort           uint
 	HostnameOverride     string
@@ -104,7 +104,7 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.AuthPath, "auth_path", s.AuthPath, "Path to .kubernetes_auth file, specifying how to authenticate to API server.")
 	fs.Var(&s.EtcdServerList, "etcd_servers", "List of etcd servers to watch (http://ip:port), comma separated. Mutually exclusive with -etcd_config")
 	fs.StringVar(&s.EtcdConfigFile, "etcd_config", s.EtcdConfigFile, "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
-	fs.BoolVar(&s.AllowPrivileged, "allow_privileged", s.AllowPrivileged, "If true, allow privileged containers. Default false.")
+	fs.BoolVar(&s.AllowPrivileged, "allow_privileged", s.AllowPrivileged, "If true, allow privileged containers.")
 	fs.StringVar(&s.ExecutorPath, "executor_path", s.ExecutorPath, "Location of the kubernetes executor executable")
 	fs.StringVar(&s.ProxyPath, "proxy_path", s.ProxyPath, "Location of the kubernetes proxy executable")
 	fs.StringVar(&s.MesosUser, "mesos_user", s.MesosUser, "Mesos user for this framework, defaults to root.")
@@ -113,12 +113,13 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.MesosAuthSecretFile, "mesos_authentication_secret_file", s.MesosAuthSecretFile, "Mesos authentication secret file.")
 	fs.BoolVar(&s.Checkpoint, "checkpoint", s.Checkpoint, "Enable/disable checkpointing for the kubernetes-mesos framework.")
 	fs.Float64Var(&s.FailoverTimeout, "failover_timeout", s.FailoverTimeout, fmt.Sprintf("Framework failover timeout, in ns."))
-	fs.BoolVar(&s.ExecutorBindall, "executor_bindall", s.ExecutorBindall, "When true will set -address and -hostname_override of the executor to 0.0.0.0. Defaults to false.")
-	fs.BoolVar(&s.ExecutorRunProxy, "executor_run_proxy", s.ExecutorRunProxy, "Run the kube-proxy as a child process of the executor. Defaults to true.")
-	fs.BoolVar(&s.ExecutorProxyBindall, "executor_proxy_bindall", s.ExecutorProxyBindall, "When true pass -proxy_bindall to the executor. Defaults to false.")
+	fs.BoolVar(&s.ExecutorBindall, "executor_bindall", s.ExecutorBindall, "When true will set -address and -hostname_override of the executor to 0.0.0.0.")
+	fs.BoolVar(&s.ExecutorRunProxy, "executor_run_proxy", s.ExecutorRunProxy, "Run the kube-proxy as a child process of the executor.")
+	fs.BoolVar(&s.ExecutorProxyBindall, "executor_proxy_bindall", s.ExecutorProxyBindall, "When true pass -proxy_bindall to the executor.")
 	fs.StringVar(&s.MesosAuthProvider, "mesos_authentication_provider", s.MesosAuthProvider, fmt.Sprintf("Authentication provider to use, default is SASL that supports mechanisms: %+v", mech.ListSupported()))
-	fs.UintVar(&s.DriverPort, "driver_port", s.DriverPort, "Port that the Mesos scheduler driver process should listen on. Defaults to 0 (ephemeral).")
+	fs.UintVar(&s.DriverPort, "driver_port", s.DriverPort, "Port that the Mesos scheduler driver process should listen on.")
 	fs.StringVar(&s.HostnameOverride, "hostname_override", s.HostnameOverride, "If non-empty, will use this string as identification instead of the actual hostname.")
+	fs.IntVar(&s.ExecutorLogV, "executor_logv", s.ExecutorLogV, "Logging verbosity of spawned executor processes.")
 }
 
 // returns (downloadURI, basename(path))
@@ -154,36 +155,36 @@ func (s *SchedulerServer) prepareExecutorInfo() *mesos.ExecutorInfo {
 
 	//TODO(jdef): provide some way (env var?) for user's to customize executor config
 	//TODO(jdef): set -hostname_override and -address to 127.0.0.1 if `address` is 127.0.0.1
+	//TODO(jdef): propagate dockercfg from RootDirectory?
+
 	apiServerArgs := strings.Join(s.APIServerList, ",")
 
-	// propagate log verbosity from the scheduler to the executor,
-	// but not to the proxy because it's too noisy already
-	logv := flag.Lookup("v").Value.String()
-
-	executorCommand := fmt.Sprintf("./%s -v=%s -allow_privileged=%t -api_servers=%s -proxy_exec=./%s",
-		executorCmd, logv, s.AllowPrivileged, apiServerArgs, proxyCmd)
+	executorCommand := fmt.Sprintf("./%s --v=%d --allow_privileged=%t --api_servers=%s --proxy_exec=./%s",
+		executorCmd, s.ExecutorLogV, s.AllowPrivileged, apiServerArgs, proxyCmd)
 
 	if s.ExecutorBindall {
-		executorCommand = fmt.Sprintf("%s -hostname_override=0.0.0.0 -address=0.0.0.0", executorCommand)
+		executorCommand = fmt.Sprintf("%s --hostname_override=0.0.0.0 --address=0.0.0.0", executorCommand)
 	}
 
-	executorCommand = fmt.Sprintf("%s -proxy_bindall=%v", executorCommand, s.ExecutorProxyBindall)
-	executorCommand = fmt.Sprintf("%s -run_proxy=%v", executorCommand, s.ExecutorRunProxy)
+	executorCommand = fmt.Sprintf("%s --proxy_bindall=%v", executorCommand, s.ExecutorProxyBindall)
+	executorCommand = fmt.Sprintf("%s --run_proxy=%v", executorCommand, s.ExecutorRunProxy)
 
 	if len(s.EtcdServerList) > 0 {
 		etcdServerArguments := strings.Join(s.EtcdServerList, ",")
-		executorCommand = fmt.Sprintf("%s -etcd_servers=%s", executorCommand, etcdServerArguments)
+		executorCommand = fmt.Sprintf("%s --etcd_servers=%s", executorCommand, etcdServerArguments)
 	} else {
 		uri, basename := s.serveExecutorArtifact(s.EtcdConfigFile)
 		executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri})
-		executorCommand = fmt.Sprintf("%s -etcd_config=./%s", executorCommand, basename)
+		executorCommand = fmt.Sprintf("%s --etcd_config=./%s", executorCommand, basename)
 	}
 
 	if s.AuthPath != "" {
 		uri, basename := s.serveExecutorArtifact(s.AuthPath)
 		executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri})
-		executorCommand = fmt.Sprintf("%s -auth_path=%s", executorCommand, basename)
+		executorCommand = fmt.Sprintf("%s --auth_path=%s", executorCommand, basename)
 	}
+
+	log.V(1).Infof("prepared executor command '%v'", executorCommand)
 
 	// Create mesos scheduler driver.
 	return &mesos.ExecutorInfo{
@@ -231,7 +232,7 @@ func (s *SchedulerServer) Run(_ []string) error {
 
 	etcdClient := kubelet.EtcdClientOrDie(s.EtcdServerList, s.EtcdConfigFile)
 	if etcdClient == nil {
-		log.Fatalf("specify either -etcd_servers or -etcd_config")
+		log.Fatalf("specify either --etcd_servers or --etcd_config")
 	}
 
 	if len(s.APIServerList) < 1 {

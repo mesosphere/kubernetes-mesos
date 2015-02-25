@@ -476,8 +476,8 @@ func (q *queuer) yield() *api.Pod {
 		}
 
 		pod := kpod.(*Pod).Pod
-		if podName, err := cache.MetaNamespaceKeyFunc(&pod); err != nil {
-			log.Warningf("yield unable to understand pod object %+v, will skip", pod)
+		if podName, err := cache.MetaNamespaceKeyFunc(pod); err != nil {
+			log.Warningf("yield unable to understand pod object %+v, will skip: %v", pod, err)
 		} else if !q.podUpdates.Poll(podName, queue.POP_EVENT) {
 			log.V(1).Infof("yield popped a transitioning pod, skipping: %+v", pod)
 		} else if pod.Status.Host != "" {
