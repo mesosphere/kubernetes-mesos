@@ -1,10 +1,10 @@
 #!/bin/bash
-test -n "$KUBECFG" || KUBECFG=./bin/kubecfg
+test -n "$KUBECFG" || KUBECFG=./bin/kubectl
 test -x "$KUBECFG" || {
-    echo "error: missing kubecfg executable at $KUBECFG" >&2
+    echo "error: missing kubectl executable at $KUBECFG" >&2
     exit 1
 }
-watch "$KUBECFG"' list pods | (
+watch "$KUBECFG"' get pods | (
     read l1
     read l2
     echo "$l1"
