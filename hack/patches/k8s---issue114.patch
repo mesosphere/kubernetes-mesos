@@ -1,10 +1,12 @@
 diff --git a/cmd/kube-apiserver/plugins.go b/cmd/kube-apiserver/plugins.go
 index 64908e5..45ccfa4 100644
---- a/cmd/kube-apiserver/plugins.go
-+++ b/cmd/kube-apiserver/plugins.go
-@@ -25,4 +25,5 @@ import (
+--- a/pkg/master/server/plugins.go
++++ b/pkg/master/server/plugins.go
+@@ -25,6 +25,7 @@ import (
  	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider/openstack"
  	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider/ovirt"
  	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider/vagrant"
 +	_ "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
- )
+
+	// Admission policies
+	_ "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/admission/admit"

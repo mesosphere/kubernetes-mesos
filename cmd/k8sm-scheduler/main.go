@@ -359,7 +359,7 @@ func getUsername() (username string, err error) {
 
 func clearOldPods(c *client.Client) {
 	ctx := api.NewDefaultContext()
-	podList, err := c.Pods(api.Namespace(ctx)).List(labels.Everything())
+	podList, err := c.Pods(api.NamespaceValue(ctx)).List(labels.Everything())
 	if err != nil {
 		log.Warningf("failed to clear pod registry, madness may ensue: %v", err)
 		return
@@ -367,7 +367,7 @@ func clearOldPods(c *client.Client) {
 	for _, pod := range podList.Items {
 		podName := pod.Name
 		if podName == "" {
-			podName = pod.UID
+			podName = string(pod.UID)
 			if podName == "" {
 				log.Warningf("failed to delete pod, it has no Name or UID: '%+v'", pod)
 				continue

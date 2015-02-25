@@ -1,65 +1,24 @@
 diff --git a/pkg/kubelet/util.go b/pkg/kubelet/util.go
-index cc6aa58..5d4a5b5 100644
+index 07bb42b..a850a6c 100644
 --- a/pkg/kubelet/util.go
 +++ b/pkg/kubelet/util.go
-@@ -30,6 +30,7 @@ import (
- 	"github.com/GoogleCloudPlatform/kubernetes/pkg/clientauth"
- 	"github.com/GoogleCloudPlatform/kubernetes/pkg/health"
+@@ -25,6 +25,7 @@ import (
+ 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
+ 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
  	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 +	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
  	"github.com/coreos/go-etcd/etcd"
  	"github.com/golang/glog"
  	cadvisor "github.com/google/cadvisor/client"
-@@ -98,14 +97,17 @@ func SetupLogging() {
+@@ -72,9 +73,9 @@ func SetupLogging() {
+ 	record.StartLogging(glog.Infof)
  }
  
- // TODO: move this into pkg/client
--func getApiserverClient(authPath string, apiServerList util.StringList) (*client.Client, error) {
--	authInfo, err := clientauth.LoadFromFile(authPath)
--	if err != nil {
--		return nil, err
--	}
--	clientConfig, err := authInfo.MergeWithConfig(client.Config{})
--	if err != nil {
--		return nil, err
-+func GetApiserverClient(authPath string, apiServerList util.StringList) (*client.Client, error) {
-+	clientConfig := client.Config{}
-+	if authPath != "" {
-+		authInfo, err := clientauth.LoadFromFile(authPath)
-+		if err != nil {
-+			return nil, err
-+		}
-+		clientConfig, err = authInfo.MergeWithConfig(clientConfig)
-+		if err != nil {
-+			return nil, err
-+		}
- 	}
- 	if len(apiServerList) < 1 {
- 		return nil, fmt.Errorf("no apiservers specified.")
-@@ -122,22 +124,23 @@ func getApiserverClient(authPath string, apiServerList util.StringList) (*client
- 	}
- }
- 
--func SetupEventSending(authPath string, apiServerList util.StringList) {
-+func SetupEventSending(authPath string, apiServerList util.StringList) watch.Interface {
- 	// Make an API client if possible.
- 	if len(apiServerList) < 1 {
- 		glog.Info("No api servers specified.")
- 	} else {
--		if apiClient, err := getApiserverClient(authPath, apiServerList); err != nil {
-+		if apiClient, err := GetApiserverClient(authPath, apiServerList); err != nil {
- 			glog.Errorf("Unable to make apiserver client: %v", err)
- 		} else {
- 			// Send events to APIserver if there is a client.
- 			hostname := util.GetHostname("")
- 			glog.Infof("Sending events to APIserver.")
--			record.StartRecording(apiClient.Events(""),
-+			return record.StartRecording(apiClient.Events(""),
- 				api.EventSource{
- 					Component: "kubelet",
- 					Host:      hostname,
- 				})
- 		}
- 	}
-+	return nil
- }
+-func SetupEventSending(client *client.Client, hostname string) {
++func SetupEventSending(client *client.Client, hostname string) watch.Interface {
+ 	glog.Infof("Sending events to api server.")
+-	record.StartRecording(client.Events(""),
++	return record.StartRecording(client.Events(""),
+ 		api.EventSource{
+ 			Component: "kubelet",
+ 			Host:      hostname,

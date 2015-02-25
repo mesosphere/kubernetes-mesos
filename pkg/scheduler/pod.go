@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 )
 
@@ -28,7 +29,11 @@ func (p *Pod) Copy() queue.Copyable {
 
 // implements Unique
 func (p *Pod) GetUID() string {
-	return p.UID
+	if id, err := cache.MetaNamespaceKeyFunc(p.Pod); err != nil {
+		panic(fmt.Sprintf("failed to determine pod id for '%+v'", p.Pod))
+	} else {
+		return id
+	}
 }
 
 // implements Deadlined

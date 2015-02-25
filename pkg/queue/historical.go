@@ -88,7 +88,7 @@ func checkType(obj interface{}) UniqueCopyable {
 
 // Add inserts an item, and puts it in the queue. The item is only enqueued
 // if it doesn't already exist in the set.
-func (f *HistoricalFIFO) Add(id string, v interface{}) {
+func (f *HistoricalFIFO) Add(v interface{}) error {
 	obj := checkType(v)
 	notifications := []Entry(nil)
 	defer func() {
@@ -100,6 +100,7 @@ func (f *HistoricalFIFO) Add(id string, v interface{}) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
+	id := obj.GetUID()
 	if entry, exists := f.items[id]; !exists {
 		f.queue = append(f.queue, id)
 	} else {
@@ -109,17 +110,19 @@ func (f *HistoricalFIFO) Add(id string, v interface{}) {
 	}
 	notifications = f.merge(id, obj)
 	f.cond.Broadcast()
+	return nil
 }
 
 // Update is the same as Add in this implementation.
-func (f *HistoricalFIFO) Update(id string, obj interface{}) {
-	f.Add(id, obj)
+func (f *HistoricalFIFO) Update(obj interface{}) error {
+	return f.Add(obj)
 }
 
 // Delete removes an item. It doesn't add it to the queue, because
 // this implementation assumes the consumer only cares about the objects,
 // not the order in which they were created/added.
-func (f *HistoricalFIFO) Delete(id string) {
+func (f *HistoricalFIFO) Delete(v interface{}) error {
+	obj := checkType(v)
 	deleteEvent := (Entry)(nil)
 	defer func() {
 		f.carrier(deleteEvent)
@@ -127,6 +130,7 @@ func (f *HistoricalFIFO) Delete(id string) {
 
 	f.lock.Lock()
 	defer f.lock.Unlock()
+	id := obj.GetUID()
 	item, exists := f.items[id]
 	if exists && !item.Is(DELETE_EVENT) {
 		e := item.(*entry)
@@ -134,6 +138,7 @@ func (f *HistoricalFIFO) Delete(id string) {
 		deleteEvent = &deletedEntry{e, time.Now().Add(f.lingerTTL)}
 		f.items[id] = deleteEvent
 	}
+	return nil
 }
 
 // List returns a list of all the items.
@@ -170,14 +175,20 @@ func (c *HistoricalFIFO) ContainedIDs() util.StringSet {
 }
 
 // Get returns the requested item, or sets exists=false.
-func (f *HistoricalFIFO) Get(id string) (interface{}, bool) {
+func (f *HistoricalFIFO) Get(v interface{}) (interface{}, bool, error) {
+	obj := checkType(v)
+	return f.GetByKey(obj.GetUID())
+}
+
+// Get returns the requested item, or sets exists=false.
+func (f *HistoricalFIFO) GetByKey(id string) (interface{}, bool, error) {
 	f.lock.RLock()
 	defer f.lock.RUnlock()
 	entry, exists := f.items[id]
 	if exists && !entry.Is(DELETE_EVENT|POP_EVENT) {
-		return entry.Value().Copy(), true
+		return entry.Value().Copy(), true, nil
 	}
-	return nil, false
+	return nil, false, nil
 }
 
 // Get returns the requested item, or sets exists=false.
@@ -247,13 +258,19 @@ func (f *HistoricalFIFO) pop(cancel chan struct{}) interface{} {
 	}
 }
 
-func (f *HistoricalFIFO) Replace(idToObj map[string]interface{}) {
-	notifications := make([]Entry, 0, len(idToObj))
+func (f *HistoricalFIFO) Replace(objs []interface{}) error {
+	notifications := make([]Entry, 0, len(objs))
 	defer func() {
 		for _, e := range notifications {
 			f.carrier(e)
 		}
 	}()
+
+	idToObj := make(map[string]interface{})
+	for _, v := range objs {
+		obj := checkType(v)
+		idToObj[obj.GetUID()] = v
+	}
 
 	f.lock.Lock()
 	defer f.lock.Unlock()
@@ -280,6 +297,7 @@ func (f *HistoricalFIFO) Replace(idToObj map[string]interface{}) {
 	if len(f.queue) > 0 {
 		f.cond.Broadcast()
 	}
+	return nil
 }
 
 // garbage collect DELETEd items whose TTL has expired; the IDs of such items are removed

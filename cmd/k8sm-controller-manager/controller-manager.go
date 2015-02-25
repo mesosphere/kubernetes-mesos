@@ -24,7 +24,6 @@ package main
 // a modified endpoint-controller
 
 import (
-	"flag"
 	"net"
 	"net/http"
 	"strconv"
@@ -32,72 +31,113 @@ import (
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
-	minionControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider/controller"
+	nodeControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider/controller"
 	replicationControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/controller"
+	server "github.com/GoogleCloudPlatform/kubernetes/pkg/controllermanager"
 	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/resourcequota"
 	kendpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
 	"github.com/golang/glog"
 
 	kmendpoint "github.com/mesosphere/kubernetes-mesos/pkg/service"
+	"github.com/spf13/pflag"
 )
 
-var (
-	port                 = flag.Int("port", ports.ControllerManagerPort, "The port that the controller-manager's http service runs on")
-	address              = util.IP(net.ParseIP("127.0.0.1"))
-	clientConfig         = &client.Config{}
-	cloudProvider        = flag.String("cloud_provider", "mesos", "The provider for cloud services. Only 'mesos' is currently supported.")
-	cloudConfigFile      = flag.String("cloud_config", "", "The path to the cloud provider configuration file. Empty string for no configuration file.")
-	useHostPortEndpoints = flag.Bool("host_port_endpoints", true, "Map service endpoints to hostIP:hostPort instead of podIP:containerPort. Default true.")
-)
-
-func init() {
-	flag.Var(&address, "address", "The IP address to serve on (set to 0.0.0.0 for all interfaces)")
-	client.BindClientConfigFlags(flag.CommandLine, clientConfig)
+// CMServer is the mail context object for the controller manager.
+type CMServer struct {
+	*server.CMServer
+	UseHostPortEndpoints bool
 }
 
-func main() {
-	flag.Parse()
-	util.InitLogs()
-	defer util.FlushLogs()
+// NewCMServer creates a new CMServer with a default config.
+func NewCMServer() *CMServer {
+	s := &CMServer{
+		CMServer: server.NewCMServer(),
+	}
+	s.CloudProvider = "mesos"
+	s.UseHostPortEndpoints = true
+	s.MinionRegexp = "^.*$"
+	return s
+}
 
-	verflag.PrintAndExitIfRequested()
+// AddFlags adds flags for a specific CMServer to the specified FlagSet
+func (s *CMServer) AddFlags(fs *pflag.FlagSet) {
+	s.CMServer.AddFlags(fs)
+	fs.BoolVar(&s.UseHostPortEndpoints, "host_port_endpoints", s.UseHostPortEndpoints, "Map service endpoints to hostIP:hostPort instead of podIP:containerPort. Default true.")
+}
 
-	if len(clientConfig.Host) == 0 {
+func (s *CMServer) verifyMinionFlags() {
+	if !s.SyncNodeList && s.MinionRegexp != "" {
+		glog.Info("--minion_regexp is ignored by --sync_nodes=false")
+	}
+	if s.CloudProvider == "" || s.MinionRegexp == "" {
+		if len(s.MachineList) == 0 {
+			glog.Info("No machines specified!")
+		}
+		return
+	}
+	if len(s.MachineList) != 0 {
+		glog.Info("--machines is overwritten by --minion_regexp")
+	}
+}
+
+func (s *CMServer) Run(_ []string) error {
+	s.verifyMinionFlags()
+	if len(s.ClientConfig.Host) == 0 {
 		glog.Fatal("usage: controller-manager -master <master>")
 	}
 
-	kubeClient, err := client.New(clientConfig)
+	kubeClient, err := client.New(&s.ClientConfig)
 	if err != nil {
 		glog.Fatalf("Invalid API configuration: %v", err)
 	}
 
-	go http.ListenAndServe(net.JoinHostPort(address.String(), strconv.Itoa(*port)), nil)
+	go http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), nil)
 
-	endpoints := createEndpointController(kubeClient)
+	endpoints := s.createEndpointController(kubeClient)
 	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, time.Second*10)
 
 	controllerManager := replicationControllerPkg.NewReplicationManager(kubeClient)
 	controllerManager.Run(10 * time.Second)
 
-	//TODO(jdef) should eventually support more cloud providers here
-	if *cloudProvider != "mesos" {
-		glog.Fatalf("Unsupported cloud provider: %v", *cloudProvider)
+	kubeletClient, err := client.NewKubeletClient(&s.KubeletConfig)
+	if err != nil {
+		glog.Fatalf("Failure to start kubelet client: %v", err)
 	}
-	cloud := cloudprovider.InitCloudProvider(*cloudProvider, *cloudConfigFile)
 
-	//TODO(jdef) as we support additional cloud providers, may need to specify other values
-	//for minionRegexp and machineList
-	minionController := minionControllerPkg.NewMinionController(cloud, "^.*$", nil, nil, kubeClient)
-	minionController.Run(10 * time.Second)
+	//TODO(jdef) should eventually support more cloud providers here
+	if s.CloudProvider != "mesos" {
+		glog.Fatalf("Unsupported cloud provider: %v", s.CloudProvider)
+	}
+	cloud := cloudprovider.InitCloudProvider(s.CloudProvider, s.CloudConfigFile)
+
+	nodeController := nodeControllerPkg.NewNodeController(cloud, s.MinionRegexp, s.MachineList,
+		nil, kubeClient, kubeletClient, s.RegisterRetryCount, s.PodEvictionTimeout)
+	nodeController.Run(s.NodeSyncPeriod, s.SyncNodeList)
+
+	resourceQuotaManager := resourcequota.NewResourceQuotaManager(kubeClient)
+	resourceQuotaManager.Run(s.ResourceQuotaSyncPeriod)
 
 	select {}
 }
 
-func createEndpointController(client *client.Client) kmendpoint.EndpointController {
-	if *useHostPortEndpoints {
+func main() {
+	s := NewCMServer()
+	s.AddFlags(pflag.CommandLine)
+
+	util.InitFlags()
+	util.InitLogs()
+	defer util.FlushLogs()
+
+	verflag.PrintAndExitIfRequested()
+
+	s.Run(pflag.CommandLine.Args())
+}
+
+func (s *CMServer) createEndpointController(client *client.Client) kmendpoint.EndpointController {
+	if s.UseHostPortEndpoints {
 		glog.V(2).Infof("Creating hostIP:hostPort endpoint controller")
 		return kmendpoint.NewEndpointController(client)
 	}

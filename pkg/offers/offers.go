@@ -85,6 +85,12 @@ type Perishable interface {
 	Release()
 	// expire or delete this offer from storage
 	age(s *offerStorage)
+	// return a unique identifier for this offer
+	uid() string
+}
+
+func (e *expiredOffer) uid() string {
+	return e.id
 }
 
 func (e *expiredOffer) HasExpired() bool {
@@ -128,7 +134,11 @@ func (to *liveOffer) Release() {
 }
 
 func (to *liveOffer) age(s *offerStorage) {
-	s.Delete(to.Offer.Id.GetValue())
+	s.Delete(to.uid())
+}
+
+func (to *liveOffer) uid() string {
+	return to.Offer.Id.GetValue()
 }
 
 // return the time remaining before the offer expires
@@ -139,19 +149,24 @@ func (to *liveOffer) GetDelay() time.Duration {
 func CreateRegistry(c RegistryConfig) Registry {
 	return &offerStorage{
 		RegistryConfig: c,
-		offers:         cache.NewFIFO(),
-		listeners:      queue.NewDelayFIFO(),
-		delayed:        queue.NewDelayQueue(),
+		offers: cache.NewFIFO(cache.KeyFunc(func(v interface{}) (string, error) {
+			if perishable, ok := v.(Perishable); !ok {
+				return "", fmt.Errorf("expected perishable offer, not '%+v'", v)
+			} else {
+				return perishable.uid(), nil
+			}
+		})),
+		listeners: queue.NewDelayFIFO(),
+		delayed:   queue.NewDelayQueue(),
 	}
 }
 
 func (s *offerStorage) Add(offers []*mesos.Offer) {
 	now := time.Now()
 	for _, offer := range offers {
-		offerId := offer.Id.GetValue()
-		log.V(3).Infof("Receiving offer %v", offerId)
 		timed := &liveOffer{offer, now.Add(s.TTL), 0}
-		s.offers.Add(offerId, timed)
+		log.V(3).Infof("Receiving offer %v", timed.uid())
+		s.offers.Add(timed)
 		s.delayed.Add(timed)
 	}
 }
@@ -231,8 +246,8 @@ func (s *offerStorage) invalidateOne(offerId string) {
 // Walker or when the end of the offer list is reached. Expired offers are
 // never passed to a Walker.
 func (s *offerStorage) Walk(w Walker) error {
-	for offerId := range s.offers.ContainedIDs() {
-		offer, ok := s.Get(offerId)
+	for _, v := range s.offers.List() {
+		offer, ok := v.(Perishable)
 		if !ok {
 			// offer disappeared...
 			continue
@@ -260,7 +275,7 @@ func (s *offerStorage) expireOffer(offer Perishable) {
 		if s.LingerTTL > 0 {
 			log.V(3).Infof("offer will linger: %v", offerId)
 			expired := &expiredOffer{offerId, time.Now().Add(s.LingerTTL)}
-			s.offers.Update(offerId, expired)
+			s.offers.Update(expired)
 			s.delayed.Add(expired)
 		} else {
 			log.V(3).Infof("Permanently deleting offer %v", offerId)
@@ -270,7 +285,7 @@ func (s *offerStorage) expireOffer(offer Perishable) {
 }
 
 func (s *offerStorage) Get(id string) (Perishable, bool) {
-	if obj, ok := s.offers.Get(id); !ok {
+	if obj, ok, _ := s.offers.GetByKey(id); !ok {
 		return nil, false
 	} else {
 		to, ok := obj.(Perishable)
@@ -385,8 +400,15 @@ func (s *offerStorage) Init() {
 
 	// cached offer ids for the purposes of listener notification
 	idCache := &stringsCache{
-		refill: s.offers.ContainedIDs,
-		ttl:    offerIdCacheTTL,
+		refill: func() (result util.StringSet) {
+			for _, v := range s.offers.List() {
+				if offer, ok := v.(Perishable); ok {
+					result.Insert(offer.uid())
+				}
+			}
+			return
+		},
+		ttl: offerIdCacheTTL,
 	}
 
 	go util.Forever(func() { s.notifyListeners(idCache.Strings) }, notifyListenersDelay)
