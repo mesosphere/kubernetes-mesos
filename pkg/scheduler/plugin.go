@@ -834,6 +834,16 @@ func (psa *podStoreAdapter) Update(obj interface{}) error {
 	return psa.FIFO.Update(&Pod{Pod: pod})
 }
 
+func (psa *podStoreAdapter) Delete(obj interface{}) error {
+	pod := obj.(*api.Pod)
+	return psa.FIFO.Delete(&Pod{Pod: pod})
+}
+
+func (psa *podStoreAdapter) Get(obj interface{}) (interface{}, bool, error) {
+	pod := obj.(*api.Pod)
+	return psa.FIFO.Get(&Pod{Pod: pod})
+}
+
 // Replace will delete the contents of the store, using instead the
 // given map. This store implementation does NOT take ownership of the map.
 func (psa *podStoreAdapter) Replace(objs []interface{}) error {
