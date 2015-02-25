@@ -4,6 +4,9 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	mesos "github.com/mesos/mesos-go/mesosproto"
+	util "github.com/mesos/mesos-go/mesosutil"
 )
 
 func TestTimedOffer(t *testing.T) {
@@ -59,7 +62,7 @@ func TestWalk(t *testing.T) {
 	walker1 := func(p Perishable) (bool, error) {
 		walked++
 		if p.Acquire() {
-			acceptedOfferId = "foo"
+			acceptedOfferId = p.Details().Id.GetValue()
 			return true, nil
 		}
 		return false, nil
@@ -82,9 +85,9 @@ func TestWalk(t *testing.T) {
 	// single offer
 	ttl := 2 * time.Second
 	now := time.Now()
-	o := &liveOffer{nil, now.Add(ttl), 0}
+	o := &liveOffer{&mesos.Offer{Id: util.NewOfferID("foo")}, now.Add(ttl), 0}
 
-	impl.offers.Add("x", o)
+	impl.offers.Add(o)
 	err = storage.Walk(walker1)
 	if err != nil {
 		t.Fatalf("received impossible error %v", err)
@@ -108,18 +111,6 @@ func TestWalk(t *testing.T) {
 		t.Fatalf("found offer %v", acceptedOfferId)
 	}
 
-	impl.offers.Add("y", o) // offer already Acquire()d
-	err = storage.Walk(walker1)
-	if err != nil {
-		t.Fatalf("received impossible error %v", err)
-	}
-	if walked != 4 {
-		t.Fatalf("walk count %d", walked)
-	}
-	if acceptedOfferId != "" {
-		t.Fatalf("found offer %v", acceptedOfferId)
-	}
-
 	walker2 := func(p Perishable) (bool, error) {
 		walked++
 		return true, nil
@@ -128,7 +119,7 @@ func TestWalk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("received impossible error %v", err)
 	}
-	if walked != 5 {
+	if walked != 3 {
 		t.Fatalf("walk count %d", walked)
 	}
 	if acceptedOfferId != "" {
@@ -143,7 +134,7 @@ func TestWalk(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if walked != 6 {
+	if walked != 4 {
 		t.Fatalf("walk count %d", walked)
 	}
 }
