@@ -1,4 +1,4 @@
-package main
+package controllermanager
 
 //TODO(jdef) how to eventually support mesos running with other k8s cloud providers?
 import (
