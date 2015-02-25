@@ -128,7 +128,7 @@ For simpler execution of `kubectl`:
 $ export KUBERNETES_MASTER=http://${servicehost}:8888
 ```
 
-You can increase the verbosity of the logging for the API server, scheduler, and/or the controller-manager by including, for example, `-v=2`.
+You can increase the verbosity of the logging for the API server, scheduler, and/or the controller-manager by including, for example, `--v=2`.
 This can be very helpful while debugging.
 
 ###Launch a Pod
