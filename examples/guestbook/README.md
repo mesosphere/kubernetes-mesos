@@ -37,10 +37,10 @@ Create a file named `redis-master.json` describing a single pod, which runs a re
 }
 ```
 
-Once you have that pod file, you can create the redis pod in your Kubernetes cluster using `kubecfg` or the REST API:
+Once you have that pod file, you can create the redis pod in your Kubernetes cluster using `kubectl` or the REST API:
 
 ```shell
-$ bin/kubecfg -c examples/guestbook/redis-master.json create pods
+$ bin/kubectl create -f examples/guestbook/redis-master.json
 # -- or --
 $ curl ${KUBERNETES_MASTER}/api/v1beta1/pods -XPOST -d@examples/guestbook/redis-master.json
 ```
@@ -48,7 +48,7 @@ $ curl ${KUBERNETES_MASTER}/api/v1beta1/pods -XPOST -d@examples/guestbook/redis-
 Once that's up you can list the pods in the cluster, to verify that the master is running:
 
 ```shell
-$ bin/kubecfg list pods
+$ bin/kubectl get pods
 # -- or --
 $ curl ${KUBERNETES_MASTER}/api/v1beta1/pods
 ```
@@ -56,9 +56,8 @@ $ curl ${KUBERNETES_MASTER}/api/v1beta1/pods
 You'll see a single redis master pod. It will also display the machine that the pod is running on.
 
 ```
-ID                  Image(s)            Host                            Labels              Status
-----------          ----------          ----------                      ----------          ----------
-redis-master-2      dockerfile/redis    10.132.189.243/10.132.189.243   name=redis-master   Waiting
+POD             IP           CONTAINER(S)  IMAGE(S)          HOST                       LABELS             STATUS
+redis-master-2  172.17.6.19  master        dockerfile/redis  10.22.211.18/10.22.211.18  name=redis-master  Running
 ```
 
 If you ssh to that machine, you can run `docker ps` to see the actual pod:
@@ -67,9 +66,9 @@ If you ssh to that machine, you can run `docker ps` to see the actual pod:
 $ vagrant ssh mesos-2
 
 vagrant@mesos-2:~$ sudo docker ps
-CONTAINER ID  IMAGE                    COMMAND               CREATED         STATUS         PORTS                     NAMES
-e1f02d73117d  dockerfile/redis:latest  "redis-server /etc/r  24 seconds ago  Up 24 seconds                            k8s--master.bd418b17--redis_-_master_-_2.mesos--abc826dc_-_6692_-_11e4_-_bd1f_-_04012f416701--f0c5341e
-487bf8a581e9  kubernetes/pause:go      "/pause"              6 minutes ago   Up 6 minutes   0.0.0.0:31010->6379/tcp   k8s--net.c5d67d7a--redis_-_master_-_2.mesos--abc826dc_-_6692_-_11e4_-_bd1f_-_04012f416701--9acb0442
+CONTAINER ID  IMAGE                    COMMAND               CREATED  STATUS  PORTS                    NAMES
+bd1b823fe48d  dockerfile/redis:latest  "redis-server /etc/r  46m ago  Up 46m                           k8s_master.6be2adec_redis-master-2.default.mesos_56a2e404-bd11-11e4-90fa-42010adf71e3_420420b2
+de2457a1487a  kubernetes/pause:go      "/pause"              46m ago  Up 46m  0.0.0.0:31010->6379/tcp  k8s_POD.b0f8ea85_redis-master-2.default.mesos_56a2e404-bd11-11e4-90fa-42010adf71e3_fed7f14e
 ```
 
 (Note that initial `docker pull` may take a few minutes, depending on network conditions.)
@@ -100,16 +99,18 @@ This will cause all pods to see the redis master apparently running on `localhos
 Once you have that service description, you can create the service with the REST API:
 
 ```shell
-$ bin/kubecfg -c examples/guestbook/redis-master-service.json create services
+$ bin/kubectl create -f examples/guestbook/redis-master-service.json
 # -- or --
 $ curl ${KUBERNETES_MASTER}/api/v1beta1/services -XPOST -d@examples/guestbook/redis-master-service.json
 ```
 
 Observe that the service has been created.
 ```
-ID                  Labels              Selector            Port
-----------          ----------          ----------          ----------
-redismaster                             name=redis-master   10000
+$ bin/kubectl get services
+NAME            LABELS                                    SELECTOR            IP            PORT
+kubernetes      component=apiserver,provider=kubernetes   <none>              10.10.10.2    443
+kubernetes-ro   component=apiserver,provider=kubernetes   <none>              10.10.10.1    80
+redismaster     <none>                                    name=redis-master   10.10.10.49   10000
 ```
 
 Once created, the service proxy on each minion is configured to set up a proxy on the specified port (in this case port 10000).
@@ -122,7 +123,7 @@ Create a file named `redis-slave-controller.json` that contains:
 
 ```js
 {
-  "id": "redisSlaveController",
+  "id": "redis-slave-controller",
   "kind": "ReplicationController",
   "apiVersion": "v1beta1",
   "desiredState": {
@@ -132,7 +133,7 @@ Create a file named `redis-slave-controller.json` that contains:
       "desiredState": {
          "manifest": {
            "version": "v1beta1",
-           "id": "redisSlaveController",
+           "id": "redis-slave-controller",
            "containers": [{
              "name": "slave",
              "image": "jdef/redis-slave",
@@ -149,14 +150,14 @@ Create a file named `redis-slave-controller.json` that contains:
 Then you can create the service by running:
 
 ```shell
-$ bin/kubecfg -c examples/guestbook/redis-slave-controller.json create replicationControllers
+$ bin/kubectl create -f examples/guestbook/redis-slave-controller.json
 # -- or --
 $ curl ${KUBERNETES_MASTER}/api/v1beta1/replicationControllers -XPOST -d@examples/guestbook/redis-slave-controller.json
 ```
 ```
-Name                   Image(s)                   Selector            Replicas
-----------             ----------                 ----------          ----------
-redisSlaveController   jdef/redis-slave           name=redisslave     2
+$ bin/kubectl get rc
+CONTROLLER               CONTAINER(S)    IMAGE(S)            SELECTOR            REPLICAS
+redis-slave-controller   slave           jdef/redis-slave    name=redisslave     2
 ```
 
 The redis slave configures itself by looking for the Kubernetes service environment variables in the container environment.
@@ -169,12 +170,11 @@ redis-server --slaveof $SERVICE_HOST $REDISMASTER_SERVICE_PORT
 Once that's up you can list the pods in the cluster, to verify that the master and slaves are running:
 
 ```shell
-$ bin/kubecfg list pods
-ID                                     Image(s)            Host                            Labels                                                       Status
-----------                             ----------          ----------                      ----------                                                   ----------
-redis-master-2                         dockerfile/redis    10.132.189.243/10.132.189.243   name=redis-master                                            Running
-439c1c7c-6694-11e4-bd1f-04012f416701   jdef/redis-slave    10.132.189.242/10.132.189.242   name=redisslave,replicationController=redisSlaveController   Running
-439b7b2f-6694-11e4-bd1f-04012f416701   jdef/redis-slave    10.132.189.243/10.132.189.243   name=redisslave,replicationController=redisSlaveController   Running
+$ bin/kubectl get pods
+POD                            IP             CONTAINER(S)   IMAGE(S)            HOST                        LABELS              STATUS
+redis-master-2                 172.17.6.19    master         dockerfile/redis    10.22.211.18/10.22.211.18   name=redis-master   Running
+redis-slave-controller-0133o   172.17.9.2     slave          jdef/redis-slave    10.150.52.19/10.150.52.19   name=redisslave     Running
+redis-slave-controller-oh43e   172.17.82.98   slave          jdef/redis-slave    10.72.72.178/10.72.72.178   name=redisslave     Running
 ```
 
 You will see a single redis master pod and two redis slave pods.
@@ -203,18 +203,22 @@ As before, create a service specification:
 This time the selector for the service is `name=redisslave`, because that identifies the pods running redis slaves.
 It may also be helpful to set labels on your service itself--as we've done here--to make it easy to locate them with:
 
-* `bin/kubecfg -l "name=redisslave" list services`, or
+* `bin/kubectl get services -l "name=redisslave"`, or
 * `curl ${KUBERNETES_MASTER}/api/v1beta1/services?labels=name=redisslave`
 
 Now that you have created the service specification, create it in your cluster via the REST API:
 
 ```shell
-$ bin/kubecfg -c examples/guestbook/redis-slave-service.json create services
+$ bin/kubectl create -f examples/guestbook/redis-slave-service.json
 # -- or --
 $ curl ${KUBERNETES_MASTER}/api/v1beta1/services -XPOST -d@examples/guestbook/redis-slave-service.json
-ID                  Labels              Selector            Port
-----------          ----------          ----------          ----------
-redisslave          name=redisslave     name=redisslave     10001
+
+$ bin/kubectl get services
+NAME            LABELS                                    SELECTOR            IP            PORT
+kubernetes      component=apiserver,provider=kubernetes   <none>              10.10.10.2    443
+kubernetes-ro   component=apiserver,provider=kubernetes   <none>              10.10.10.1    80
+redismaster     <none>                                    name=redis-master   10.10.10.49   10000
+redisslave      name=redisslave                           name=redisslave     10.10.10.109  10001
 ```
 
 ### Step Five: Create the frontend pod.
@@ -227,7 +231,7 @@ Create a file named `frontend-controller.json`:
 
 ```js
 {
-  "id": "frontendController",
+  "id": "frontend-controller",
   "kind": "ReplicationController",
   "apiVersion": "v1beta1",
   "desiredState": {
@@ -237,7 +241,7 @@ Create a file named `frontend-controller.json`:
       "desiredState": {
          "manifest": {
            "version": "v1beta1",
-           "id": "frontendController",
+           "id": "frontend-controller",
            "containers": [{
              "name": "php-redis",
              "image": "jdef/php-redis",
@@ -254,26 +258,27 @@ Create a file named `frontend-controller.json`:
 With this file, you can turn up your frontend with:
 
 ```shell
-$ bin/kubecfg -c examples/guestbook/frontend-controller.json create replicationControllers
+$ bin/kubectl create -f examples/guestbook/frontend-controller.json
 # -- or --
 $ curl ${KUBERNETES_MASTER}/api/v1beta1/replicationControllers -XPOST -d@examples/guestbook/frontend-controller.json
-ID                   Image(s)                 Selector            Replicas
-----------           ----------               ----------          ----------
-frontendController   jdef/php-redis           name=frontend       3
+
+$ bin/kubectl get rc
+CONTROLLER               CONTAINER(S)    IMAGE(S)            SELECTOR            REPLICAS
+frontend-controller      php-redis       jdef/php-redis      name=frontend       3
+redis-slave-controller   slave           jdef/redis-slave    name=redisslave     2
 ```
 
 Once that's up you can list the pods in the cluster, to verify that the master, slaves and frontends are running:
 
 ```shell
-$ bin/kubecfg list pods
-ID                                     Image(s)                 Host                            Labels                                                       Status
-----------                             ----------               ----------                      ----------                                                   ----------
-redis-master-2                         dockerfile/redis         10.132.189.243/10.132.189.243   name=redis-master                                            Running
-439c1c7c-6694-11e4-bd1f-04012f416701   jdef/redis-slave         10.132.189.242/10.132.189.242   name=redisslave,replicationController=redisSlaveController   Running
-439b7b2f-6694-11e4-bd1f-04012f416701   jdef/redis-slave         10.132.189.243/10.132.189.243   name=redisslave,replicationController=redisSlaveController   Running
-901eb1c1-6695-11e4-bd1f-04012f416701   jdef/php-redis           10.132.189.243/10.132.189.243   name=frontend,replicationController=frontendController       Running
-901edf34-6695-11e4-bd1f-04012f416701   jdef/php-redis           10.132.189.240/10.132.189.240   name=frontend,replicationController=frontendController       Running
-901e29a7-6695-11e4-bd1f-04012f416701   jdef/php-redis           10.132.189.242/10.132.189.242   name=frontend,replicationController=frontendController       Running
+$ bin/kubectl get pods
+POD                            IP             CONTAINER(S)  IMAGE(S)          HOST                       LABELS             STATUS
+frontend-controller-hh2gd      172.17.9.3     php-redis     jdef/php-redis    10.150.52.19/10.150.52.19  name=frontend      Running
+frontend-controller-ls6k1      172.17.6.21    php-redis     jdef/php-redis    10.22.211.18/10.22.211.18  name=frontend      Running
+frontend-controller-nyxxv      172.17.82.99   php-redis     jdef/php-redis    10.72.72.178/10.72.72.178  name=frontend      Running
+redis-master-2                 172.17.6.19    master        dockerfile/redis  10.22.211.18/10.22.211.18  name=redis-master  Running
+redis-slave-controller-0133o   172.17.9.2     slave         jdef/redis-slave  10.150.52.19/10.150.52.19  name=redisslave    Running
+redis-slave-controller-oh43e   172.17.82.98   slave         jdef/redis-slave  10.72.72.178/10.72.72.178  name=redisslave    Running
 ```
 
 You will see a single redis master pod, two redis slaves, and three frontend pods.
@@ -322,7 +327,7 @@ if (isset($_GET['cmd']) === true) {
 To play with the service itself, find the IP address of a Mesos slave that is running a frontend pod and visit `http://<host-ip>:31030`.
 ```shell
 # You'll actually want to interact with this app via a browser but you can test its access using curl:
-$ curl http://10.132.189.243:31030
+$ curl http://10.22.211.18:31030
 <html ng-app="redis">
   <head>
     <title>Guestbook</title>
@@ -333,13 +338,13 @@ For a list of Mesos tasks associated with the Kubernetes pods, you can use the M
 
 ```shell
 $ mesos-ps
-   TIME   STATE    RSS     CPU    %MEM  COMMAND  USER                   ID
- 0:00:17    R    28.16 MB  0.75  44.01    none   root  901eeaba-6695-11e4-bd1f-04012f416701
- 0:00:55    R    28.02 MB  0.25  43.78    none   root  901ef7c3-6695-11e4-bd1f-04012f416701
- 0:01:11    R    28.36 MB  0.5   44.31    none   root  901e3ee5-6695-11e4-bd1f-04012f416701
- 0:01:11    R    28.36 MB  0.5   44.31    none   root  439c21f0-6694-11e4-bd1f-04012f416701
- 0:00:17    R    28.16 MB  0.75  44.01    none   root  439b8138-6694-11e4-bd1f-04012f416701
- 0:00:17    R    28.16 MB  0.75  44.01    none   root  abc8399f-6692-11e4-bd1f-04012f416701
+   TIME   STATE    RSS     CPU   %MEM  COMMAND  USER                   ID
+ 0:00:22    R    30.49 MB  0.5  47.64    none   root  718d395f-bd1d-11e4-ba12-42010adf71e3
+ 0:00:22    R    30.82 MB  0.5  48.16    none   root  718d24ec-bd1d-11e4-ba12-42010adf71e3
+ 0:00:59    R    31.50 MB  0.5  49.22    none   root  718a6728-bd1d-11e4-ba12-42010adf71e3
+ 0:00:22    R    30.82 MB  0.5  48.16    none   root  9497635c-bd1c-11e4-ba12-42010adf71e3
+ 0:00:22    R    30.49 MB  0.5  47.64    none   root  9494dfe7-bd1c-11e4-ba12-42010adf71e3
+ 0:00:59    R    31.50 MB  0.5  49.22    none   root  56cb0f99-bd11-11e4-ba12-42010adf71e3
 ```
 
 Or for more details, you can use the Mesos REST API (assuming that the Mesos master is running on `$servicehost`):
@@ -352,36 +357,43 @@ $ curl http://${servicehost}:5050/master/state.json
             "tasks": [
                 {
                     "executor_id": "KubeleteExecutorID",
-                    "framework_id": "20141104-145004-1698212032-5050-7-0000",
-                    "id": "77b1193b-6432-11e4-a2bb-080027a5dbff",
-                    "name": "PodTask",
-                    "resources": {
-                        "cpus": 0.25,
-                        "disk": 0,
-                        "mem": 64,
-                        "ports": "[31030-31030]"
-                    },
-                    "slave_id": "20141104-145004-1698212032-5050-7-0",
+                    "name": "Pod",
+                    "framework_id": "20150221-134408-3815890698-5050-18127-0016",
                     "state": "TASK_RUNNING",
                     "statuses": [
                         {
-                            "state": "TASK_RUNNING",
-                            "timestamp": 1415112883.48378
+                            "timestamp": 1424889489,
+                            "state": "TASK_STARTING"
+                        },
+                        {
+                            "timestamp": 1424889490,
+                            "state": "TASK_RUNNING"
                         }
-                    ]
+                    ],
+                    "slave_id": "20150221-132953-3815890698-5050-10694-S0",
+                    "id": "718d24ec-bd1d-11e4-ba12-42010adf71e3",
+                    "resources": {
+                        "mem": 64,
+                        "disk": 0,
+                        "cpus": 0.25,
+                        "ports": "[31030-31030]"
+                    }
                 },
 ...
     "slaves": [
         {
-            "attributes": {},
-            "hostname": "192.168.56.101",
-            "id": "20141104-145004-1698212032-5050-7-0",
-            "pid": "slave(1)@192.168.56.101:5051",
-            "registered_time": 1415112634.18967,
+            "hostname": "10.22.211.18",
+            "pid": "slave(1)@10.22.211.18:5051",
+            "attributes": {
+                "host": "development-3273-173.c.k8s-mesos.internal"
+            },
+            "registered_time": 1424526249.50596,
+            "reregistered_time": 1424526249.50769,
+            "id": "20150221-132953-3815890698-5050-10694-S1",
             "resources": {
-                "cpus": 1,
-                "disk": 20986,
-                "mem": 920,
+                "mem": 6475,
+                "disk": 4974,
+                "cpus": 2,
                 "ports": "[31000-32000]"
             }
         },
