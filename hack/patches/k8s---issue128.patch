@@ -25,7 +25,7 @@ index 07bb42b..2723244 100644
  	// TODO: Monitor this connection, reconnect if needed?
  	glog.V(1).Infof("Trying to create cadvisor client.")
 diff --git a/pkg/kubelet/server/server.go b/pkg/kubelet/server/server.go
-index 13860d6..48b80ca 100644
+index 13860d6..ba251d6 100644
 --- a/pkg/kubelet/server/server.go
 +++ b/pkg/kubelet/server/server.go
 @@ -77,6 +77,19 @@ type KubeletServer struct {
@@ -106,7 +106,7 @@ index 13860d6..48b80ca 100644
 +	if builder == nil {
 +		builder = createAndInitKubelet
 +	}
-+	k, podCfg, err := createAndInitKubelet(kcfg)
++	k, podCfg, err := builder(kcfg)
  	if err != nil {
  		glog.Errorf("Failed to create kubelet: %s", err)
  		return
