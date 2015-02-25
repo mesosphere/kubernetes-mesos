@@ -102,26 +102,25 @@ Fire up the kubernetes-mesos framework components (yes, these are **all** requir
 
 ```shell
 $ ./bin/kube-apiserver \
-  -address=${servicehost} \
-  -mesos_master=${mesos_master} \
-  -etcd_servers=http://${servicehost}:4001 \
-  -portal_net=10.10.10.0/24 \
-  -port=8888 \
-  -cloud_provider=mesos \
-  -health_check_minions=false
+  --address=${servicehost} \
+  --mesos_master=${mesos_master} \
+  --etcd_servers=http://${servicehost}:4001 \
+  --portal_net=10.10.10.0/24 \
+  --port=8888 \
+  --cloud_provider=mesos
 
 $ ./bin/k8sm-controller-manager \
-  -master=$servicehost:8888 \
-  -mesos_master=${mesos_master}
+  --master=$servicehost:8888 \
+  --mesos_master=${mesos_master}
 
 $ ./bin/k8sm-scheduler \
-  -address=${servicehost} \
-  -mesos_master=${mesos_master} \
-  -etcd_servers=http://${servicehost}:4001 \
-  -executor_path=$(pwd)/bin/k8sm-executor \
-  -proxy_path=$(pwd)/bin/kube-proxy \
-  -mesos_user=root \
-  -api_servers=$servicehost:8888
+  --address=${servicehost} \
+  --mesos_master=${mesos_master} \
+  --etcd_servers=http://${servicehost}:4001 \
+  --executor_path=$(pwd)/bin/k8sm-executor \
+  --proxy_path=$(pwd)/bin/kube-proxy \
+  --mesos_user=root \
+  --api_servers=$servicehost:8888
 ```
 
 For simpler execution of `kubecfg`:
