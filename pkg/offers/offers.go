@@ -400,13 +400,14 @@ func (s *offerStorage) Init() {
 
 	// cached offer ids for the purposes of listener notification
 	idCache := &stringsCache{
-		refill: func() (result util.StringSet) {
+		refill: func() util.StringSet {
+			result := util.NewStringSet()
 			for _, v := range s.offers.List() {
 				if offer, ok := v.(Perishable); ok {
 					result.Insert(offer.uid())
 				}
 			}
-			return
+			return result
 		},
 		ttl: offerIdCacheTTL,
 	}
