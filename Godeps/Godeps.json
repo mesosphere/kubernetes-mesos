@@ -19,6 +19,16 @@
                         "Comment": "go.r60-163",
                         "Rev": "9352842ae63ee1d7e74e074ce7bb10370c4b6b9e"
                 },
+                {
+                        "ImportPath": "code.google.com/p/google-api-go-client/compute/v1",
+                        "Comment": "release-96",
+                        "Rev": "98c78185197025f935947caac56a7b6d022f89d2"
+                },
+                {
+                        "ImportPath": "code.google.com/p/google-api-go-client/container/v1beta1",
+                        "Comment": "release-105",
+                        "Rev": "98c78185197025f935947caac56a7b6d022f89d2"
+                },
 		{
 			"ImportPath": "github.com/GoogleCloudPlatform/kubernetes/pkg/api",
 			"Comment": "Kubernetes version v0.11.0",
