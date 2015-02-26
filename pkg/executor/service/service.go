@@ -32,16 +32,21 @@ const (
 
 type KubeletExecutorServer struct {
 	*server.KubeletServer
-	RunProxy     bool
-	ProxyLogV    int
-	ProxyExec    string
-	ProxyLogfile string
-	ProxyBindall bool
+	RunProxy               bool
+	ProxyLogV              int
+	ProxyExec              string
+	ProxyLogfile           string
+	ProxyBindall           bool
+	TotalMaxDeadContainers uint
 }
 
 func NewKubeletExecutorServer() *KubeletExecutorServer {
 	k := &KubeletExecutorServer{
-		KubeletServer: server.NewKubeletServer(),
+		KubeletServer:          server.NewKubeletServer(),
+		RunProxy:               true,
+		ProxyExec:              "./kube-proxy",
+		ProxyLogfile:           "./proxy-log",
+		TotalMaxDeadContainers: 20, // arbitrary
 	}
 	if pwd, err := os.Getwd(); err != nil {
 		log.Warningf("failed to determine current directory: %v", err)
@@ -54,11 +59,12 @@ func NewKubeletExecutorServer() *KubeletExecutorServer {
 
 func (s *KubeletExecutorServer) AddFlags(fs *pflag.FlagSet) {
 	s.KubeletServer.AddFlags(fs)
-	fs.BoolVar(&s.RunProxy, "run_proxy", true, "Maintain a running kube-proxy instance as a child proc of this kubelet-executor.")
-	fs.IntVar(&s.ProxyLogV, "proxy_logv", 0, "Log verbosity of the child kube-proxy.")
-	fs.StringVar(&s.ProxyExec, "proxy_exec", "./kube-proxy", "Path to the kube-proxy executable.")
-	fs.StringVar(&s.ProxyLogfile, "proxy_logfile", "./proxy-log", "Path to the kube-proxy log file.")
-	fs.BoolVar(&s.ProxyBindall, "proxy_bindall", false, "When true will cause kube-proxy to bind to 0.0.0.0. Defaults to false.")
+	fs.BoolVar(&s.RunProxy, "run_proxy", s.RunProxy, "Maintain a running kube-proxy instance as a child proc of this kubelet-executor.")
+	fs.IntVar(&s.ProxyLogV, "proxy_logv", s.ProxyLogV, "Log verbosity of the child kube-proxy.")
+	fs.StringVar(&s.ProxyExec, "proxy_exec", s.ProxyExec, "Path to the kube-proxy executable.")
+	fs.StringVar(&s.ProxyLogfile, "proxy_logfile", s.ProxyLogfile, "Path to the kube-proxy log file.")
+	fs.BoolVar(&s.ProxyBindall, "proxy_bindall", s.ProxyBindall, "When true will cause kube-proxy to bind to 0.0.0.0.")
+	fs.UintVar(&s.TotalMaxDeadContainers, "total_max_dead_containers", s.TotalMaxDeadContainers, "Max number of dead containers that GC allows to linger.")
 }
 
 // Run runs the specified KubeletExecutorServer.
@@ -156,16 +162,18 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, 
 		return nil, nil, err
 	}
 	k := &kubeletExecutor{
-		Kubelet:        kubelet,
-		finished:       finished,
-		runProxy:       ks.RunProxy,
-		proxyLogV:      ks.ProxyLogV,
-		proxyExec:      ks.ProxyExec,
-		proxyLogfile:   ks.ProxyLogfile,
-		proxyBindall:   ks.ProxyBindall,
-		address:        ks.Address,
-		etcdServerList: ks.EtcdServerList,
-		etcdConfigFile: ks.EtcdConfigFile,
+		Kubelet:                kubelet,
+		finished:               finished,
+		runProxy:               ks.RunProxy,
+		proxyLogV:              ks.ProxyLogV,
+		proxyExec:              ks.ProxyExec,
+		proxyLogfile:           ks.ProxyLogfile,
+		proxyBindall:           ks.ProxyBindall,
+		address:                ks.Address,
+		etcdServerList:         ks.EtcdServerList,
+		etcdConfigFile:         ks.EtcdConfigFile,
+		totalMaxDeadContainers: ks.TotalMaxDeadContainers,
+		dockerClient:           kc.DockerClient,
 	}
 
 	exec := executor.New(k.Kubelet, updates, MESOS_CFG_SOURCE, kc.KubeClient, watch, kc.DockerClient)
@@ -194,17 +202,19 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, 
 // kubelet decorator
 type kubeletExecutor struct {
 	*kubelet.Kubelet
-	initialize     sync.Once
-	driver         bindings.ExecutorDriver
-	finished       chan struct{} // closed once driver.Run() completes
-	runProxy       bool
-	proxyLogV      int
-	proxyExec      string
-	proxyLogfile   string
-	proxyBindall   bool
-	address        util.IP
-	etcdServerList util.StringList
-	etcdConfigFile string
+	initialize             sync.Once
+	driver                 bindings.ExecutorDriver
+	finished               chan struct{} // closed once driver.Run() completes
+	runProxy               bool
+	proxyLogV              int
+	proxyExec              string
+	proxyLogfile           string
+	proxyBindall           bool
+	address                util.IP
+	etcdServerList         util.StringList
+	etcdConfigFile         string
+	totalMaxDeadContainers uint
+	dockerClient           dockertools.DockerInterface
 }
 
 func (kl *kubeletExecutor) ListenAndServe(address net.IP, port uint, enableDebuggingHandlers bool) {
@@ -298,5 +308,30 @@ func (kl *kubeletExecutor) runProxyService() {
 		log.Fatal(err)
 	} else if err := cmd.Wait(); err != nil {
 		log.Error(err)
+	}
+}
+
+// cloned from Kubelet.GarbageCollectLoop so that our custom GarbageCollectContainers
+// gets used instead of the upstream version.
+func (kl *kubeletExecutor) GarbageCollectLoop() {
+	util.Forever(func() {
+		if err := kl.GarbageCollectContainers(); err != nil {
+			log.Errorf("Garbage collect failed: %v", err)
+		}
+	}, time.Minute*1)
+}
+
+//TODO(jdef) write up a PR for this: enforce a max number of dead containers
+func (kl *kubeletExecutor) GarbageCollectContainers() error {
+	if err := kl.Kubelet.GarbageCollectContainers(); err != nil {
+		return err
+	} else if containers, err := dockertools.GetKubeletDockerContainers(kl.dockerClient, true); err != nil {
+		return err
+	} else {
+		ids := []string{}
+		for _, container := range containers {
+			ids = append(ids, container.ID)
+		}
+		return kl.PurgeOldest(ids, int(kl.totalMaxDeadContainers))
 	}
 }

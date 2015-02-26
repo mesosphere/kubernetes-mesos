@@ -1,0 +1,35 @@
+diff --git a/pkg/kubelet/kubelet.go b/pkg/kubelet/kubelet.go
+index 1507115..8ddfa80 100644
+--- a/pkg/kubelet/kubelet.go
++++ b/pkg/kubelet/kubelet.go
+@@ -351,7 +351,7 @@ func (a ByCreated) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+ func (a ByCreated) Less(i, j int) bool { return a[i].Created.After(a[j].Created) }
+ 
+ // TODO: these removals are racy, we should make dockerclient threadsafe across List/Inspect transactions.
+-func (kl *Kubelet) purgeOldest(ids []string) error {
++func (kl *Kubelet) PurgeOldest(ids []string, max int) error {
+ 	dockerData := []*docker.Container{}
+ 	for _, id := range ids {
+ 		data, err := kl.dockerClient.InspectContainer(id)
+@@ -363,10 +363,10 @@ func (kl *Kubelet) purgeOldest(ids []string) error {
+ 		}
+ 	}
+ 	sort.Sort(ByCreated(dockerData))
+-	if len(dockerData) <= kl.maxContainerCount {
++	if len(dockerData) <= max {
+ 		return nil
+ 	}
+-	dockerData = dockerData[kl.maxContainerCount:]
++	dockerData = dockerData[max:]
+ 	for _, data := range dockerData {
+ 		if err := kl.dockerClient.RemoveContainer(docker.RemoveContainerOptions{ID: data.ID}); err != nil {
+ 			return err
+@@ -403,7 +403,7 @@ func (kl *Kubelet) GarbageCollectContainers() error {
+ 		if len(list) <= kl.maxContainerCount {
+ 			continue
+ 		}
+-		if err := kl.purgeOldest(list); err != nil {
++		if err := kl.PurgeOldest(list, kl.maxContainerCount); err != nil {
+ 			return err
+ 		}
+ 	}
