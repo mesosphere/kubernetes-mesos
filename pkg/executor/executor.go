@@ -190,8 +190,8 @@ func (k *KubernetesExecutor) LaunchTask(driver bindings.ExecutorDriver, taskInfo
 	go k.launchTask(driver, taskId, &pod)
 }
 
-func (k *KubernetesExecutor) getPidInfo(name string) (api.PodInfo, error) {
-	return k.kl.GetPodInfo(name, "")
+func (k *KubernetesExecutor) getPidInfo(name string) (api.PodStatus, error) {
+	return k.kl.GetPodStatus(name, "")
 }
 
 // async continuation of LaunchTask
@@ -216,7 +216,7 @@ func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId s
 
 	log.Infof("Binding '%v' to '%v' ...", binding.PodID, binding.Host)
 	ctx := api.WithNamespace(api.NewDefaultContext(), binding.Namespace)
-	err := k.client.Post().Namespace(api.Namespace(ctx)).Resource("bindings").Body(binding).Do().Error()
+	err := k.client.Post().Namespace(api.NamespaceValue(ctx)).Resource("bindings").Body(binding).Do().Error()
 	if err != nil {
 		k.sendStatus(driver, newStatus(mutil.NewTaskID(taskId), mesos.TaskState_TASK_FAILED,
 			messages.CreateBindingFailure))
@@ -270,7 +270,7 @@ func (k *KubernetesExecutor) _launchTask(driver bindings.ExecutorDriver, taskId,
 
 	getMarshalledInfo := func() (data []byte, cancel bool) {
 		// potentially long call..
-		if info, err := k.getPidInfo(podFullName); err == nil {
+		if podStatus, err := k.getPidInfo(podFullName); err == nil {
 			select {
 			case <-expired:
 				cancel = true
@@ -278,16 +278,16 @@ func (k *KubernetesExecutor) _launchTask(driver bindings.ExecutorDriver, taskId,
 				k.lock.Lock()
 				defer k.lock.Unlock()
 				if _, found := k.tasks[taskId]; !found {
-					// don't bother with the pod info if the task is already gone
+					// don't bother with the pod status if the task is already gone
 					cancel = true
 					break
-				} else if podnet, ok := info["net"]; !ok || podnet.State.Running == nil {
-					// avoid sending back a running status while pod networking is down
+				} else if podStatus.Phase != api.PodRunning {
+					// avoid sending back a running status before it's really running
 					break
 				}
-				log.V(2).Infof("Found pod info: '%v'", info)
-				if data, err = json.Marshal(info); err != nil {
-					log.Errorf("failed to marshal pod info: %v", err)
+				log.V(2).Infof("Found pod status: '%v'", podStatus)
+				if data, err = json.Marshal(podStatus); err != nil {
+					log.Errorf("failed to marshal pod status: %v", err)
 				}
 			}
 		}

@@ -50,7 +50,7 @@ func TestDeleteOne_PendingPod(t *testing.T) {
 	qr := newQueuer(nil)
 	qr.podQueue.Add(pod, queue.ReplaceExisting)
 	assert.Equal(1, len(qr.podQueue.List()))
-	_, found := qr.podQueue.Get("foo0")
+	_, found := qr.podQueue.Get("default/foo")
 	assert.True(found)
 
 	// exec & post conditions
@@ -89,7 +89,7 @@ func TestDeleteOne_Running(t *testing.T) {
 	qr := newQueuer(nil)
 	qr.podQueue.Add(pod, queue.ReplaceExisting)
 	assert.Equal(1, len(qr.podQueue.List()))
-	_, found := qr.podQueue.Get("foo0")
+	_, found := qr.podQueue.Get("default/foo")
 	assert.True(found)
 
 	// exec & post conditions

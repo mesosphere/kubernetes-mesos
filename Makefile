@@ -10,7 +10,6 @@ KUBE_GO_PACKAGE	?= github.com/GoogleCloudPlatform/kubernetes
 K8SM_GO_PACKAGE	?= github.com/mesosphere/kubernetes-mesos
 
 K8S_CMD		:= \
-                   ${KUBE_GO_PACKAGE}/cmd/kubecfg		\
                    ${KUBE_GO_PACKAGE}/cmd/kubectl		\
                    ${KUBE_GO_PACKAGE}/cmd/kube-apiserver	\
                    ${KUBE_GO_PACKAGE}/cmd/kube-proxy

@@ -102,34 +102,33 @@ Fire up the kubernetes-mesos framework components (yes, these are **all** requir
 
 ```shell
 $ ./bin/kube-apiserver \
-  -address=${servicehost} \
-  -mesos_master=${mesos_master} \
-  -etcd_servers=http://${servicehost}:4001 \
-  -portal_net=10.10.10.0/24 \
-  -port=8888 \
-  -cloud_provider=mesos \
-  -health_check_minions=false
+  --address=${servicehost} \
+  --mesos_master=${mesos_master} \
+  --etcd_servers=http://${servicehost}:4001 \
+  --portal_net=10.10.10.0/24 \
+  --port=8888 \
+  --cloud_provider=mesos
 
 $ ./bin/k8sm-controller-manager \
-  -master=$servicehost:8888 \
-  -mesos_master=${mesos_master}
+  --master=$servicehost:8888 \
+  --mesos_master=${mesos_master}
 
 $ ./bin/k8sm-scheduler \
-  -address=${servicehost} \
-  -mesos_master=${mesos_master} \
-  -etcd_servers=http://${servicehost}:4001 \
-  -executor_path=$(pwd)/bin/k8sm-executor \
-  -proxy_path=$(pwd)/bin/kube-proxy \
-  -mesos_user=root \
-  -api_servers=$servicehost:8888
+  --address=${servicehost} \
+  --mesos_master=${mesos_master} \
+  --etcd_servers=http://${servicehost}:4001 \
+  --executor_path=$(pwd)/bin/k8sm-executor \
+  --proxy_path=$(pwd)/bin/kube-proxy \
+  --mesos_user=root \
+  --api_servers=$servicehost:8888
 ```
 
-For simpler execution of `kubecfg`:
+For simpler execution of `kubectl`:
 ```shell
 $ export KUBERNETES_MASTER=http://${servicehost}:8888
 ```
 
-You can increase the verbosity of the logging for the API server, scheduler, and/or the controller-manager by including, for example, `-v=2`.
+You can increase the verbosity of the logging for the API server, scheduler, and/or the controller-manager by including, for example, `--v=2`.
 This can be very helpful while debugging.
 
 ###Launch a Pod
@@ -137,159 +136,122 @@ This can be very helpful while debugging.
 Assuming your framework is running on `${KUBERNETES_MASTER}`, then:
 
 ```shell
-$ bin/kubecfg -c examples/pod-nginx.json create pods
+$ bin/kubectl create -f examples/pod-nginx.json
 # -- or --
 $ curl -L ${KUBERNETES_MASTER}/api/v1beta1/pods -XPOST -d @examples/pod-nginx.json
 ```
 
-After the pod get launched, you can check it's status via `kubecfg`, `curl` or your web browser:
+After the pod get launched, you can check it's status via `kubectl`, `curl` or your web browser:
 ```shell
-$ bin/kubecfg list pods
-ID                  Image(s)            Host                            Labels                 Status
-----------          ----------          ----------                      ----------             ----------
-nginx-id-01         dockerfile/nginx    10.132.189.242/10.132.189.242   name=foo               Running
+$ bin/kubectl get pods
+POD          IP           CONTAINER(S)  IMAGE(S)          HOST                       LABELS    STATUS
+nginx-id-01  172.17.6.20  nginx-01      dockerfile/nginx  10.22.211.18/10.22.211.18  name=foo  Running
 
 # -- or --
 $ curl -L ${KUBERNETES_MASTER}/api/v1beta1/pods
 ```
 ```json
 {
-    "kind": "PodList",
-    "creationTimestamp": null,
-    "apiVersion": "v1beta1",
-    "items": [
-        {
-            "id": "nginx-id-01",
-            "creationTimestamp": "2014-10-17T02:46:00Z",
-            "labels": {
-                "name": "foo"
-            },
-            "desiredState": {
-                "manifest": {
-                    "version": "v1beta1",
-                    "id": "nginx-id-01",
-                    "uuid": "ba48b2b2-55a7-11e4-8ec3-08002766f5aa",
-                    "volumes": null,
-                    "containers": [
-                        {
-                            "name": "nginx-01",
-                            "image": "dockerfile/nginx",
-                            "ports": [
-                                {
-                                    "hostPort": 31000,
-                                    "containerPort": 80,
-                                    "protocol": "TCP"
-                                }
-                            ],
-                            "livenessProbe": {
-                                "type": "http",
-                                "httpGet": {
-                                    "path": "/index.html",
-                                    "port": "8081"
-                                },
-                                "initialDelaySeconds": 30
-                            }
-                        }
-                    ],
-                    "restartPolicy": {
-                        "always": {}
-                    }
-                },
-                "status": "Running"
-            },
-            "currentState": {
-                "manifest": {
-                    "version": "v1beta1",
-                    "id": "nginx-id-01",
-                    "uuid": "ba48b2b2-55a7-11e4-8ec3-08002766f5aa",
-                    "volumes": null,
-                    "containers": [
-                        {
-                            "name": "nginx-01",
-                            "image": "dockerfile/nginx",
-                            "ports": [
-                                {
-                                    "hostPort": 31000,
-                                    "containerPort": 80,
-                                    "protocol": "TCP"
-                                }
-                            ],
-                            "livenessProbe": {
-                                "type": "http",
-                                "httpGet": {
-                                    "path": "/index.html",
-                                    "port": "8081"
-                                },
-                                "initialDelaySeconds": 30
-                            }
-                        }
-                    ],
-                    "restartPolicy": {
-                        "always": {}
-                    }
-                },
-                "status": "Waiting",
-                "info": {
-                    "net": {
-                        "Id": "6c4dd34a8d213bc276103985baee053e49cec5236706b7d56acf24441e0f975d",
-                        "Created": "2014-10-17T02:46:01.923547392Z",
-                        "Path": "/pause",
-                        "Config": {
-                            "Hostname": "nginx-id-01",
-                            "ExposedPorts": {
-                                "80/tcp": {}
-                            },
-                            "Env": [
-                                "HOME=/",
-                                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-                            ],
-                            "Image": "kubernetes/pause:latest",
-                            "Entrypoint": [
-                                "/pause"
-                            ]
-                        },
-                        "State": {
-                            "Running": true,
-                            "Pid": 13594,
-                            "StartedAt": "2014-10-17T02:46:02.005492006Z",
-                            "FinishedAt": "0001-01-01T00:00:00Z"
-                        },
-                        "Image": "6c4579af347b649857e915521132f15a06186d73faa62145e3eeeb6be0e97c27",
-                        "NetworkSettings": {
-                            "IPAddress": "172.17.0.13",
-                            "IPPrefixLen": 16,
-                            "Gateway": "172.17.42.1",
-                            "Bridge": "docker0",
-                            "Ports": {
-                                "80/tcp": [
-                                    {
-                                        "HostIP": "0.0.0.0",
-                                        "HostPort": "31000"
-                                    }
-                                ]
-                            }
-                        },
-                        "ResolvConfPath": "/etc/resolv.conf",
-                        "HostnamePath": "/var/lib/docker/containers/6c4dd34a8d213bc276103985baee053e49cec5236706b7d56acf24441e0f975d/hostname",
-                        "HostsPath": "/var/lib/docker/containers/6c4dd34a8d213bc276103985baee053e49cec5236706b7d56acf24441e0f975d/hosts",
-                        "Name": "/k8s--net.fa4b7d08--nginx_-_id_-_01.etcd--ba48b2b2_-_55a7_-_11e4_-_8ec3_-_08002766f5aa--9acb0442",
-                        "Driver": "aufs",
-                        "HostConfig": {
-                            "PortBindings": {
-                                "80/tcp": [
-                                    {
-                                        "HostIP": "0.0.0.0",
-                                        "HostPort": "31000"
-                                    }
-                                ]
-                            },
-                            "RestartPolicy": {}
-                        }
-                    }
+  "kind": "PodList",
+  "creationTimestamp": null,
+  "selfLink": "/api/v1beta1/pods?namespace=",
+  "resourceVersion": 2800,
+  "apiVersion": "v1beta1",
+  "items": [
+    {
+      "id": "nginx-id-01",
+      "uid": "2cf6694e-bd16-11e4-90fa-42010adf71e3",
+      "creationTimestamp": "2015-02-25T17:46:06Z",
+      "selfLink": "/api/v1beta1/pods/nginx-id-01?namespace=default",
+      "resourceVersion": 2751,
+      "namespace": "default",
+      "labels": {
+        "name": "foo"
+      },
+      "desiredState": {
+        "manifest": {
+          "version": "v1beta2",
+          "id": "",
+          "volumes": null,
+          "containers": [
+            {
+              "name": "nginx-01",
+              "image": "dockerfile/nginx",
+              "ports": [
+                {
+                  "hostPort": 31000,
+                  "containerPort": 80,
+                  "protocol": "TCP"
                 }
+              ],
+              "resources": {},
+              "livenessProbe": {
+                "httpGet": {
+                  "path": "/",
+                  "port": "80"
+                },
+                "initialDelaySeconds": 30,
+                "timeoutSeconds": 1
+              },
+              "terminationMessagePath": "/dev/termination-log",
+              "imagePullPolicy": "PullIfNotPresent",
+              "capabilities": {}
             }
+          ],
+          "restartPolicy": {
+            "always": {}
+          },
+          "dnsPolicy": "ClusterFirst"
         }
-    ]
+      },
+      "currentState": {
+        "manifest": {
+          "version": "",
+          "id": "",
+          "volumes": null,
+          "containers": null,
+          "restartPolicy": {}
+        },
+        "status": "Running",
+        "Condition": [
+          {
+            "kind": "Ready",
+            "status": "Full"
+          }
+        ],
+        "host": "10.22.211.18",
+        "hostIP": "10.22.211.18",
+        "podIP": "172.17.6.20",
+        "info": {
+          "POD": {
+            "state": {
+              "running": {
+                "startedAt": "2015-02-25T17:46:07Z"
+              }
+            },
+            "ready": false,
+            "restartCount": 0,
+            "podIP": "172.17.6.20",
+            "image": "kubernetes/pause:latest",
+            "imageID": "docker://6c4579af347b649857e915521132f15a06186d73faa62145e3eeeb6be0e97c27",
+            "containerID": "docker://811760e5070fd3c8e8014aff2a169831adc0c602833b540f689d76be6fadabf1"
+          },
+          "nginx-01": {
+            "state": {
+              "running": {
+                "startedAt": "2015-02-25T17:46:08Z"
+              }
+            },
+            "ready": true,
+            "restartCount": 0,
+            "image": "dockerfile/nginx",
+            "imageID": "docker://0180c66bffa9450b438970b9350295c1b5d4345a8b4573abe8e2b46b075e63f8",
+            "containerID": "docker://371ae01aa63b01875410f5bcca42ccdcc03872d64c351fbdcadcce2cba4a578f"
+          }
+        }
+      }
+    }
+  ]
 }
 ```
 
@@ -297,9 +259,9 @@ Or, you can run `docker ps` on the appropriate Mesos slave to verify that the ex
 
 ```shell
 $ docker ps
-CONTAINER ID        IMAGE                     COMMAND             CREATED             STATUS              PORTS                   NAMES
-ca87f2981e6d        dockerfile/nginx:latest   "nginx"             30 seconds ago      Up 30 seconds                               k8s--nginx_-_01.e7078cc4--nginx_-_id_-_01.mesos--ab87fcc4_-_668e_-_11e4_-_bd1f_-_04012f416701--83e4f98d
-78e9f83ed4a9        kubernetes/pause:go       "/pause"            5 minutes ago       Up 5 minutes        0.0.0.0:31000->80/tcp   k8s--net.fa4b7d08--nginx_-_id_-_01.mesos--ab87fcc4_-_668e_-_11e4_-_bd1f_-_04012f416701--aa209b8e
+CONTAINER ID  IMAGE                     COMMAND   CREATED  STATUS  PORTS                  NAMES
+371ae01aa63b  dockerfile/nginx:latest   "nginx"   11m ago  Up 11m                         k8s_nginx-01.aa49fb33_nginx-id-01.default.mesos_2cf6694e-bd16-11e4-90fa-42010adf71e3_c4ef9708
+811760e5070f  kubernetes/pause:go       "/pause"  11m ago  Up 11m  0.0.0.0:31000->80/tcp  k8s_POD.5c99ea13_nginx-id-01.default.mesos_2cf6694e-bd16-11e4-90fa-42010adf71e3_3d99b13e
 ```
 
 ###Launch a Replication Controller
@@ -307,85 +269,93 @@ ca87f2981e6d        dockerfile/nginx:latest   "nginx"             30 seconds ago
 Assuming your framework is running on `${KUBERNETES_MASTER}` and that you have multiple Mesos slaves in your cluster, then:
 
 ```shell
-$ bin/kubecfg -c examples/controller-nginx.json create replicationControllers
+$ bin/kubectl create -f examples/controller-nginx.json
 # -- or --
 $ curl -L ${KUBERNETES_MASTER}/api/v1beta1/replicationControllers -XPOST -d@examples/controller-nginx.json
 ```
 
-After the pod get launched, you can check it's status via `kubecfg`, `curl` or your web browser:
+After the pod get launched, you can check it's status via `kubectl`, `curl` or your web browser:
 ```shell
-$ bin/kubecfg list replicationControllers
-ID                  Image(s)            Selector            Replicas
-----------          ----------          ----------          ----------
-nginxController     dockerfile/nginx    name=nginx          2
+$ bin/kubectl get replicationControllers
+CONTROLLER          CONTAINER(S)        IMAGE(S)            SELECTOR            REPLICAS
+nginxcontroller     nginx               dockerfile/nginx    name=nginx          2
 
 # -- or --
 $ curl -L ${KUBERNETES_MASTER}/api/v1beta1/replicationControllers
 ```
 ```json
 {
-    "kind": "ReplicationControllerList",
-    "creationTimestamp": null,
-    "resourceVersion": 7,
-    "apiVersion": "v1beta1",
-    "items": [
-        {
-            "id": "nginxController",
-            "creationTimestamp": "2014-10-17T11:10:29Z",
-            "resourceVersion": 3,
-            "desiredState": {
-                "replicas": 2,
-                "replicaSelector": {
-                    "name": "nginx"
-                },
-                "podTemplate": {
-                    "desiredState": {
-                        "manifest": {
-                            "version": "v1beta1",
-                            "id": "",
-                            "volumes": null,
-                            "containers": [
-                                {
-                                    "name": "nginx",
-                                    "image": "dockerfile/nginx",
-                                    "ports": [
-                                        {
-                                            "hostPort": 31001,
-                                            "containerPort": 80,
-                                            "protocol": "TCP"
-                                        }
-                                    ]
-                                }
-                            ],
-                            "restartPolicy": {
-                                "always": {}
-                            }
-                        }
-                    },
-                    "labels": {
-                        "name": "nginx"
+  "kind": "ReplicationControllerList",
+  "creationTimestamp": null,
+  "selfLink": "/api/v1beta1/replicationControllers?namespace=",
+  "resourceVersion": 3087,
+  "apiVersion": "v1beta1",
+  "items": [
+    {
+      "id": "nginxcontroller",
+      "uid": "5f091198-bd18-11e4-90fa-42010adf71e3",
+      "creationTimestamp": "2015-02-25T18:01:49Z",
+      "selfLink": "/api/v1beta1/replicationControllers/nginxcontroller?namespace=default",
+      "resourceVersion": 3041,
+      "namespace": "default",
+      "desiredState": {
+        "replicas": 2,
+        "replicaSelector": {
+          "name": "nginx"
+        },
+        "podTemplate": {
+          "desiredState": {
+            "manifest": {
+              "version": "v1beta2",
+              "id": "",
+              "volumes": null,
+              "containers": [
+                {
+                  "name": "nginx",
+                  "image": "dockerfile/nginx",
+                  "ports": [
+                    {
+                      "hostPort": 31001,
+                      "containerPort": 80,
+                      "protocol": "TCP"
                     }
+                  ],
+                  "resources": {},
+                  "terminationMessagePath": "/dev/termination-log",
+                  "imagePullPolicy": "PullIfNotPresent",
+                  "capabilities": {}
                 }
-            },
-            "currentState": {
-                "replicas": 2,
-                "podTemplate": {
-                    "desiredState": {
-                        "manifest": {
-                            "version": "",
-                            "id": "",
-                            "volumes": null,
-                            "containers": null,
-                            "restartPolicy": {}
-                        }
-                    }
-                }
-            },
-            "labels": {
-                "name": "nginx"
+              ],
+              "restartPolicy": {
+                "always": {}
+              },
+              "dnsPolicy": "ClusterFirst"
             }
+          },
+          "labels": {
+            "name": "nginx"
+          }
         }
-    ]
+      },
+      "currentState": {
+        "replicas": 2,
+        "podTemplate": {
+          "desiredState": {
+            "manifest": {
+              "version": "",
+              "id": "",
+              "volumes": null,
+              "containers": null,
+              "restartPolicy": {}
+            }
+          }
+        }
+      },
+      "labels": {
+        "name": "nginx"
+      }
+    }
+  ]
 }
 ```
 

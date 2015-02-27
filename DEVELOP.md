@@ -17,7 +17,7 @@ The following distro-specific steps for installing prerequisites assume that you
 #### Debian
 
 ```shell
-$ apt-get -y install make curl mercurial git
+$ apt-get -y install g++ make curl mercurial git
 
 $ (cd /usr/local &&
   curl -L https://storage.googleapis.com/golang/go1.3.3.linux-amd64.tar.gz |
@@ -32,7 +32,7 @@ $ mkdir -pv /opt && (export GOPATH=/opt; cd /opt &&
 
 #### Ubuntu
 ```shell
-$ apt-get -y install make curl mercurial git golang
+$ apt-get -y install g++ make curl mercurial git golang
 
 $ mkdir -pv /opt && (export GOPATH=/opt; cd /opt &&
   go get github.com/tools/godep &&
@@ -42,7 +42,7 @@ $ mkdir -pv /opt && (export GOPATH=/opt; cd /opt &&
 #### CentOS 6
 ```shell
 $ rpm -Uvh http://mirrors.einstein.yu.edu/epel/6/i386/epel-release-6-8.noarch.rpm &&
-    yum -y install git mercurial curl tar golang which
+    yum -y install git mercurial curl tar golang which gcc gcc-c++
 
 $ mkdir -pv /opt && (export GOPATH=/opt; cd /opt &&
     go get github.com/tools/godep &&

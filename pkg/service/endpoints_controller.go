@@ -34,7 +34,7 @@ type EndpointController interface {
 	SyncServiceEndpoints() error
 }
 
-// EndpointController manages service endpoints.
+// EndpointController manages selector-based service endpoints.
 type endpointController struct {
 	client *client.Client
 }
@@ -46,7 +46,7 @@ func NewEndpointController(client *client.Client) EndpointController {
 	}
 }
 
-// SyncServiceEndpoints syncs service endpoints.
+// SyncServiceEndpoints syncs endpoints for services with selectors.
 func (e *endpointController) SyncServiceEndpoints() error {
 	services, err := e.client.Services(api.NamespaceAll).List(labels.Everything())
 	if err != nil {
@@ -56,14 +56,15 @@ func (e *endpointController) SyncServiceEndpoints() error {
 	var resultErr error
 	for _, service := range services.Items {
 		if service.Spec.Selector == nil {
-			// services without a selector receive no endpoints.  The last endpoint will be used.
+			// services without a selector receive no endpoints from this controller;
+			// these services will receive the endpoints that are created out-of-band via the REST API.
 			continue
 		}
 
-		glog.Infof("About to update endpoints for service %v", service.Name)
+		glog.V(5).Infof("About to update endpoints for service %s/%s", service.Namespace, service.Name)
 		pods, err := e.client.Pods(service.Namespace).List(labels.Set(service.Spec.Selector).AsSelector())
 		if err != nil {
-			glog.Errorf("Error syncing service: %#v, skipping.", service)
+			glog.Errorf("Error syncing service: %s/%s, skipping", service.Namespace, service.Name)
 			resultErr = err
 			continue
 		}
@@ -72,14 +73,27 @@ func (e *endpointController) SyncServiceEndpoints() error {
 			// HACK(jdef): looks up a HostPort in the container, either by port-name or matching HostPort
 			port, err := findPort(&pod, service.Spec.ContainerPort)
 			if err != nil {
-				glog.Errorf("Failed to find port for service: %+v, %v", service, err)
+				glog.Errorf("Failed to find port for service %s/%s: %v", service.Namespace, service.Name, err)
 				continue
 			}
 			// HACK(jdef): use HostIP instead of pod.CurrentState.PodIP for generic mesos compat
 			if len(pod.Status.HostIP) == 0 {
-				glog.Errorf("Failed to find a host IP for pod: %+v", pod)
+				glog.Errorf("Failed to find a host IP for pod %s/%s", pod.Namespace, pod.Name)
 				continue
 			}
+
+			inService := false
+			for _, c := range pod.Status.Conditions {
+				if c.Kind == api.PodReady && c.Status == api.ConditionFull {
+					inService = true
+					break
+				}
+			}
+			if !inService {
+				glog.V(5).Infof("Pod is out of service: %v/%v", pod.Namespace, pod.Name)
+				continue
+			}
+
 			endpoints = append(endpoints, net.JoinHostPort(pod.Status.HostIP, strconv.Itoa(port)))
 		}
 		currentEndpoints, err := e.client.Endpoints(service.Namespace).Get(service.Name)
@@ -105,7 +119,7 @@ func (e *endpointController) SyncServiceEndpoints() error {
 		} else {
 			// Pre-existing
 			if endpointsEqual(currentEndpoints, endpoints) {
-				glog.V(2).Infof("endpoints are equal for %s, skipping update", service.Name)
+				glog.V(5).Infof("endpoints are equal for %s/%s, skipping update", service.Namespace, service.Name)
 				continue
 			}
 			_, err = e.client.Endpoints(service.Namespace).Update(newEndpoints)

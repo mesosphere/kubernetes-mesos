@@ -4,7 +4,7 @@ MAINTAINER James DeFelice <james.defelice@gmail.com>
 ENV DEBIAN_FRONTEND noninteractive
 
 RUN apt-get -y update && \
-    apt-get -y install make curl mercurial git && \
+    apt-get -y install g++ make curl mercurial git && \
     apt-get -y clean
 
 RUN cd /usr/local && curl -L https://storage.googleapis.com/golang/go1.4.2.linux-amd64.tar.gz | tar xvz

@@ -20,88 +20,22 @@ limitations under the License.
 // pods.
 package main
 
-// HACK(jdef): copy/pasted from k8s /cmd/controller-manager package, hacked to use
-// a modified endpoint-controller
-
 import (
-	"flag"
-	"net"
-	"net/http"
-	"strconv"
-	"time"
-
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
-	minionControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider/controller"
-	replicationControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/controller"
-	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
-	kendpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
-	"github.com/golang/glog"
-
-	kmendpoint "github.com/mesosphere/kubernetes-mesos/pkg/service"
+	"github.com/mesosphere/kubernetes-mesos/pkg/controllermanager"
+	"github.com/spf13/pflag"
 )
-
-var (
-	port                 = flag.Int("port", ports.ControllerManagerPort, "The port that the controller-manager's http service runs on")
-	address              = util.IP(net.ParseIP("127.0.0.1"))
-	clientConfig         = &client.Config{}
-	cloudProvider        = flag.String("cloud_provider", "mesos", "The provider for cloud services. Only 'mesos' is currently supported.")
-	cloudConfigFile      = flag.String("cloud_config", "", "The path to the cloud provider configuration file. Empty string for no configuration file.")
-	useHostPortEndpoints = flag.Bool("host_port_endpoints", true, "Map service endpoints to hostIP:hostPort instead of podIP:containerPort. Default true.")
-)
-
-func init() {
-	flag.Var(&address, "address", "The IP address to serve on (set to 0.0.0.0 for all interfaces)")
-	client.BindClientConfigFlags(flag.CommandLine, clientConfig)
-}
 
 func main() {
-	flag.Parse()
+	s := controllermanager.NewCMServer()
+	s.AddFlags(pflag.CommandLine)
+
+	util.InitFlags()
 	util.InitLogs()
 	defer util.FlushLogs()
 
 	verflag.PrintAndExitIfRequested()
 
-	if len(clientConfig.Host) == 0 {
-		glog.Fatal("usage: controller-manager -master <master>")
-	}
-
-	kubeClient, err := client.New(clientConfig)
-	if err != nil {
-		glog.Fatalf("Invalid API configuration: %v", err)
-	}
-
-	go http.ListenAndServe(net.JoinHostPort(address.String(), strconv.Itoa(*port)), nil)
-
-	endpoints := createEndpointController(kubeClient)
-	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, time.Second*10)
-
-	controllerManager := replicationControllerPkg.NewReplicationManager(kubeClient)
-	controllerManager.Run(10 * time.Second)
-
-	//TODO(jdef) should eventually support more cloud providers here
-	if *cloudProvider != "mesos" {
-		glog.Fatalf("Unsupported cloud provider: %v", *cloudProvider)
-	}
-	cloud := cloudprovider.InitCloudProvider(*cloudProvider, *cloudConfigFile)
-
-	//TODO(jdef) as we support additional cloud providers, may need to specify other values
-	//for minionRegexp and machineList
-	minionController := minionControllerPkg.NewMinionController(cloud, "^.*$", nil, nil, kubeClient)
-	minionController.Run(10 * time.Second)
-
-	select {}
-}
-
-func createEndpointController(client *client.Client) kmendpoint.EndpointController {
-	if *useHostPortEndpoints {
-		glog.V(2).Infof("Creating hostIP:hostPort endpoint controller")
-		return kmendpoint.NewEndpointController(client)
-	}
-	glog.V(2).Infof("Creating podIP:containerPort endpoint controller")
-	stockEndpointController := kendpoint.NewEndpointController(client)
-	return stockEndpointController
+	s.Run(pflag.CommandLine.Args())
 }

@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
 )
@@ -21,7 +20,6 @@ funcs that were stolen from:
 
 const (
 	PodPath                  = "/pods"
-	NetContainerID           = "net" // container the defines the network and ipc namespaces for a pod
 	defaultFinishedTasksSize = 1024
 )
 
@@ -168,26 +166,8 @@ func (k *inMemoryRegistry) handleTaskRunning(task *T, state StateType, status *m
 }
 
 func fillRunningPodInfo(task *T, taskStatus *mesos.TaskStatus) {
-	task.Pod.Status.Phase = api.PodRunning
 	if taskStatus.Data != nil {
-		var info api.PodInfo
-		err := json.Unmarshal(taskStatus.Data, &info)
-		if err == nil {
-			task.Pod.Status.Info = info
-			/// TODO(jdef) this is problematic using default Docker networking on a default
-			/// Docker bridge -- meaning that pod IP's are not routable across the
-			/// k8s-mesos cluster. For now, I've duplicated logic from k8s fillPodInfo
-			netContainerInfo, ok := info[NetContainerID] // docker.Container
-			if ok {
-				if netContainerInfo.PodIP != "" {
-					task.Pod.Status.PodIP = netContainerInfo.PodIP
-				} else {
-					log.Warningf("No network settings: %#v", netContainerInfo)
-				}
-			} else {
-				log.Warningf("Couldn't find network container for %s in %v", task.podKey, info)
-			}
-		} else {
+		if err := json.Unmarshal(taskStatus.Data, &task.Pod.Status); err != nil {
 			log.Errorf("Invalid TaskStatus.Data for task '%v': %v", task.ID, err)
 		}
 	} else {

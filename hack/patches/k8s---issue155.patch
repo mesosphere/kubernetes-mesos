@@ -1,0 +1,21 @@
+diff --git a/pkg/kubelet/server.go b/pkg/kubelet/server.go
+index 5f08674..b86b580 100644
+--- a/pkg/kubelet/server.go
++++ b/pkg/kubelet/server.go
+@@ -36,6 +36,8 @@ import (
+ 	"github.com/GoogleCloudPlatform/kubernetes/pkg/types"
+ 	"github.com/golang/glog"
+ 	"github.com/google/cadvisor/info"
++
++	"github.com/mesosphere/kubernetes-mesos/pkg/profile"
+ )
+ 
+ // Server is a http.Handler which exposes kubelet functionality over HTTP.
+@@ -88,6 +90,7 @@ func NewServer(host HostInterface, enableDebuggingHandlers bool) Server {
+ 
+ // InstallDefaultHandlers registers the default set of supported HTTP request patterns with the mux.
+ func (s *Server) InstallDefaultHandlers() {
++	profile.InstallHandler(s.mux)
+ 	s.mux.HandleFunc("/healthz", s.handleHealthz)
+ 	s.mux.HandleFunc("/podInfo", s.handlePodInfoOld)
+ 	s.mux.HandleFunc("/api/v1beta1/podInfo", s.handlePodInfoVersioned)

@@ -1,143 +1,167 @@
 diff --git a/pkg/kubelet/kubelet.go b/pkg/kubelet/kubelet.go
-index 3ab5845..632f611 100644
+index 1507115..399c150 100644
 --- a/pkg/kubelet/kubelet.go
 +++ b/pkg/kubelet/kubelet.go
-@@ -1192,3 +1192,7 @@ func (kl *Kubelet) BirthCry() {
+@@ -1651,3 +1651,7 @@ func (kl *Kubelet) BirthCry() {
  	}
- 	record.Eventf(ref, "", "starting", "Starting kubelet.")
+ 	record.Eventf(ref, "starting", "Starting kubelet.")
  }
 +
 +func (kl *Kubelet) ListenAndServe(address net.IP, port uint, enableDebuggingHandlers bool) {
 +	ListenAndServeKubeletServer(kl, address, port, enableDebuggingHandlers)
 +}
 diff --git a/pkg/kubelet/util.go b/pkg/kubelet/util.go
-index cc6aa58..dc3043d 100644
+index 07bb42b..2723244 100644
 --- a/pkg/kubelet/util.go
 +++ b/pkg/kubelet/util.go
-@@ -35,8 +35,7 @@ import (
+@@ -30,8 +30,7 @@ import (
  	cadvisor "github.com/google/cadvisor/client"
  )
  
 -// TODO: move this into the kubelet itself
 -func MonitorCAdvisor(k *Kubelet, cp uint) {
-+func (kl *Kubelet) MonitorCAdvisor(cp uint) {
++func (k *Kubelet) MonitorCAdvisor(cp uint) {
  	defer util.HandleCrash()
  	// TODO: Monitor this connection, reconnect if needed?
  	glog.V(1).Infof("Trying to create cadvisor client.")
-@@ -46,14 +45,13 @@ func MonitorCAdvisor(k *Kubelet, cp uint) {
- 		return
- 	}
- 	glog.V(1).Infof("Successfully created cadvisor client.")
--	k.SetCadvisorClient(cadvisorClient)
-+	kl.SetCadvisorClient(cadvisorClient)
+diff --git a/pkg/kubelet/server/server.go b/pkg/kubelet/server/server.go
+index 13860d6..ba251d6 100644
+--- a/pkg/kubelet/server/server.go
++++ b/pkg/kubelet/server/server.go
+@@ -77,6 +77,19 @@ type KubeletServer struct {
+ 	ReallyCrashForTesting   bool
  }
  
--// TODO: move this into the kubelet itself
--func InitHealthChecking(k *Kubelet) {
-+func (kl *Kubelet) InitHealthChecking() {
- 	// TODO: These should probably become more plugin-ish: register a factory func
- 	// in each checker's init(), iterate those here.
--	health.AddHealthChecker(health.NewExecHealthChecker(k))
-+	health.AddHealthChecker(health.NewExecHealthChecker(kl))
- 	health.AddHealthChecker(health.NewHTTPHealthChecker(&http.Client{}))
- 	health.AddHealthChecker(&health.TCPHealthChecker{})
++// bootstrapping interface for kubelet, targets the initialization protocol
++type KubeletBootstrap interface {
++       BirthCry()
++       GarbageCollectLoop()
++       ListenAndServe(net.IP, uint, bool)
++       MonitorCAdvisor(uint)
++       Run(<-chan kubelet.PodUpdate)
++       RunOnce(<-chan kubelet.PodUpdate) ([]kubelet.RunPodResult, error)
++}
++
++// create and initialize a Kubelet instance
++type KubeletBuilder func(kc *KubeletConfig) (KubeletBootstrap, *config.PodConfig, error)
++
+ // NewKubeletServer will create a new KubeletServer with default values.
+ func NewKubeletServer() *KubeletServer {
+ 	return &KubeletServer{
+@@ -174,7 +187,7 @@ func (s *KubeletServer) Run(_ []string) error {
+ 		glog.Info(err)
+ 	}
+ 
+-	client, err := s.createAPIServerClient()
++	client, err := s.CreateAPIServerClient()
+ 	if err != nil && len(s.APIServerList) > 0 {
+ 		glog.Warningf("No API client: %v", err)
+ 	}
+@@ -210,7 +223,7 @@ func (s *KubeletServer) Run(_ []string) error {
+ 		VolumePlugins:           ProbeVolumePlugins(),
+ 	}
+ 
+-	RunKubelet(&kcfg)
++	RunKubelet(&kcfg, nil)
+ 
+ 	// runs forever
+ 	select {}
+@@ -234,7 +247,7 @@ func (s *KubeletServer) setupRunOnce() {
  }
-diff --git a/pkg/standalone/standalone.go b/pkg/standalone/standalone.go
-index b9af29a..76846bd 100644
---- a/pkg/standalone/standalone.go
-+++ b/pkg/standalone/standalone.go
-@@ -143,16 +143,29 @@ func SimpleRunKubelet(etcdClient tools.EtcdClient, dockerClient dockertools.Dock
- 		EnableDebuggingHandlers: true,
- 		SyncFrequency:           3 * time.Second,
+ 
+ // TODO: replace this with clientcmd
+-func (s *KubeletServer) createAPIServerClient() (*client.Client, error) {
++func (s *KubeletServer) CreateAPIServerClient() (*client.Client, error) {
+ 	authInfo, err := clientauth.LoadFromFile(s.AuthPath)
+ 	if err != nil {
+ 		glog.Warningf("Could not load kubernetes auth path: %v. Continuing with defaults.", err)
+@@ -289,7 +302,7 @@ func SimpleRunKubelet(client *client.Client,
+ 		MasterServiceNamespace:  masterServiceNamespace,
+ 		VolumePlugins:           volumePlugins,
  	}
 -	RunKubelet(&kcfg)
 +	RunKubelet(&kcfg, nil)
  }
  
-+// bootstrapping interface for kubelet, targets the initialization protocol
-+type KubeletBootstrap interface {
-+	BirthCry()
-+	GarbageCollectLoop()
-+	InitHealthChecking()
-+	ListenAndServe(net.IP, uint, bool)
-+	MonitorCAdvisor(uint)
-+	Run(<-chan kubelet.PodUpdate)
-+	RunOnce(<-chan kubelet.PodUpdate) ([]kubelet.RunPodResult, error)
-+}
-+
-+// create and initialize a Kubelet instance
-+type KubeletBuilder func(kc *KubeletConfig) (KubeletBootstrap, *config.PodConfig)
-+
  // RunKubelet is responsible for setting up and running a kubelet.  It is used in three different applications:
- //   1 Integration tests
+@@ -297,20 +310,17 @@ func SimpleRunKubelet(client *client.Client,
  //   2 Kubelet binary
  //   3 Standalone 'kubernetes' binary
  // Eventually, #2 will be replaced with instances of #3
 -func RunKubelet(kcfg *KubeletConfig) {
--	kubelet.SetupEventSending(kcfg.AuthPath, kcfg.ApiServerList)
 +func RunKubelet(kcfg *KubeletConfig, builder KubeletBuilder) {
+ 	kcfg.Hostname = util.GetHostname(kcfg.HostnameOverride)
+-	if kcfg.KubeClient != nil {
+-		kubelet.SetupEventSending(kcfg.KubeClient, kcfg.Hostname)
+-	} else {
+-		glog.Infof("No api server defined - no events will be sent.")
+-	}
  	kubelet.SetupLogging()
  	kubelet.SetupCapabilities(kcfg.AllowPrivileged)
  
-@@ -161,8 +174,10 @@ func RunKubelet(kcfg *KubeletConfig) {
- 		kubelet.SetupRootDirectoryOrDie(kcfg.RootDirectory)
- 	}
+ 	credentialprovider.SetPreferredDockercfgPath(kcfg.RootDirectory)
  
--	cfg := makePodSourceConfig(kcfg)
--	k := createAndInitKubelet(kcfg, cfg)
+-	podCfg := makePodSourceConfig(kcfg)
+-	k, err := createAndInitKubelet(kcfg, podCfg)
 +	if builder == nil {
 +		builder = createAndInitKubelet
 +	}
-+	k, cfg := builder(kcfg)
- 	// process pods and exit.
- 	if kcfg.Runonce {
- 		if _, err := k.RunOnce(cfg.Updates()); err != nil {
-@@ -173,15 +188,15 @@ func RunKubelet(kcfg *KubeletConfig) {
++	k, podCfg, err := builder(kcfg)
+ 	if err != nil {
+ 		glog.Errorf("Failed to create kubelet: %s", err)
+ 		return
+@@ -325,14 +335,14 @@ func RunKubelet(kcfg *KubeletConfig) {
  	}
  }
  
--func startKubelet(k *kubelet.Kubelet, cfg *config.PodConfig, kc *KubeletConfig) {
-+func startKubelet(k KubeletBootstrap, cfg *config.PodConfig, kc *KubeletConfig) {
+-func startKubelet(k *kubelet.Kubelet, podCfg *config.PodConfig, kc *KubeletConfig) {
++func startKubelet(k KubeletBootstrap, podCfg *config.PodConfig, kc *KubeletConfig) {
  	// start the kubelet
- 	go util.Forever(func() { k.Run(cfg.Updates()) }, 0)
+ 	go util.Forever(func() { k.Run(podCfg.Updates()) }, 0)
  
  	// start the kubelet server
  	if kc.EnableServer {
  		go util.Forever(func() {
 -			kubelet.ListenAndServeKubeletServer(k, net.IP(kc.Address), kc.Port, kc.EnableDebuggingHandlers)
--		}, 0)
 +			k.ListenAndServe(net.IP(kc.Address), kc.Port, kc.EnableDebuggingHandlers)
-+		}, 10*time.Second)
+ 		}, 0)
  	}
  }
- 
-@@ -237,11 +252,15 @@ type KubeletConfig struct {
- 	Runonce                 bool
+@@ -395,11 +405,18 @@ type KubeletConfig struct {
+ 	VolumePlugins           []volume.Plugin
  }
  
--func createAndInitKubelet(kc *KubeletConfig, pc *config.PodConfig) *kubelet.Kubelet {
-+func createAndInitKubelet(kc *KubeletConfig) (k KubeletBootstrap, pc *config.PodConfig) {
-+
-+	kubelet.SetupEventSending(kc.AuthPath, kc.ApiServerList)
-+	pc = makePodSourceConfig(kc)
+-func createAndInitKubelet(kc *KubeletConfig, pc *config.PodConfig) (*kubelet.Kubelet, error) {
++func createAndInitKubelet(kc *KubeletConfig)(k KubeletBootstrap, pc *config.PodConfig, err error) {
++	if kc.KubeClient != nil {
++		kubelet.SetupEventSending(kc.KubeClient, kc.Hostname)
++	} else {
++		glog.Infof("No api server defined - no events will be sent.")
++	}
 +
  	// TODO: block until all sources have delivered at least one update to the channel, or break the sync loop
  	// up into "per source" synchronizations
  
--	k := kubelet.NewMainKubelet(
-+	k = kubelet.NewMainKubelet(
+-	k, err := kubelet.NewMainKubelet(
++	pc = makePodSourceConfig(kc)
++	k, err = kubelet.NewMainKubelet(
  		kc.Hostname,
  		kc.DockerClient,
  		kc.EtcdClient,
-@@ -259,8 +278,8 @@ func createAndInitKubelet(kc *KubeletConfig, pc *config.PodConfig) *kubelet.Kube
+@@ -418,13 +435,13 @@ func createAndInitKubelet(kc *KubeletConfig, pc *config.PodConfig) (*kubelet.Kub
+ 		kc.VolumePlugins)
+ 
+ 	if err != nil {
+-		return nil, err
++		return nil, nil, err
+ 	}
+ 
  	k.BirthCry()
  
  	go k.GarbageCollectLoop()
 -	go kubelet.MonitorCAdvisor(k, kc.CAdvisorPort)
--	kubelet.InitHealthChecking(k)
 +	go k.MonitorCAdvisor(kc.CAdvisorPort)
-+	k.InitHealthChecking()
  
--	return k
-+	return
+-	return k, nil
++	return k, pc, nil
  }

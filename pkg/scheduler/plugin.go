@@ -9,7 +9,6 @@ import (
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/meta"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/envvars"
@@ -175,7 +174,7 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *podtask.T) (e
 }
 
 func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *podtask.T, offerId string) error {
-	pod, err := b.client.Pods(api.Namespace(ctx)).Get(task.Pod.Name)
+	pod, err := b.client.Pods(api.NamespaceValue(ctx)).Get(task.Pod.Name)
 	if err != nil {
 		return err
 	}
@@ -236,7 +235,7 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *pod
 // HACK(jdef): adapted from https://github.com/GoogleCloudPlatform/kubernetes/blob/release-0.6/pkg/registry/pod/bound_pod_factory.go
 func (b *binder) getServiceEnvironmentVariables(ctx api.Context) (result []api.EnvVar, err error) {
 	var services *api.ServiceList
-	if services, err = b.client.Services(api.Namespace(ctx)).List(labels.Everything()); err == nil {
+	if services, err = b.client.Services(api.NamespaceValue(ctx)).List(labels.Everything()); err == nil {
 		result = envvars.FromServices(services)
 	}
 	return
@@ -266,12 +265,12 @@ func (k *kubeScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (st
 		// There's a bit of a potential race here, a pod could have been yielded() and
 		// then before we get *here* it could be deleted.
 		// We use meta to index the pod in the store since that's what k8s reflector does.
-		meta, err := meta.Accessor(&pod)
+		podName, err := cache.MetaNamespaceKeyFunc(&pod)
 		if err != nil {
 			log.Warningf("aborting Schedule, unable to understand pod object %+v", &pod)
 			return "", noSuchPodErr
 		}
-		if deleted := k.podUpdates.Poll(meta.Name(), queue.DELETE_EVENT); deleted {
+		if deleted := k.podUpdates.Poll(podName, queue.DELETE_EVENT); deleted {
 			// avoid scheduling a pod that's been deleted between yieldPod() and Schedule()
 			log.Infof("aborting Schedule, pod has been deleted %+v", &pod)
 			return "", noSuchPodErr
@@ -477,9 +476,9 @@ func (q *queuer) yield() *api.Pod {
 		}
 
 		pod := kpod.(*Pod).Pod
-		if meta, err := meta.Accessor(pod); err != nil {
-			log.Warningf("yield unable to understand pod object %+v, will skip", pod)
-		} else if !q.podUpdates.Poll(meta.Name(), queue.POP_EVENT) {
+		if podName, err := cache.MetaNamespaceKeyFunc(pod); err != nil {
+			log.Warningf("yield unable to understand pod object %+v, will skip: %v", pod, err)
+		} else if !q.podUpdates.Poll(podName, queue.POP_EVENT) {
 			log.V(1).Infof("yield popped a transitioning pod, skipping: %+v", pod)
 		} else if pod.Status.Host != "" {
 			// should never happen if enqueuePods is filtering properly
@@ -650,8 +649,10 @@ func (k *KubernetesScheduler) NewPluginConfig(startLatch <-chan struct{}) *Plugi
 	eh := &errorHandler{
 		api: kapi,
 		backoff: &podBackoff{
-			perPodBackoff: map[string]*backoffEntry{},
-			clock:         realClock{},
+			perPodBackoff:   map[string]*backoffEntry{},
+			clock:           realClock{},
+			defaultDuration: 1 * time.Second,
+			maxDuration:     60 * time.Second,
 		},
 		qr: q,
 	}
@@ -725,7 +726,7 @@ type schedulingPlugin struct {
 func (s *schedulingPlugin) reconcilePod(oldPod api.Pod) {
 	log.V(1).Infof("reconcile pod %v", oldPod.Name)
 	ctx := api.WithNamespace(api.NewDefaultContext(), oldPod.Namespace)
-	pod, err := s.client.Pods(api.Namespace(ctx)).Get(oldPod.Name)
+	pod, err := s.client.Pods(api.NamespaceValue(ctx)).Get(oldPod.Name)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// attempt to delete
@@ -823,23 +824,33 @@ type podStoreAdapter struct {
 	queue.FIFO
 }
 
-func (psa *podStoreAdapter) Add(id string, obj interface{}) {
+func (psa *podStoreAdapter) Add(obj interface{}) error {
 	pod := obj.(*api.Pod)
-	psa.FIFO.Add(id, &Pod{Pod: pod})
+	return psa.FIFO.Add(&Pod{Pod: pod})
 }
 
-func (psa *podStoreAdapter) Update(id string, obj interface{}) {
+func (psa *podStoreAdapter) Update(obj interface{}) error {
 	pod := obj.(*api.Pod)
-	psa.FIFO.Update(id, &Pod{Pod: pod})
+	return psa.FIFO.Update(&Pod{Pod: pod})
+}
+
+func (psa *podStoreAdapter) Delete(obj interface{}) error {
+	pod := obj.(*api.Pod)
+	return psa.FIFO.Delete(&Pod{Pod: pod})
+}
+
+func (psa *podStoreAdapter) Get(obj interface{}) (interface{}, bool, error) {
+	pod := obj.(*api.Pod)
+	return psa.FIFO.Get(&Pod{Pod: pod})
 }
 
 // Replace will delete the contents of the store, using instead the
 // given map. This store implementation does NOT take ownership of the map.
-func (psa *podStoreAdapter) Replace(idToObj map[string]interface{}) {
-	newmap := map[string]interface{}{}
-	for k, v := range idToObj {
+func (psa *podStoreAdapter) Replace(objs []interface{}) error {
+	newobjs := make([]interface{}, len(objs))
+	for i, v := range objs {
 		pod := v.(*api.Pod)
-		newmap[k] = &Pod{Pod: pod}
+		newobjs[i] = &Pod{Pod: pod}
 	}
-	psa.FIFO.Replace(newmap)
+	return psa.FIFO.Replace(newobjs)
 }
