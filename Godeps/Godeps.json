@@ -180,7 +180,7 @@
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/mesos",
-			"Rev": "3cf54533b3998653d275d5ea8273c067fb018a03"
+			"Rev": "9237f12ac229506a6cad172284cb1c9c5bd945f9"
 		},
 		{
 			"ImportPath": "github.com/mitchellh/mapstructure",
