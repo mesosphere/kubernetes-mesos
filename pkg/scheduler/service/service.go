@@ -51,6 +51,8 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
 	sconfig "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/pflag"
 	"golang.org/x/net/context"
 )
@@ -229,6 +231,9 @@ func (s *SchedulerServer) createAPIServerClient() (*client.Client, error) {
 }
 
 func (s *SchedulerServer) Run(_ []string) error {
+
+	metrics.Register()
+	http.Handle("/metrics", prometheus.Handler())
 
 	etcdClient := kubelet.EtcdClientOrDie(s.EtcdServerList, s.EtcdConfigFile)
 	if etcdClient == nil {

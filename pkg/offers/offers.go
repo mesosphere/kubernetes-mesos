@@ -389,7 +389,6 @@ func (s *offerStorage) notifyListeners(ids func() (util.StringSet, uint64)) {
 		s.listeners.Offer(listener, queue.KeepExisting)
 	} else {
 		// garbage collection is as simple as not re-adding the listener to the queue
-		//TODO(jdef) record metric/event?
 		log.V(3).Infof("garbage collecting offer listener %s", listener.id)
 	}
 }
