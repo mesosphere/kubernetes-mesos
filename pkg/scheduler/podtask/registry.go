@@ -30,6 +30,7 @@ type Registry interface {
 	Get(taskId string) (task *T, currentState StateType)
 	TaskForPod(podID string) (taskID string, ok bool)
 	UpdateStatus(status *mesos.TaskStatus) (*T, StateType)
+	// return a list of task ID's that match the given filter, or all task ID's if filter == nil
 	List(filter *StateType) []string
 }
 
