@@ -290,16 +290,17 @@ func (k *KubernetesScheduler) Error(driver bindings.SchedulerDriver, message str
 // intended to be invoked as a Reconciler.Action by Reconciler.Run
 func (k *KubernetesScheduler) ReconcileRunningTasks(driver bindings.SchedulerDriver, canceled <-chan struct{}) error {
 	log.Info("reconcile running tasks")
-	remaining := util.NewStringSet()
-	statusList := []*mesos.TaskStatus{}
 
-	filter := podtask.StateRunning
-	remaining.Insert(k.taskRegistry.List(&filter)...)
+	statusList := []*mesos.TaskStatus{}
 	if _, err := driver.ReconcileTasks(statusList); err != nil {
 		return err
 	}
+
+	filter := podtask.StateRunning
+	remaining := util.NewStringSet()
+	remaining.Insert(k.taskRegistry.List(&filter)...)
 	start := time.Now()
-	const maxBackoff = 120 * time.Second
+	const maxBackoff = 120 * time.Second // TODO(jdef) extract constant
 	first := true
 	for backoff := 1 * time.Second; first || remaining.Len() > 0; backoff = backoff * 2 {
 		first = false
