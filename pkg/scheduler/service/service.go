@@ -321,6 +321,8 @@ func (s *SchedulerServer) buildFrameworkInfo(client tools.EtcdClient) (info *mes
 	var frameworkId *mesos.FrameworkID
 	var failover *float64
 
+	//TODO(jdef) does this really align with how checkpoint and failoverTimeout are intended
+	//to be used? Perhaps they should be more independent.
 	if s.Checkpoint {
 		response, err := client.Get(meta.FrameworkIDKey, false, false)
 		if err != nil {
