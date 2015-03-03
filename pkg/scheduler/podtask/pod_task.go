@@ -10,6 +10,7 @@ import (
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	mutil "github.com/mesos/mesos-go/mesosutil"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
 )
 
 const (
@@ -137,9 +138,9 @@ func (t *T) AcceptOffer(offer *mesos.Offer) bool {
 func (t *T) Set(f FlagType) {
 	t.Flags[f] = struct{}{}
 	if Launched == f {
-		//TODO(jdef) properly emit metric, or event type instead of just logging
 		t.launchTime = time.Now()
-		log.V(1).Infof("metric time_to_launch %v task %v pod %v", t.launchTime.Sub(t.CreateTime), t.ID, t.Pod.Name)
+		queueWaitTime := t.launchTime.Sub(t.CreateTime)
+		metrics.QueueWaitTime.Observe(metrics.InMicroseconds(queueWaitTime))
 	}
 }
 

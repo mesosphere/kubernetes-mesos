@@ -51,6 +51,8 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
 	sconfig "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/pflag"
 	"golang.org/x/net/context"
 )
@@ -230,6 +232,9 @@ func (s *SchedulerServer) createAPIServerClient() (*client.Client, error) {
 
 func (s *SchedulerServer) Run(_ []string) error {
 
+	metrics.Register()
+	http.Handle("/metrics", prometheus.Handler())
+
 	etcdClient := kubelet.EtcdClientOrDie(s.EtcdServerList, s.EtcdConfigFile)
 	if etcdClient == nil {
 		log.Fatalf("specify either --etcd_servers or --etcd_config")
@@ -316,6 +321,8 @@ func (s *SchedulerServer) buildFrameworkInfo(client tools.EtcdClient) (info *mes
 	var frameworkId *mesos.FrameworkID
 	var failover *float64
 
+	//TODO(jdef) does this really align with how checkpoint and failoverTimeout are intended
+	//to be used? Perhaps they should be more independent.
 	if s.Checkpoint {
 		response, err := client.Get(meta.FrameworkIDKey, false, false)
 		if err != nil {

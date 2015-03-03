@@ -665,6 +665,7 @@ func (k *KubernetesScheduler) NewPluginConfig(startLatch <-chan struct{}) *Plugi
 		}
 	}()
 	q.installDebugHandlers()
+	podtask.InstallDebugHandlers(k.RLocker(), k.taskRegistry)
 	return &PluginConfig{
 		Config: &plugin.Config{
 			MinionLister: nil,

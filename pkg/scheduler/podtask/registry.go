@@ -9,6 +9,7 @@ import (
 
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
 )
 
 /**
@@ -29,6 +30,7 @@ type Registry interface {
 	Get(taskId string) (task *T, currentState StateType)
 	TaskForPod(podID string) (taskID string, ok bool)
 	UpdateStatus(status *mesos.TaskStatus) (*T, StateType)
+	// return a list of task ID's that match the given filter, or all task ID's if filter == nil
 	List(filter *StateType) []string
 }
 
@@ -139,9 +141,9 @@ func (k *inMemoryRegistry) handleTaskStarting(task *T, state StateType, status *
 		task.UpdatedTime = time.Now()
 		if !task.Has(Bound) {
 			task.Set(Bound)
-			//TODO(jdef) properly emit metric, or event type instead of just logging
 			task.bindTime = task.UpdatedTime
-			log.V(1).Infof("metric time_to_bind %v task %v pod %v", task.bindTime.Sub(task.launchTime), task.ID, task.Pod.Name)
+			timeToBind := task.bindTime.Sub(task.launchTime)
+			metrics.BindLatency.Observe(metrics.InMicroseconds(timeToBind))
 		}
 	default:
 		log.Warningf("Ignore status TASK_STARTING because the the task is not pending")
