@@ -10,6 +10,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
+	"github.com/mesosphere/kubernetes-mesos/pkg/offers/metrics"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 )
 
@@ -69,8 +70,14 @@ type liveOffer struct {
 }
 
 type expiredOffer struct {
-	id       string
+	offerSpec
 	deadline time.Time
+}
+
+// subset of mesos.OfferInfo useful for recordkeeping
+type offerSpec struct {
+	id       string
+	hostname string
 }
 
 type Perishable interface {
@@ -87,10 +94,16 @@ type Perishable interface {
 	age(s *offerStorage)
 	// return a unique identifier for this offer
 	uid() string
+	// return the slave host for this offer
+	host() string
 }
 
 func (e *expiredOffer) uid() string {
 	return e.id
+}
+
+func (e *expiredOffer) host() string {
+	return e.hostname
 }
 
 func (e *expiredOffer) HasExpired() bool {
@@ -125,12 +138,17 @@ func (to *liveOffer) Details() *mesos.Offer {
 	return to.Offer
 }
 
-func (to *liveOffer) Acquire() bool {
-	return atomic.CompareAndSwapInt32(&to.acquired, 0, 1)
+func (to *liveOffer) Acquire() (acquired bool) {
+	if acquired = atomic.CompareAndSwapInt32(&to.acquired, 0, 1); acquired {
+		metrics.OffersAcquired.WithLabelValues(to.host()).Inc()
+	}
+	return
 }
 
 func (to *liveOffer) Release() {
-	atomic.CompareAndSwapInt32(&to.acquired, 1, 0)
+	if released := atomic.CompareAndSwapInt32(&to.acquired, 1, 0); released {
+		metrics.OffersReleased.WithLabelValues(to.host()).Inc()
+	}
 }
 
 func (to *liveOffer) age(s *offerStorage) {
@@ -141,12 +159,17 @@ func (to *liveOffer) uid() string {
 	return to.Offer.Id.GetValue()
 }
 
+func (to *liveOffer) host() string {
+	return to.Offer.GetHostname()
+}
+
 // return the time remaining before the offer expires
 func (to *liveOffer) GetDelay() time.Duration {
 	return to.expiration.Sub(time.Now())
 }
 
 func CreateRegistry(c RegistryConfig) Registry {
+	metrics.Register()
 	return &offerStorage{
 		RegistryConfig: c,
 		offers: cache.NewFIFO(cache.KeyFunc(func(v interface{}) (string, error) {
@@ -164,36 +187,42 @@ func CreateRegistry(c RegistryConfig) Registry {
 func (s *offerStorage) Add(offers []*mesos.Offer) {
 	now := time.Now()
 	for _, offer := range offers {
-		timed := &liveOffer{offer, now.Add(s.TTL), 0}
+		timed := &liveOffer{
+			Offer:      offer,
+			expiration: now.Add(s.TTL),
+			acquired:   0,
+		}
 		log.V(3).Infof("Receiving offer %v", timed.uid())
 		s.offers.Add(timed)
 		s.delayed.Add(timed)
+		metrics.OffersReceived.WithLabelValues(timed.host()).Inc()
 	}
 }
 
-// delete an offer from storage, meaning that we expire it
+// delete an offer from storage, implicitly expires the offer
 func (s *offerStorage) Delete(offerId string) {
 	if offer, ok := s.Get(offerId); ok {
 		log.V(3).Infof("Deleting offer %v", offerId)
 		// attempt to block others from consuming the offer. if it's already been
 		// claimed and is not yet lingering then don't decline it - just mark it as
 		// expired in the history: allow a prior claimant to attempt to launch with it
-		myoffer := offer.Acquire()
+		notYetClaimed := offer.Acquire()
 		if offer.Details() != nil {
-			if myoffer {
+			if notYetClaimed {
 				log.V(3).Infof("Declining offer %v", offerId)
 				if err := s.DeclineOffer(offerId); err != nil {
 					log.Warningf("Failed to decline offer %v: %v", offerId, err)
+				} else {
+					metrics.OffersDeclined.WithLabelValues(offer.host()).Inc()
 				}
 			} else {
 				// some pod has acquired this and may attempt to launch a task with it
 				// failed schedule/launch attempts are requried to Release() any claims on the offer
-				go func() {
-					// TODO(jdef): not sure what a good value is here. the goal is to provide a
-					// launchTasks (driver) operation enough time to complete so that we don't end
-					// up declining an offer that we're actually attempting to use.
-					time.Sleep(deferredDeclineTtlFactor * s.TTL)
 
+				// TODO(jdef): not sure what a good value is here. the goal is to provide a
+				// launchTasks (driver) operation enough time to complete so that we don't end
+				// up declining an offer that we're actually attempting to use.
+				time.AfterFunc(deferredDeclineTtlFactor*s.TTL, func() {
 					// at this point the offer is in one of five states:
 					// a) permanently deleted: expired due to timeout
 					// b) permanently deleted: expired due to having been rescinded
@@ -206,9 +235,11 @@ func (s *offerStorage) Delete(offerId string) {
 						// failure, so we should attempt to decline
 						if err := s.DeclineOffer(offerId); err != nil {
 							log.Warningf("Failed to decline (previously claimed) offer %v: %v", offerId, err)
+						} else {
+							metrics.OffersDeclined.WithLabelValues(offer.host()).Inc()
 						}
 					}
-				}()
+				})
 			}
 		}
 		s.expireOffer(offer)
@@ -274,7 +305,7 @@ func (s *offerStorage) expireOffer(offer Perishable) {
 		log.V(3).Infof("Expiring offer %v", offerId)
 		if s.LingerTTL > 0 {
 			log.V(3).Infof("offer will linger: %v", offerId)
-			expired := &expiredOffer{offerId, time.Now().Add(s.LingerTTL)}
+			expired := &expiredOffer{offerSpec{id: offerId, hostname: offer.host()}, time.Now().Add(s.LingerTTL)}
 			s.offers.Update(expired)
 			s.delayed.Add(expired)
 		} else {
