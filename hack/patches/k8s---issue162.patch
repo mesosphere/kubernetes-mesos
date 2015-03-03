@@ -1,0 +1,111 @@
+diff --git a/pkg/registry/pod/etcd/etcd.go b/pkg/registry/pod/etcd/etcd.go
+index 9bedb08..bdc5ec3 100644
+--- a/pkg/registry/pod/etcd/etcd.go
++++ b/pkg/registry/pod/etcd/etcd.go
+@@ -142,15 +142,23 @@ func (r *BindingREST) New() runtime.Object {
+ // Create ensures a pod is bound to a specific host.
+ func (r *BindingREST) Create(ctx api.Context, obj runtime.Object) (out runtime.Object, err error) {
+ 	binding := obj.(*api.Binding)
+-	err = r.assignPod(ctx, binding.PodID, binding.Host)
++	err = r.assignPod(ctx, binding.PodID, binding.Host, binding.Annotations)
+ 	err = etcderr.InterpretCreateError(err, "binding", "")
+-	out = &api.Status{Status: api.StatusSuccess}
++	if err != nil {
++		out = &api.Status{
++			Status:  api.StatusFailure,
++			Message: err.Error(),
++		}
++	} else {
++		out = &api.Status{Status: api.StatusSuccess}
++	}
+ 	return
+ }
+ 
+-// setPodHostTo sets the given pod's host to 'machine' iff it was previously 'oldMachine'.
++// setPodHostAndAnnotations sets the given pod's host to 'machine' iff it was previously 'oldMachine' and merges
++// the provided annotations with those of the pod.
+ // Returns the current state of the pod, or an error.
+-func (r *BindingREST) setPodHostTo(ctx api.Context, podID, oldMachine, machine string) (finalPod *api.Pod, err error) {
++func (r *BindingREST) setPodHostAndAnnotations(ctx api.Context, podID, oldMachine, machine string, annotations map[string]string) (finalPod *api.Pod, err error) {
+ 	podKey, err := r.store.KeyFunc(ctx, podID)
+ 	if err != nil {
+ 		return nil, err
+@@ -164,6 +172,12 @@ func (r *BindingREST) setPodHostTo(ctx api.Context, podID, oldMachine, machine s
+ 			return nil, fmt.Errorf("pod %v is already assigned to host %v", pod.Name, pod.Status.Host)
+ 		}
+ 		pod.Status.Host = machine
++		if pod.Annotations == nil {
++			pod.Annotations = make(map[string]string)
++		}
++		for k, v := range annotations {
++			pod.Annotations[k] = v
++		}
+ 		finalPod = pod
+ 		return pod, nil
+ 	})
+@@ -171,8 +185,8 @@ func (r *BindingREST) setPodHostTo(ctx api.Context, podID, oldMachine, machine s
+ }
+ 
+ // assignPod assigns the given pod to the given machine.
+-func (r *BindingREST) assignPod(ctx api.Context, podID string, machine string) error {
+-	finalPod, err := r.setPodHostTo(ctx, podID, "", machine)
++func (r *BindingREST) assignPod(ctx api.Context, podID string, machine string, annotations map[string]string) error {
++	finalPod, err := r.setPodHostAndAnnotations(ctx, podID, "", machine, annotations)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -191,10 +205,23 @@ func (r *BindingREST) assignPod(ctx api.Context, podID string, machine string) e
+ 		return boundPodList, nil
+ 	})
+ 	if err != nil {
+-		// Put the pod's host back the way it was. This is a terrible hack, but
+-		// can't really be helped, since there's not really a way to do atomic
+-		// multi-object changes in etcd.
+-		if _, err2 := r.setPodHostTo(ctx, podID, machine, ""); err2 != nil {
++		glog.V(1).Infof("failing pod %v because constraint checks failed", podID)
++		podKey, err2 := r.store.KeyFunc(ctx, podID)
++		if err2 == nil {
++			err2 = r.store.Helper.AtomicUpdate(podKey, &api.Pod{}, false, func(obj runtime.Object) (runtime.Object, error) {
++				if pod, ok := obj.(*api.Pod); !ok {
++					return nil, fmt.Errorf("unexpected object: %#v", obj)
++				} else if pod.Status.Host != machine {
++					return nil, fmt.Errorf("pod %v is already assigned to host %v", pod.Name, pod.Status.Host)
++				} else {
++					pod.Status.Host = "" //TODO(jdef) get rid of this once BoundPods goes away
++					pod.Status.Phase = api.PodFailed
++					pod.Status.Message = fmt.Sprintf("Assignment to host %v failed", machine)
++					return pod, nil
++				}
++			})
++		}
++		if err2 != nil {
+ 			glog.Errorf("Stranding pod %v; couldn't clear host after previous error: %v", podID, err2)
+ 		}
+ 	}
+diff --git a/pkg/registry/pod/etcd/etcd_test.go b/pkg/registry/pod/etcd/etcd_test.go
+index 2e49e12..0f0047c 100644
+--- a/pkg/registry/pod/etcd/etcd_test.go
++++ b/pkg/registry/pod/etcd/etcd_test.go
+@@ -937,7 +937,11 @@ func TestEtcdCreateWithContainersNotFound(t *testing.T) {
+ 	}
+ 
+ 	// Suddenly, a wild scheduler appears:
+-	_, err = bindingRegistry.Create(ctx, &api.Binding{PodID: "foo", Host: "machine"})
++	_, err = bindingRegistry.Create(ctx, &api.Binding{
++		ObjectMeta: api.ObjectMeta{Annotations: map[string]string{"label1": "value1"}},
++		PodID:      "foo",
++		Host:       "machine",
++	})
+ 	if err != nil {
+ 		t.Fatalf("unexpected error: %v", err)
+ 	}
+@@ -955,6 +959,9 @@ func TestEtcdCreateWithContainersNotFound(t *testing.T) {
+ 	if pod.Name != "foo" {
+ 		t.Errorf("Unexpected pod: %#v %s", pod, resp.Node.Value)
+ 	}
++	if !(pod.Annotations != nil && pod.Annotations["label1"] == "value1") {
++		t.Fatalf("Pod annotations don't match the expected: %v", pod.Annotations)
++	}
+ 	var boundPods api.BoundPods
+ 	resp, err = fakeClient.Get("/registry/nodes/machine/boundpods", false, false)
+ 	if err != nil {
