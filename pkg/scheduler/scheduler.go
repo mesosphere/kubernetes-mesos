@@ -8,6 +8,8 @@ import (
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
@@ -105,10 +107,11 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 	return k
 }
 
-func (k *KubernetesScheduler) Init(d bindings.SchedulerDriver, pl PluginInterface) {
+func (k *KubernetesScheduler) Init(d bindings.SchedulerDriver, pl PluginInterface) error {
 	k.driver = d
 	k.plugin = pl
 	k.offers.Init()
+	return k.recoverTasks()
 }
 
 // Registered is called when the scheduler registered with the master successfully.
@@ -223,7 +226,11 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 		}
 		fallthrough
 	case mesos.TaskState_TASK_KILLED:
-		k.taskRegistry.UpdateStatus(taskStatus)
+		_, state := k.taskRegistry.UpdateStatus(taskStatus)
+		//TODO(jdef) what if I receive this after a TASK_LOST or TASK_KILLED? I don't want to reincarnate then..
+		if state == podtask.StateUnknown && taskStatus.GetState() == mesos.TaskState_TASK_STARTING {
+			k.handleUnknownStartedTask(driver, taskStatus)
+		}
 	case mesos.TaskState_TASK_FAILED:
 		if task, _ := k.taskRegistry.UpdateStatus(taskStatus); task != nil {
 			if task.Has(podtask.Launched) && messages.CreateBindingFailure == taskStatus.GetMessage() {
@@ -245,6 +252,53 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 				log.Error(err)
 			}
 		}
+	}
+}
+
+func (k *KubernetesScheduler) handleUnknownStartedTask(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
+	//TODO(jdef) attempt to recover task from pod info:
+	// - task data should contain an api.PodStatusResult
+	// - the Name can be parsed by kubelet.ParseFullName() to yield a pod Name and Namespace
+	// - pull the pod metadata down from the api server
+	// - perform task recovery based on pod metadata
+	result, err := podtask.ParsePodStatusResult(taskStatus)
+	taskId := taskStatus.TaskId.GetValue()
+	if err != nil {
+		// possible rogue pod exists at this point because we can't identify it; should kill the task
+		log.Errorf("possible rogue pod; illegal task status data for task %v, expected an api.PodStatusResult: %v", taskId, err)
+	} else if name, namespace, _ := kubelet.ParsePodFullName(result.Name); name == "" || namespace == "" {
+		// possible rogue pod exists at this point because we can't identify it; should kill the task
+		log.Errorf("possible rogue pod; illegal api.PodStatusResult, unable to parse full pod name from: '%v' for task %v", result.Name, taskId)
+	} else if pod, err := k.client.Pods(namespace).Get(name); err == nil {
+		if t, ok, err := podtask.RecoverFrom(pod); ok {
+			log.Infof("recovered task %v from metadata in pod %v/%v", taskId, namespace, name)
+			k.taskRegistry.Register(t, nil)
+			k.taskRegistry.UpdateStatus(taskStatus)
+			return
+		} else {
+			if err != nil {
+				log.Errorf("failed to recover task from pod %v/%v: %v", namespace, name, err)
+				//should kill the pod and the task
+				if err := k.client.Pods(namespace).Delete(name); err == nil {
+					log.Errorf("failed to delete pod %v/%v: %v", namespace, name, err)
+				}
+			} else {
+				//this is pretty unexpected: we received a TASK_STARTING message, but the apiserver's pod
+				//metadata is not appropriate for task reconstruction -- which should almost certainly never
+				//be the case unless someone swapped out the pod on us (and kept the same namespace/name) while
+				//we were failed over.
+				//
+				//kill this task, allow the newly launched scheduler to schedule the new pod
+				log.Infof("unexpected pod metadata for task %v in apiserver, assuming new unscheduled pod spec: %+v", taskId, pod)
+			}
+		}
+	} else {
+		// pod lookup failed, should delete the task since the pod is no longer valid; may be redundant, that's ok
+		log.Infof("killing task %v since pod %v/%v no longer exists", taskId, namespace, name)
+	}
+
+	if _, err := driver.KillTask(taskStatus.TaskId); err != nil {
+		log.Errorf("failed to kill task %v: %v", taskId, err)
 	}
 }
 
@@ -347,6 +401,28 @@ func (r *Reconciler) Run(driver bindings.SchedulerDriver) <-chan struct{} {
 			}
 		}()
 		return canceled
+	}
+	return nil
+}
+
+func (ks *KubernetesScheduler) recoverTasks() error {
+	ctx := api.NewDefaultContext()
+	podList, err := ks.client.Pods(api.NamespaceValue(ctx)).List(labels.Everything())
+	if err != nil {
+		log.V(1).Info("failed to recover pod registry, madness may ensue: %v", err)
+		return err
+	}
+	for _, pod := range podList.Items {
+		if t, ok, err := podtask.RecoverFrom(&pod); err != nil {
+			log.Errorf("failed to recover task from pod, will attempt to delete '%v/%v': %v", pod.Namespace, pod.Name, err)
+			err := ks.client.Pods(pod.Namespace).Delete(pod.Name)
+			if err != nil {
+				log.Errorf("failed to delete pod '%v/%v': %v", pod.Namespace, pod.Name, err)
+			}
+		} else if ok {
+			ks.taskRegistry.Register(t, nil)
+			log.Infof("recovered task %v from pod %v/%v", t.ID, pod.Namespace, pod.Name)
+		}
 	}
 	return nil
 }

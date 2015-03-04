@@ -10,6 +10,7 @@ import (
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	mutil "github.com/mesos/mesos-go/mesosutil"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
+	annotation "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
 )
 
@@ -181,6 +182,98 @@ func New(ctx api.Context, pod *api.Pod, executor *mesos.ExecutorInfo) (*T, error
 	task.TaskInfo.Executor = executor
 	task.CreateTime = time.Now()
 	return task, nil
+}
+
+func (t *T) SaveRecoveryInfo(dict map[string]string) {
+	dict[annotation.TaskIdKey] = t.ID
+	dict[annotation.SlaveIdKey] = t.TaskInfo.SlaveId.GetValue()
+	dict[annotation.OfferIdKey] = t.Offer.Details().Id.GetValue()
+	dict[annotation.ExecutorIdKey] = t.TaskInfo.Executor.ExecutorId.GetValue()
+}
+
+// reconstruct a task from metadata stashed in a pod entry. there are limited pod states that
+// support reconstruction. if we expect to be able to reconstruct state but encounter errors
+// in the process then those errors are returned. if the pod is in a seemingly valid state but
+// otherwise does not support task reconstruction return false. if we're able to reconstruct
+// state then return a reconstructed task and true.
+//
+// at this time task reconstruction is only supported for pods that have been annotated with
+// binding metadata, which implies that they've previously been associated with a task and
+// that mesos knows about it.
+//
+func RecoverFrom(pod *api.Pod) (*T, bool, error) {
+	if pod == nil {
+		return nil, false, fmt.Errorf("illegal argument: pod was nil")
+	}
+	if pod.Status.Host == "" || len(pod.Annotations) == 0 {
+		//TODO(jdef) if Status.Host != "" then it's likely that the task has launched
+		//but is not yet bound -- so annotations may be on the way. The binding may also
+		//have failed but we haven't been processed the TASK_FAILED yet.
+		log.V(1).Infof("skipping recovery for unbound pod %v/%v", pod.Namespace, pod.Name)
+		return nil, false, nil
+	}
+
+	// only process pods that are not in a terminal state
+	switch pod.Status.Phase {
+	case api.PodPending, api.PodRunning, api.PodUnknown: // continue
+	default:
+		log.V(1).Infof("skipping recovery for terminal pod %v/%v", pod.Namespace, pod.Name)
+		return nil, false, nil
+	}
+
+	ctx := api.WithNamespace(api.NewDefaultContext(), pod.Namespace)
+	key, err := MakePodKey(ctx, pod.Name)
+	if err != nil {
+		return nil, false, err
+	}
+
+	//TODO(jdef) recover ports (and other resource requirements?) from the pod spec as well
+
+	now := time.Now()
+	t := &T{
+		Pod:        pod,
+		TaskInfo:   newTaskInfo("Pod"),
+		CreateTime: now,
+		podKey:     key,
+		State:      StatePending, // possibly running? mesos will tell us during reconciliation
+		Flags:      make(map[FlagType]struct{}),
+		mapper:     defaultHostPortMapping,
+		launchTime: now,
+		bindTime:   now,
+	}
+	var (
+		offerId  string
+		hostname string
+	)
+	for _, k := range []string{
+		annotation.BindingHostKey,
+		annotation.TaskIdKey,
+		annotation.SlaveIdKey,
+		annotation.OfferIdKey,
+		annotation.ExecutorIdKey,
+	} {
+		v, found := pod.Annotations[k]
+		if !found {
+			return nil, false, fmt.Errorf("incomplete metadata: missing value for pod annotation: %v", k)
+		}
+		switch k {
+		case annotation.BindingHostKey:
+			hostname = v
+		case annotation.SlaveIdKey:
+			t.TaskInfo.SlaveId = mutil.NewSlaveID(v)
+		case annotation.OfferIdKey:
+			offerId = v
+		case annotation.TaskIdKey:
+			t.ID = v
+			t.TaskInfo.TaskId = mutil.NewTaskID(v)
+		case annotation.ExecutorIdKey:
+			t.TaskInfo.Executor = &mesos.ExecutorInfo{ExecutorId: mutil.NewExecutorID(v)}
+		}
+	}
+	t.Offer = offers.Expired(offerId, hostname, 0)
+	t.Flags[Launched] = struct{}{}
+	t.Flags[Bound] = struct{}{}
+	return t, true, nil
 }
 
 type HostPortMapping struct {

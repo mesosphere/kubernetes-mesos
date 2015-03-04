@@ -81,7 +81,6 @@ type offerSpec struct {
 }
 
 type Perishable interface {
-	queue.Delayed
 	// returns true if this offer has expired
 	HasExpired() bool
 	// if not yet expired, return mesos offer details; otherwise nil
@@ -96,6 +95,11 @@ type Perishable interface {
 	uid() string
 	// return the slave host for this offer
 	host() string
+	addTo(*queue.DelayQueue)
+}
+
+func (e *expiredOffer) addTo(q *queue.DelayQueue) {
+	q.Add(e)
 }
 
 func (e *expiredOffer) uid() string {
@@ -161,6 +165,10 @@ func (to *liveOffer) uid() string {
 
 func (to *liveOffer) host() string {
 	return to.Offer.GetHostname()
+}
+
+func (to *liveOffer) addTo(q *queue.DelayQueue) {
+	q.Add(to)
 }
 
 // return the time remaining before the offer expires
@@ -296,6 +304,10 @@ func (s *offerStorage) Walk(w Walker) error {
 	return nil
 }
 
+func Expired(offerId, hostname string, ttl time.Duration) *expiredOffer {
+	return &expiredOffer{offerSpec{id: offerId, hostname: hostname}, time.Now().Add(ttl)}
+}
+
 func (s *offerStorage) expireOffer(offer Perishable) {
 	// the offer may or may not be expired due to TTL so check for details
 	// since that's a more reliable determinant of lingering status
@@ -305,7 +317,7 @@ func (s *offerStorage) expireOffer(offer Perishable) {
 		log.V(3).Infof("Expiring offer %v", offerId)
 		if s.LingerTTL > 0 {
 			log.V(3).Infof("offer will linger: %v", offerId)
-			expired := &expiredOffer{offerSpec{id: offerId, hostname: offer.host()}, time.Now().Add(s.LingerTTL)}
+			expired := Expired(offerId, offer.host(), s.LingerTTL)
 			s.offers.Update(expired)
 			s.delayed.Add(expired)
 		} else {
@@ -371,7 +383,7 @@ func (s *offerStorage) ageOffers() {
 	if details := offer.Details(); details != nil && !offer.HasExpired() {
 		// live offer has not expired yet: timed out early
 		// FWIW: early timeouts are more frequent when GOMAXPROCS is > 1
-		s.delayed.Add(offer)
+		offer.addTo(s.delayed)
 	} else {
 		offer.age(s)
 	}

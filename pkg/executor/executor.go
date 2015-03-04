@@ -207,14 +207,12 @@ func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId s
 		Host:  pod.Annotations[meta.BindingHostKey],
 	}
 
-	//TODO(jdef) this next part is useless until k8s implements annotation propagation
-	//from api.Binding to api.BoundPod in etcd.go:assignPod()
-	//@see https://github.com/GoogleCloudPlatform/kubernetes/issues/4103
+	// forward the bindings that the scheduler wants to apply
 	for k, v := range pod.Annotations {
 		binding.Annotations[k] = v
 	}
 
-	log.Infof("Binding '%v' to '%v' ...", binding.PodID, binding.Host)
+	log.Infof("Binding '%v' to '%v' with annotations %+v...", binding.PodID, binding.Host, binding.Annotations)
 	ctx := api.WithNamespace(api.NewDefaultContext(), binding.Namespace)
 	err := k.client.Post().Namespace(api.NamespaceValue(ctx)).Resource("bindings").Body(binding).Do().Error()
 	if err != nil {
@@ -230,6 +228,22 @@ func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId s
 			Annotations: map[string]string{kubelet.ConfigSourceAnnotationKey: k.sourcename},
 		},
 	})
+
+	// allow a recently failed-over scheduler the chance to recover the task/pod binding:
+	// it may have failed and recovered before the apiserver is able to report the updated
+	// binding information. replays of this status event will signal to the scheduler that
+	// the apiserver should be up-to-date.
+	data, err := json.Marshal(api.PodStatusResult{
+		ObjectMeta: api.ObjectMeta{
+			Name:     podFullName,
+			SelfLink: "/podstatusresult",
+		},
+	})
+	if err != nil {
+		log.Errorf("failed to marshal pod status result: %v", err)
+		k.sendStatus(driver, newStatus(mutil.NewTaskID(taskId), mesos.TaskState_TASK_FAILED, err.Error()))
+		return
+	}
 
 	k.lock.Lock()
 	defer k.lock.Unlock()
@@ -247,8 +261,6 @@ func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId s
 	task.podName = podFullName
 	k.pods[podFullName] = pod
 
-	// TODO(nnielsen) Checkpoint pods.
-
 	// Send the pod updates to the channel.
 	update := kubelet.PodUpdate{Op: kubelet.SET}
 	for _, p := range k.pods {
@@ -256,8 +268,13 @@ func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId s
 	}
 	k.updateChan <- update
 
-	k.sendStatus(driver, newStatus(mutil.NewTaskID(taskId), mesos.TaskState_TASK_STARTING,
-		messages.CreateBindingSuccess))
+	statusUpdate := &mesos.TaskStatus{
+		TaskId:  mutil.NewTaskID(taskId),
+		State:   mesos.TaskState_TASK_STARTING.Enum(),
+		Message: proto.String(messages.CreateBindingSuccess),
+		Data:    data,
+	}
+	k.sendStatus(driver, statusUpdate)
 
 	// Delay reporting 'task running' until container is up.
 	go k._launchTask(driver, taskId, podFullName)
@@ -286,8 +303,15 @@ func (k *KubernetesExecutor) _launchTask(driver bindings.ExecutorDriver, taskId,
 					break
 				}
 				log.V(2).Infof("Found pod status: '%v'", podStatus)
-				if data, err = json.Marshal(podStatus); err != nil {
-					log.Errorf("failed to marshal pod status: %v", err)
+				result := api.PodStatusResult{
+					ObjectMeta: api.ObjectMeta{
+						Name:     podFullName,
+						SelfLink: "/podstatusresult",
+					},
+					Status: podStatus,
+				}
+				if data, err = json.Marshal(result); err != nil {
+					log.Errorf("failed to marshal pod status result: %v", err)
 				}
 			}
 		}
@@ -312,10 +336,9 @@ waitForRunningPod:
 					goto reportLost
 				}
 
-				running := mesos.TaskState_TASK_RUNNING
 				statusUpdate := &mesos.TaskStatus{
 					TaskId:  mutil.NewTaskID(taskId),
-					State:   &running,
+					State:   mesos.TaskState_TASK_RUNNING.Enum(),
 					Message: proto.String(fmt.Sprintf("pod-running:%s", podFullName)),
 					Data:    data,
 				}

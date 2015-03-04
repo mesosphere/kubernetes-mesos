@@ -34,7 +34,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/clientauth"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
+	//"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
@@ -281,7 +281,9 @@ func (s *SchedulerServer) Run(_ []string) error {
 
 	pluginStart := make(chan struct{})
 	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(pluginStart))
-	mesosPodScheduler.Init(driver, kpl)
+	if err = mesosPodScheduler.Init(driver, kpl); err != nil {
+		log.Fatalf("failed to initialize pod scheduler: %v", err)
+	}
 
 	if st, err := driver.Start(); err == nil {
 		if st != mesos.Status_DRIVER_RUNNING {
@@ -300,9 +302,11 @@ func (s *SchedulerServer) Run(_ []string) error {
 		log.Fatalf("Failed to start driver: %v", err)
 	}
 
-	//TODO(jdef) we need real task reconciliation at some point
-	log.V(1).Info("Clearing old pods from the registry")
-	clearOldPods(client)
+	/*
+		//TODO(jdef) we need real task reconciliation at some point
+		log.V(1).Info("Clearing old pods from the registry")
+		clearOldPods(client)
+	*/
 
 	go util.Forever(func() {
 		log.V(1).Info("Starting HTTP interface")
@@ -321,20 +325,18 @@ func (s *SchedulerServer) buildFrameworkInfo(client tools.EtcdClient) (info *mes
 	var frameworkId *mesos.FrameworkID
 	var failover *float64
 
-	//TODO(jdef) does this really align with how checkpoint and failoverTimeout are intended
-	//to be used? Perhaps they should be more independent.
-	if s.Checkpoint {
-		response, err := client.Get(meta.FrameworkIDKey, false, false)
-		if err != nil {
-			if !tools.IsEtcdNotFound(err) {
-				log.Fatal(err)
-			}
-		} else if response.Node.Value != "" {
-			log.Infof("configuring FrameworkInfo with Id found in etcd: '%s'", response.Node.Value)
-			frameworkId = mutil.NewFrameworkID(response.Node.Value)
+	response, err := client.Get(meta.FrameworkIDKey, false, false)
+	if err != nil {
+		if !tools.IsEtcdNotFound(err) {
+			log.Fatal(err)
 		}
-		failover = proto.Float64(s.FailoverTimeout)
+		log.V(1).Infof("did not find framework ID in etcd")
+	} else if response.Node.Value != "" {
+		log.Infof("configuring FrameworkInfo with Id found in etcd: '%s'", response.Node.Value)
+		frameworkId = mutil.NewFrameworkID(response.Node.Value)
 	}
+
+	failover = proto.Float64(s.FailoverTimeout)
 
 	username, err := s.getUsername()
 	if err != nil {
@@ -381,6 +383,7 @@ func (s *SchedulerServer) getUsername() (username string, err error) {
 	return
 }
 
+/*
 func clearOldPods(c *client.Client) {
 	ctx := api.NewDefaultContext()
 	podList, err := c.Pods(api.NamespaceValue(ctx)).List(labels.Everything())
@@ -403,3 +406,4 @@ func clearOldPods(c *client.Client) {
 		}
 	}
 }
+*/
