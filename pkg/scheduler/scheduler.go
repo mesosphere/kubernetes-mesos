@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
@@ -164,7 +165,6 @@ func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDri
 	if k.failoverTimeout > 0 {
 		go util.Forever(k.storeFrameworkId, 30*time.Second) // TODO(jdef) implies minimum failoverTimeout of 30s?
 	}
-	//TODO(jdef) partial reconciliation started... needs work
 	if k.reconcileInterval > 0 {
 		ri := time.Duration(k.reconcileInterval) * time.Second
 		log.Infof("will perform task reconciliation at interval: %v", ri)
@@ -233,40 +233,30 @@ func (k *KubernetesScheduler) OfferRescinded(driver bindings.SchedulerDriver, of
 // StatusUpdate is called when a status update message is sent to the scheduler.
 func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
 	//TODO(jdef) we're going to make changes to podtask.T objects in here and since the current TaskRegistry
-	//implementation is in-memory we need a critical section for this.
+	//implementation is in-memory, and hands us pointers to shared objects, we need a critical section for this.
 	k.Lock()
 	defer k.Unlock()
 
 	log.Infof("Received status update %v\n", taskStatus)
 
 	switch taskStatus.GetState() {
-	case mesos.TaskState_TASK_STAGING:
-
-		log.Errorf("Not implemented: task staging")
-	case mesos.TaskState_TASK_RUNNING, mesos.TaskState_TASK_FINISHED, mesos.TaskState_TASK_STARTING:
-		/* this doesn't make sense to do during failover because I may not know about all the slaves yet
-		if !func() (exists bool) {
-			slaveId := taskStatus.GetSlaveId().GetValue()
-			_, exists = k.slaves[slaveId]
-			return
-		}() {
-			log.Warningf("Ignore status %+v because the slave does not exist", taskStatus)
-			return
-		}
-		*/
-		fallthrough
-	case mesos.TaskState_TASK_KILLED:
-		_, state := k.taskRegistry.UpdateStatus(taskStatus)
-		if state == podtask.StateUnknown {
-			switch taskStatus.GetState() {
-			case mesos.TaskState_TASK_STARTING, mesos.TaskState_TASK_RUNNING, mesos.TaskState_TASK_STAGING:
-				//TODO(jdef) what if I receive this after a TASK_LOST or TASK_KILLED? I don't want to reincarnate then..
-				//TASK_LOST is a special case because the master is stateless and there are scenarios where I may get TASK_LOST followed by TASK_RUNNING
+	case mesos.TaskState_TASK_RUNNING, mesos.TaskState_TASK_FINISHED, mesos.TaskState_TASK_STARTING, mesos.TaskState_TASK_STAGING:
+		if _, state := k.taskRegistry.UpdateStatus(taskStatus); state == podtask.StateUnknown {
+			if taskStatus.GetState() != mesos.TaskState_TASK_FINISHED {
+				//TODO(jdef) what if I receive this after a TASK_LOST or TASK_KILLED?
+				//I don't want to reincarnate then..  TASK_LOST is a special case because
+				//the master is stateless and there are scenarios where I may get TASK_LOST
+				//followed by TASK_RUNNING.
 				k.reconcileNonTerminalTask(driver, taskStatus)
-			default:
-				log.V(1).Infof("received terminal task status for task %v which I don't know about", taskStatus.TaskId.GetValue())
-			}
+			} // else, we don't really care about FINISHED tasks that aren't registered
+		} else if _, knownSlave := k.slaves[taskStatus.GetSlaveId().GetValue()]; !knownSlave {
+			// a registered task has an update reported by a slave that we don't recognize.
+			// this should never happen! So we don't reconcile it.
+			log.Errorf("Ignore status %+v because the slave does not exist", taskStatus)
+			return
 		}
+	case mesos.TaskState_TASK_KILLED:
+		k.taskRegistry.UpdateStatus(taskStatus)
 	case mesos.TaskState_TASK_FAILED:
 		if task, _ := k.taskRegistry.UpdateStatus(taskStatus); task != nil {
 			if task.Has(podtask.Launched) && messages.CreateBindingFailure == taskStatus.GetMessage() {
@@ -292,7 +282,7 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 }
 
 func (k *KubernetesScheduler) reconcileNonTerminalTask(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
-	//TODO(jdef) attempt to recover task from pod info:
+	// attempt to recover task from pod info:
 	// - task data should contain an api.PodStatusResult
 	// - the Name can be parsed by kubelet.ParseFullName() to yield a pod Name and Namespace
 	// - pull the pod metadata down from the api server
@@ -323,16 +313,21 @@ func (k *KubernetesScheduler) reconcileNonTerminalTask(driver bindings.Scheduler
 				//metadata is not appropriate for task reconstruction -- which should almost certainly never
 				//be the case unless someone swapped out the pod on us (and kept the same namespace/name) while
 				//we were failed over.
-				//
+
 				//kill this task, allow the newly launched scheduler to schedule the new pod
-				log.Infof("unexpected pod metadata for task %v in apiserver, assuming new unscheduled pod spec: %+v", taskId, pod)
+				log.Warningf("unexpected pod metadata for task %v in apiserver, assuming new unscheduled pod spec: %+v", taskId, pod)
 			}
 		}
-	} else {
+	} else if errors.IsNotFound(err) {
 		// pod lookup failed, should delete the task since the pod is no longer valid; may be redundant, that's ok
 		log.Infof("killing task %v since pod %v/%v no longer exists", taskId, namespace, name)
+	} else if errors.IsServerTimeout(err) {
+		log.V(2).Infof("failed to reconcile task due to API server timeout: %v", err)
+		return
+	} else {
+		log.Warningf("unexpected API server error, aborting reconcile for task %v: %v", taskId, err)
+		return
 	}
-
 	if _, err := driver.KillTask(taskStatus.TaskId); err != nil {
 		log.Errorf("failed to kill task %v: %v", taskId, err)
 	}
@@ -358,7 +353,9 @@ func (k *KubernetesScheduler) SlaveLost(driver bindings.SchedulerDriver, slaveId
 		}
 	}
 
-	// TODO(jdef): delete slave from our internal list?
+	// TODO(jdef): delete slave from our internal list? probably not since we may need to reconcile
+	// tasks. it would be nice to somehow flag the slave as lost so that, perhaps, we can periodically
+	// flush lost slaves older than X, and for which no tasks or pods reference.
 
 	// unfinished tasks/pods will be dropped. use a replication controller if you want pods to
 	// be restarted when slaves die.

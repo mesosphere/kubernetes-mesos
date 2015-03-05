@@ -130,6 +130,7 @@ func (k *inMemoryRegistry) UpdateStatus(status *mesos.TaskStatus) (*T, StateType
 }
 
 func (k *inMemoryRegistry) handleTaskStaging(task *T, state StateType, status *mesos.TaskStatus) {
+	//TODO(jdef) validate that update source is SOURCE_MASTER, otherwise the system is doing something wonky
 	log.Errorf("Not implemented: task staging")
 }
 

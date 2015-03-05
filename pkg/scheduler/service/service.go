@@ -34,7 +34,6 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/clientauth"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
@@ -85,7 +84,6 @@ type SchedulerServer struct {
 	MesosAuthProvider    string
 	DriverPort           uint
 	HostnameOverride     string
-	CleanSlate           bool
 	ReconcileInterval    int64
 }
 
@@ -126,9 +124,6 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 	fs.UintVar(&s.DriverPort, "driver_port", s.DriverPort, "Port that the Mesos scheduler driver process should listen on.")
 	fs.StringVar(&s.HostnameOverride, "hostname_override", s.HostnameOverride, "If non-empty, will use this string as identification instead of the actual hostname.")
 	fs.IntVar(&s.ExecutorLogV, "executor_logv", s.ExecutorLogV, "Logging verbosity of spawned executor processes.")
-/* this is dangerous and can result in not getting offers
-	fs.BoolVar(&s.CleanSlate, "clean_slate", s.CleanSlate, "Delete all pods at scheduler startup and ignore any persisted framework ID.")
-*/
 	fs.Int64Var(&s.ReconcileInterval, "reconcile_interval", s.ReconcileInterval, "Interval at which to execute task reconciliation, in sec. Zero disables.")
 }
 
@@ -257,11 +252,6 @@ func (s *SchedulerServer) Run(_ []string) error {
 		log.Fatalf("Unable to make apiserver client: %v", err)
 	}
 
-	if s.CleanSlate {
-		log.Infoln("Clearing old pods from the registry")
-		deleteAllPods(client)
-	}
-
 	// Send events to APIserver if there is a client.
 	record.StartRecording(client.Events(""), api.EventSource{Component: "scheduler"})
 
@@ -275,7 +265,7 @@ func (s *SchedulerServer) Run(_ []string) error {
 		FailoverTimeout:   s.FailoverTimeout,
 		ReconcileInterval: s.ReconcileInterval,
 	})
-	info, cred, err := s.buildFrameworkInfo(etcdClient, s.CleanSlate)
+	info, cred, err := s.buildFrameworkInfo(etcdClient)
 	if err != nil {
 		log.Fatalf("Misconfigured mesos framework: %v", err)
 	}
@@ -334,7 +324,7 @@ func (s *SchedulerServer) Run(_ []string) error {
 	select {}
 }
 
-func (s *SchedulerServer) buildFrameworkInfo(client tools.EtcdClient, ignoreExistingFrameworkId bool) (info *mesos.FrameworkInfo, cred *mesos.Credential, err error) {
+func (s *SchedulerServer) buildFrameworkInfo(client tools.EtcdClient) (info *mesos.FrameworkInfo, cred *mesos.Credential, err error) {
 
 	var (
 		frameworkId *mesos.FrameworkID
@@ -342,17 +332,14 @@ func (s *SchedulerServer) buildFrameworkInfo(client tools.EtcdClient, ignoreExis
 	)
 	if s.FailoverTimeout > 0 {
 		failover = proto.Float64(s.FailoverTimeout)
-		//TODO(jdef) I think checkpoint flag is important here, deciding whether to load the framework ID
-		if !ignoreExistingFrameworkId {
-			if response, err := client.Get(meta.FrameworkIDKey, false, false); err != nil {
-				if !tools.IsEtcdNotFound(err) {
-					log.Fatalf("unexpected failure attempting to load framework ID from etcd: %v", err)
-				}
-				log.V(1).Infof("did not find framework ID in etcd")
-			} else if response.Node.Value != "" {
-				log.Infof("configuring FrameworkInfo with Id found in etcd: '%s'", response.Node.Value)
-				frameworkId = mutil.NewFrameworkID(response.Node.Value)
+		if response, err := client.Get(meta.FrameworkIDKey, false, false); err != nil {
+			if !tools.IsEtcdNotFound(err) {
+				log.Fatalf("unexpected failure attempting to load framework ID from etcd: %v", err)
 			}
+			log.V(1).Infof("did not find framework ID in etcd")
+		} else if response.Node.Value != "" {
+			log.Infof("configuring FrameworkInfo with Id found in etcd: '%s'", response.Node.Value)
+			frameworkId = mutil.NewFrameworkID(response.Node.Value)
 		}
 	} else {
 		if _, err := client.Delete(meta.FrameworkIDKey, true); err != nil {
@@ -406,27 +393,4 @@ func (s *SchedulerServer) getUsername() (username string, err error) {
 		}
 	}
 	return
-}
-
-func deleteAllPods(c *client.Client) {
-	ctx := api.NewDefaultContext()
-	podList, err := c.Pods(api.NamespaceValue(ctx)).List(labels.Everything())
-	if err != nil {
-		log.Warningf("failed to clear pod registry, madness may ensue: %v", err)
-		return
-	}
-	for _, pod := range podList.Items {
-		podName := pod.Name
-		if podName == "" {
-			podName = string(pod.UID)
-			if podName == "" {
-				log.Warningf("failed to delete pod, it has no Name or UID: '%+v'", pod)
-				continue
-			}
-		}
-		err := c.Pods(pod.Namespace).Delete(podName)
-		if err != nil {
-			log.Warningf("failed to delete pod '%v': %v", podName, err)
-		}
-	}
 }
