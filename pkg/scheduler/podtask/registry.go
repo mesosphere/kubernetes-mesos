@@ -32,7 +32,7 @@ type Registry interface {
 	TaskForPod(podID string) (taskID string, ok bool)
 	UpdateStatus(status *mesos.TaskStatus) (*T, StateType)
 	// return a list of task ID's that match the given filter, or all task ID's if filter == nil
-	List(filter *StateType) []string
+	List(func(*T) bool) []string
 }
 
 type inMemoryRegistry struct {
@@ -50,11 +50,11 @@ func NewInMemoryRegistry() Registry {
 	}
 }
 
-func (k *inMemoryRegistry) List(filter *StateType) (taskids []string) {
+func (k *inMemoryRegistry) List(accepts func(t *T) bool) (taskids []string) {
 	k.rw.RLock()
 	defer k.rw.RUnlock()
 	for id, task := range k.taskRegistry {
-		if filter == nil || *filter == task.State {
+		if accepts == nil || accepts(task) {
 			taskids = append(taskids, id)
 		}
 	}

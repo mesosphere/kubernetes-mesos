@@ -126,7 +126,9 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 	fs.UintVar(&s.DriverPort, "driver_port", s.DriverPort, "Port that the Mesos scheduler driver process should listen on.")
 	fs.StringVar(&s.HostnameOverride, "hostname_override", s.HostnameOverride, "If non-empty, will use this string as identification instead of the actual hostname.")
 	fs.IntVar(&s.ExecutorLogV, "executor_logv", s.ExecutorLogV, "Logging verbosity of spawned executor processes.")
+/* this is dangerous and can result in not getting offers
 	fs.BoolVar(&s.CleanSlate, "clean_slate", s.CleanSlate, "Delete all pods at scheduler startup and ignore any persisted framework ID.")
+*/
 	fs.Int64Var(&s.ReconcileInterval, "reconcile_interval", s.ReconcileInterval, "Interval at which to execute task reconciliation, in sec. Zero disables.")
 }
 
@@ -340,6 +342,7 @@ func (s *SchedulerServer) buildFrameworkInfo(client tools.EtcdClient, ignoreExis
 	)
 	if s.FailoverTimeout > 0 {
 		failover = proto.Float64(s.FailoverTimeout)
+		//TODO(jdef) I think checkpoint flag is important here, deciding whether to load the framework ID
 		if !ignoreExistingFrameworkId {
 			if response, err := client.Get(meta.FrameworkIDKey, false, false); err != nil {
 				if !tools.IsEtcdNotFound(err) {

@@ -168,7 +168,7 @@ func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDri
 	if k.reconcileInterval > 0 {
 		ri := time.Duration(k.reconcileInterval) * time.Second
 		log.Infof("will perform task reconciliation at interval: %v", ri)
-		r := &Reconciler{Action: k.ReconcileRunningTasks}
+		r := &Reconciler{Action: k.ReconcileTasks}
 		go util.Forever(func() { r.Run(driver) }, ri)
 	}
 }
@@ -241,8 +241,10 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 
 	switch taskStatus.GetState() {
 	case mesos.TaskState_TASK_STAGING:
+
 		log.Errorf("Not implemented: task staging")
 	case mesos.TaskState_TASK_RUNNING, mesos.TaskState_TASK_FINISHED, mesos.TaskState_TASK_STARTING:
+		/* this doesn't make sense to do during failover because I may not know about all the slaves yet
 		if !func() (exists bool) {
 			slaveId := taskStatus.GetSlaveId().GetValue()
 			_, exists = k.slaves[slaveId]
@@ -251,12 +253,19 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 			log.Warningf("Ignore status %+v because the slave does not exist", taskStatus)
 			return
 		}
+		*/
 		fallthrough
 	case mesos.TaskState_TASK_KILLED:
 		_, state := k.taskRegistry.UpdateStatus(taskStatus)
-		//TODO(jdef) what if I receive this after a TASK_LOST or TASK_KILLED? I don't want to reincarnate then..
-		if state == podtask.StateUnknown && taskStatus.GetState() == mesos.TaskState_TASK_STARTING {
-			k.handleUnknownStartedTask(driver, taskStatus)
+		if state == podtask.StateUnknown {
+			switch taskStatus.GetState() {
+			case mesos.TaskState_TASK_STARTING, mesos.TaskState_TASK_RUNNING, mesos.TaskState_TASK_STAGING:
+				//TODO(jdef) what if I receive this after a TASK_LOST or TASK_KILLED? I don't want to reincarnate then..
+				//TASK_LOST is a special case because the master is stateless and there are scenarios where I may get TASK_LOST followed by TASK_RUNNING
+				k.reconcileNonTerminalTask(driver, taskStatus)
+			default:
+				log.V(1).Infof("received terminal task status for task %v which I don't know about", taskStatus.TaskId.GetValue())
+			}
 		}
 	case mesos.TaskState_TASK_FAILED:
 		if task, _ := k.taskRegistry.UpdateStatus(taskStatus); task != nil {
@@ -282,7 +291,7 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 	}
 }
 
-func (k *KubernetesScheduler) handleUnknownStartedTask(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
+func (k *KubernetesScheduler) reconcileNonTerminalTask(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
 	//TODO(jdef) attempt to recover task from pod info:
 	// - task data should contain an api.PodStatusResult
 	// - the Name can be parsed by kubelet.ParseFullName() to yield a pod Name and Namespace
@@ -369,35 +378,46 @@ func (k *KubernetesScheduler) Error(driver bindings.SchedulerDriver, message str
 }
 
 // intended to be invoked as a Reconciler.Action by Reconciler.Run
-func (k *KubernetesScheduler) ReconcileRunningTasks(driver bindings.SchedulerDriver, canceled <-chan struct{}) error {
+func (k *KubernetesScheduler) ReconcileTasks(driver bindings.SchedulerDriver, canceled <-chan struct{}) error {
 	log.Info("reconcile running tasks")
 
+	// tell mesos to send us the latest status updates for all the tasks that it knows about
 	statusList := []*mesos.TaskStatus{}
 	if _, err := driver.ReconcileTasks(statusList); err != nil {
 		return err
 	}
 
-	filter := podtask.StateRunning
+	filter := func(t *podtask.T) bool {
+		switch t.State {
+		case podtask.StateRunning:
+			return true
+		case podtask.StatePending:
+			return t.Has(podtask.Launched)
+		default:
+			return false
+		}
+	}
 	remaining := util.NewStringSet()
-	remaining.Insert(k.taskRegistry.List(&filter)...)
+	remaining.Insert(k.taskRegistry.List(filter)...)
 	start := time.Now()
 	const maxBackoff = 120 * time.Second // TODO(jdef) extract constant
 	first := true
 	for backoff := 1 * time.Second; first || remaining.Len() > 0; backoff = backoff * 2 {
 		first = false
-		//TODO(jdef) reconcileTasks(remaining, canceled)
+		//TODO(jdef) reconcileTasks(remaining, canceled) -- is there anything to really do here other than wait for status updates?
 		if backoff > maxBackoff {
 			backoff = maxBackoff
 		}
 		select {
 		case <-canceled:
+			log.Infoln("reconciliation cancelled")
 			return nil //TODO(jdef) should probably return a cancelation error
 		case <-time.After(backoff):
 			func() {
 				k.RLock()
 				defer k.RUnlock()
 				for taskId := range remaining {
-					if task, state := k.taskRegistry.Get(taskId); state == podtask.StateRunning && task.UpdatedTime.Before(start) {
+					if task, _ := k.taskRegistry.Get(taskId); filter(task) && task.UpdatedTime.Before(start) {
 						// keep this task in remaining list
 						continue
 					}
@@ -439,6 +459,19 @@ func (ks *KubernetesScheduler) recoverTasks() error {
 		log.V(1).Info("failed to recover pod registry, madness may ensue: %v", err)
 		return err
 	}
+	recoverSlave := func(t *podtask.T) {
+		ks.Lock()
+		defer ks.Unlock()
+
+		slaveId := t.TaskInfo.SlaveId.GetValue()
+		slave, exists := ks.slaves[slaveId]
+		if !exists {
+			slave = newSlave(t.Offer.Host())
+			ks.slaves[slaveId] = slave
+		}
+		slave.Offers[t.Offer.Id()] = empty{}
+		ks.slaveIDs[slave.HostName] = slaveId
+	}
 	for _, pod := range podList.Items {
 		if t, ok, err := podtask.RecoverFrom(&pod); err != nil {
 			log.Errorf("failed to recover task from pod, will attempt to delete '%v/%v': %v", pod.Namespace, pod.Name, err)
@@ -448,6 +481,7 @@ func (ks *KubernetesScheduler) recoverTasks() error {
 			}
 		} else if ok {
 			ks.taskRegistry.Register(t, nil)
+			recoverSlave(t)
 			log.Infof("recovered task %v from pod %v/%v", t.ID, pod.Namespace, pod.Name)
 		}
 	}
