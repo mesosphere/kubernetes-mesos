@@ -58,7 +58,7 @@ import (
 
 const (
 	defaultMesosUser         = "root" // should have privs to execute docker and iptables commands
-	defaultReconcileInterval = 300    // 5m default reconciliation interval
+	defaultReconcileInterval = 300    // 5m default task reconciliation interval
 )
 
 type SchedulerServer struct {

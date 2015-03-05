@@ -401,7 +401,7 @@ func (k *KubernetesScheduler) ReconcileTasks(driver bindings.SchedulerDriver, ca
 	first := true
 	for backoff := 1 * time.Second; first || remaining.Len() > 0; backoff = backoff * 2 {
 		first = false
-		//TODO(jdef) reconcileTasks(remaining, canceled) -- is there anything to really do here other than wait for status updates?
+		// nothing to do here other than wait for status updates..
 		if backoff > maxBackoff {
 			backoff = maxBackoff
 		}
