@@ -61,31 +61,51 @@ type KubernetesScheduler struct {
 	// In particular, changes to podtask.T objects are currently guarded by this lock.
 	*sync.RWMutex
 
+	// Config related
+
+	executor          *mesos.ExecutorInfo
+	scheduleFunc      PodScheduleFunc
+	client            *client.Client
+	etcdClient        tools.EtcdClient
+	failoverTimeout   float64
+	reconcileInterval int64
+
 	// Mesos context.
-	executor    *mesos.ExecutorInfo
-	driver      bindings.SchedulerDriver
-	frameworkId *mesos.FrameworkID
-	masterInfo  *mesos.MasterInfo
-	registered  bool
+
+	driver         bindings.SchedulerDriver
+	frameworkId    *mesos.FrameworkID
+	masterInfo     *mesos.MasterInfo
+	registered     bool
+	onRegistration sync.Once
 
 	offers       offers.Registry
 	slaves       map[string]*Slave // SlaveID => slave.
 	slaveIDs     map[string]string // Slave's hostname => slaveID
 	taskRegistry podtask.Registry
 
-	scheduleFunc PodScheduleFunc // The function that does scheduling.
+	plugin PluginInterface
+}
 
-	client     *client.Client
-	plugin     PluginInterface
-	etcdClient tools.EtcdClient
+type Config struct {
+	Executor          *mesos.ExecutorInfo
+	ScheduleFunc      PodScheduleFunc
+	Client            *client.Client
+	EtcdClient        tools.EtcdClient
+	FailoverTimeout   float64
+	ReconcileInterval int64
 }
 
 // New create a new KubernetesScheduler
-func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client, etcdClient tools.EtcdClient) *KubernetesScheduler {
+func New(config Config) *KubernetesScheduler {
 	var k *KubernetesScheduler
 	k = &KubernetesScheduler{
-		RWMutex:  new(sync.RWMutex),
-		executor: executor,
+		RWMutex:           new(sync.RWMutex),
+		executor:          config.Executor,
+		scheduleFunc:      config.ScheduleFunc,
+		client:            config.Client,
+		etcdClient:        config.EtcdClient,
+		failoverTimeout:   config.FailoverTimeout,
+		reconcileInterval: config.ReconcileInterval,
 		offers: offers.CreateRegistry(offers.RegistryConfig{
 			DeclineOffer: func(id string) error {
 				offerId := mutil.NewOfferID(id)
@@ -100,9 +120,6 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 		slaves:       make(map[string]*Slave),
 		slaveIDs:     make(map[string]string),
 		taskRegistry: podtask.NewInMemoryRegistry(),
-		scheduleFunc: scheduleFunc,
-		client:       client,
-		etcdClient:   etcdClient,
 	}
 	return k
 }
@@ -120,18 +137,16 @@ func (k *KubernetesScheduler) Registered(driver bindings.SchedulerDriver,
 	k.frameworkId = frameworkId
 	k.masterInfo = masterInfo
 	k.registered = true
-	go k.storeFrameworkId() //TODO(jdef) only do this if we're checkpointing?
+
 	log.Infof("Scheduler registered with the master: %v with frameworkId: %v\n", masterInfo, frameworkId)
 
-	//TODO(jdef) partial reconciliation started... needs work
-	r := &Reconciler{Action: k.ReconcileRunningTasks}
-	go util.Forever(func() { r.Run(driver) }, 5*time.Minute) // TODO(jdef) parameterize reconciliation interval
+	k.onRegistration.Do(func() { k.onInitialRegistration(driver) })
 }
 
 func (k *KubernetesScheduler) storeFrameworkId() {
-	_, err := k.etcdClient.Set(meta.FrameworkIDKey, k.frameworkId.GetValue(), 0)
+	_, err := k.etcdClient.Set(meta.FrameworkIDKey, k.frameworkId.GetValue(), uint64(k.failoverTimeout))
 	if err != nil {
-		log.Error(err)
+		log.Errorf("failed to renew frameworkId TTL: %v", err)
 	}
 }
 
@@ -139,11 +154,23 @@ func (k *KubernetesScheduler) storeFrameworkId() {
 // This happends when the master fails over.
 func (k *KubernetesScheduler) Reregistered(driver bindings.SchedulerDriver, masterInfo *mesos.MasterInfo) {
 	log.Infof("Scheduler reregistered with the master: %v\n", masterInfo)
+	k.masterInfo = masterInfo
 	k.registered = true
 
+	k.onRegistration.Do(func() { k.onInitialRegistration(driver) })
+}
+
+func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDriver) {
+	if k.failoverTimeout > 0 {
+		go util.Forever(k.storeFrameworkId, 30*time.Second) // TODO(jdef) implies minimum failoverTimeout of 30s?
+	}
 	//TODO(jdef) partial reconciliation started... needs work
-	r := &Reconciler{Action: k.ReconcileRunningTasks}
-	go util.Forever(func() { r.Run(driver) }, 5*time.Minute) // TODO(jdef) parameterize reconciliation interval
+	if k.reconcileInterval > 0 {
+		ri := time.Duration(k.reconcileInterval) * time.Second
+		log.Infof("will perform task reconciliation at interval: %v", ri)
+		r := &Reconciler{Action: k.ReconcileRunningTasks}
+		go util.Forever(func() { r.Run(driver) }, ri)
+	}
 }
 
 // Disconnected is called when the scheduler loses connection to the master.
