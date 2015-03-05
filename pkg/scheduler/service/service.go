@@ -34,7 +34,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/clientauth"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
-	//"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
@@ -84,6 +84,7 @@ type SchedulerServer struct {
 	MesosAuthProvider    string
 	DriverPort           uint
 	HostnameOverride     string
+	CleanSlate           bool
 }
 
 // NewSchedulerServer creates a new SchedulerServer with default parameters
@@ -122,6 +123,7 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 	fs.UintVar(&s.DriverPort, "driver_port", s.DriverPort, "Port that the Mesos scheduler driver process should listen on.")
 	fs.StringVar(&s.HostnameOverride, "hostname_override", s.HostnameOverride, "If non-empty, will use this string as identification instead of the actual hostname.")
 	fs.IntVar(&s.ExecutorLogV, "executor_logv", s.ExecutorLogV, "Logging verbosity of spawned executor processes.")
+	fs.BoolVar(&s.CleanSlate, "clean_slate", s.CleanSlate, "Delete all pods at scheduler startup.")
 }
 
 // returns (downloadURI, basename(path))
@@ -249,6 +251,11 @@ func (s *SchedulerServer) Run(_ []string) error {
 		log.Fatalf("Unable to make apiserver client: %v", err)
 	}
 
+	if s.CleanSlate {
+		log.Infoln("Clearing old pods from the registry")
+		deleteAllPods(client)
+	}
+
 	// Send events to APIserver if there is a client.
 	record.StartRecording(client.Events(""), api.EventSource{Component: "scheduler"})
 
@@ -301,12 +308,6 @@ func (s *SchedulerServer) Run(_ []string) error {
 	} else {
 		log.Fatalf("Failed to start driver: %v", err)
 	}
-
-	/*
-		//TODO(jdef) we need real task reconciliation at some point
-		log.V(1).Info("Clearing old pods from the registry")
-		clearOldPods(client)
-	*/
 
 	go util.Forever(func() {
 		log.V(1).Info("Starting HTTP interface")
@@ -383,8 +384,7 @@ func (s *SchedulerServer) getUsername() (username string, err error) {
 	return
 }
 
-/*
-func clearOldPods(c *client.Client) {
+func deleteAllPods(c *client.Client) {
 	ctx := api.NewDefaultContext()
 	podList, err := c.Pods(api.NamespaceValue(ctx)).List(labels.Everything())
 	if err != nil {
@@ -406,4 +406,3 @@ func clearOldPods(c *client.Client) {
 		}
 	}
 }
-*/
