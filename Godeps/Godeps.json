@@ -161,7 +161,7 @@
 			"Rev": "44145f04b68cf362d9c4df2182967c2275eaefed"
 		},
 		{
-			"ImportPath": "github.com/google/cadvisor/info",
+			"ImportPath": "github.com/google/cadvisor/api",
 			"Comment": "0.6.2",
 			"Rev": "89088df70eca64cf9d6b9a23a3d2bc21a30916d6"
 		},
