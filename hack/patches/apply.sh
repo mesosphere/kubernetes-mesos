@@ -30,11 +30,9 @@ for k in "${!pmap[@]}"; do
   repo="${pmap["${k}"]}"
   echo "Checking patches for ${k}.. ($repo)"
   find "${home}" -type f -name "${k}---issue*.patch" | while IFS= read -r f; do
-    #ff="${f%%.patch}"
-    #test "x$f" != "x$ff" || continue
     cmd=( patch -p1 -s -r- -i"$f" )
     echo -n -E "${cmd[@]}"
-    output=$(cd "${pkg}/src/${repo}" && "${cmd[@]}") && echo || {
+    output=$(cd "${pkg}/src/${repo}" && pwd && "${cmd[@]}") && echo || {
       echo -E "$output" | \
         grep -q 'Reversed (or previously applied) patch detected' && \
           echo " (already applied)" || \

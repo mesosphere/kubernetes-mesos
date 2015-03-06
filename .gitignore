@@ -8,6 +8,7 @@ _obj
 _test
 third_party
 bin
+.build
 
 # Architecture specific extensions/prefixes
 *.[568vq]
