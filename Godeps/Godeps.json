@@ -30,6 +30,11 @@
                         "Rev": "98c78185197025f935947caac56a7b6d022f89d2"
                 },
 		{
+			"ImportPath": "code.google.com/p/google-api-go-client/googleapi",
+			"Comment": "release-96",
+			"Rev": "98c78185197025f935947caac56a7b6d022f89d2"
+		},
+		{
 			"ImportPath": "github.com/GoogleCloudPlatform/kubernetes/pkg/api",
 			"Comment": "Kubernetes version v0.11.0",
 			"Rev": "18ddff0eb6bc069b41832ce47d19b5b89cfb26e3"
@@ -147,6 +152,11 @@
 			"ImportPath": "github.com/emicklei/go-restful",
 			"Comment": "v1.1.2-50-g692a500",
 			"Rev": "692a50017a7049b26cf7ea4ccfc0d8c77369a793"
+		},
+		{
+			"ImportPath": "github.com/docker/libcontainer",
+			"Comment": "v1.2.0-99-gfe3801c",
+			"Rev": "fe3801ccd2f5d0cc3ec5d063067fc4a1c312fa81"
 		},
 		{
 			"ImportPath": "github.com/fsouza/go-dockerclient",
