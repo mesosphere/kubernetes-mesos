@@ -97,6 +97,7 @@ func NewSchedulerServer() *SchedulerServer {
 		MesosAuthProvider: sasl.ProviderName,
 		MesosUser:         defaultMesosUser,
 		ReconcileInterval: defaultReconcileInterval,
+		Checkpoint:        true,
 	}
 	return &s
 }
