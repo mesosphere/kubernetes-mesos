@@ -201,14 +201,16 @@ func (t *T) SaveRecoveryInfo(dict map[string]string) {
 // binding metadata, which implies that they've previously been associated with a task and
 // that mesos knows about it.
 //
+// assumes that the pod data comes from the k8s registry and reflects the desired state.
+//
 func RecoverFrom(pod *api.Pod) (*T, bool, error) {
 	if pod == nil {
 		return nil, false, fmt.Errorf("illegal argument: pod was nil")
 	}
-	if pod.Status.Host == "" || len(pod.Annotations) == 0 {
-		// if Status.Host != "" then it's likely that the task has launched
-		// but is not yet bound -- so annotations may be on the way. The binding
-		// may also have failed but we haven't been processed the TASK_FAILED yet.
+
+	// we only expect annotations if pod has been bound, which implies that it has already
+	// been scheduled and launched
+	if pod.Status.Host == "" && len(pod.Annotations) == 0 {
 		log.V(1).Infof("skipping recovery for unbound pod %v/%v", pod.Namespace, pod.Name)
 		return nil, false, nil
 	}
