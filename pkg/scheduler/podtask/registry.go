@@ -181,6 +181,11 @@ func ParsePodStatusResult(taskStatus *mesos.TaskStatus) (result api.PodStatusRes
 }
 
 func fillRunningPodInfo(task *T, taskStatus *mesos.TaskStatus) {
+	if taskStatus.GetReason() == mesos.TaskStatus_REASON_RECONCILIATION && taskStatus.GetSource() == mesos.TaskStatus_SOURCE_MASTER {
+		// there is no data..
+		return
+	}
+	//TODO(jdef) determine the usefullness of this information (if any)
 	if result, err := ParsePodStatusResult(taskStatus); err != nil {
 		log.Errorf("invalid TaskStatus.Data for task '%v': %v", task.ID, err)
 	} else {
