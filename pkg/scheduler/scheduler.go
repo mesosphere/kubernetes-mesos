@@ -288,20 +288,35 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 	}
 }
 
+// reconcile an unknown (from the perspective of our registry) non-terminal task
 func (k *KubernetesScheduler) reconcileNonTerminalTask(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
 	// attempt to recover task from pod info:
-	// - task data should contain an api.PodStatusResult
+	// - task data may contain an api.PodStatusResult; if status.reason == REASON_RECONCILIATION then status.data == nil
 	// - the Name can be parsed by kubelet.ParseFullName() to yield a pod Name and Namespace
 	// - pull the pod metadata down from the api server
 	// - perform task recovery based on pod metadata
-	result, err := podtask.ParsePodStatusResult(taskStatus)
 	taskId := taskStatus.TaskId.GetValue()
-	if err != nil {
+	if taskStatus.GetReason() == mesos.TaskStatus_REASON_RECONCILIATION && taskStatus.GetSource() == mesos.TaskStatus_SOURCE_MASTER {
+		// there will be no data in the task status that we can use to determine the associated pod
+		switch taskStatus.GetState() {
+		case mesos.TaskState_TASK_STAGING:
+			// there is still hope for this task, don't kill it just yet
+			//TODO(jdef) there should probably be a limit for how long we tolerate tasks stuck in this state
+			return
+		default:
+			// for TASK_{STARTING,RUNNING} we should have already attempted to recoverTasks() for.
+			// if the scheduler failed over before the executor fired TASK_STARTING, then we should *not*
+			// be processing this reconciliation update before we process the one from the executor.
+			// point: we don't know what this task is (perhaps there was unrecoverable metadata in the pod),
+			// so it gets killed.
+			log.Errorf("killing non-terminal, unrecoverable task %v", taskId)
+		}
+	} else if podStatus, err := podtask.ParsePodStatusResult(taskStatus); err != nil {
 		// possible rogue pod exists at this point because we can't identify it; should kill the task
 		log.Errorf("possible rogue pod; illegal task status data for task %v, expected an api.PodStatusResult: %v", taskId, err)
-	} else if name, namespace, _ := kubelet.ParsePodFullName(result.Name); name == "" || namespace == "" {
+	} else if name, namespace, _ := kubelet.ParsePodFullName(podStatus.Name); name == "" || namespace == "" {
 		// possible rogue pod exists at this point because we can't identify it; should kill the task
-		log.Errorf("possible rogue pod; illegal api.PodStatusResult, unable to parse full pod name from: '%v' for task %v", result.Name, taskId)
+		log.Errorf("possible rogue pod; illegal api.PodStatusResult, unable to parse full pod name from: '%v' for task %v", podStatus.Name, taskId)
 	} else if pod, err := k.client.Pods(namespace).Get(name); err == nil {
 		if t, ok, err := podtask.RecoverFrom(pod); ok {
 			log.Infof("recovered task %v from metadata in pod %v/%v", taskId, namespace, name)
@@ -309,13 +324,13 @@ func (k *KubernetesScheduler) reconcileNonTerminalTask(driver bindings.Scheduler
 			k.taskRegistry.UpdateStatus(taskStatus)
 			return
 		} else if err != nil {
-			log.Errorf("failed to recover task from pod %v/%v: %v", namespace, name, err)
 			//should kill the pod and the task
+			log.Errorf("failed to recover task from pod %v/%v: %v", namespace, name, err)
 			if err := k.client.Pods(namespace).Delete(name); err == nil {
 				log.Errorf("failed to delete pod %v/%v: %v", namespace, name, err)
 			}
 		} else {
-			//this is pretty unexpected: we received a TASK_STARTING message, but the apiserver's pod
+			//this is pretty unexpected: we received a TASK_{STARTING,RUNNING} message, but the apiserver's pod
 			//metadata is not appropriate for task reconstruction -- which should almost certainly never
 			//be the case unless someone swapped out the pod on us (and kept the same namespace/name) while
 			//we were failed over.
@@ -454,6 +469,7 @@ func (r *Reconciler) Run(driver bindings.SchedulerDriver) <-chan struct{} {
 	return nil
 }
 
+// returns true if registry state was updated
 func (ks *KubernetesScheduler) recoverTasks() error {
 	ctx := api.NewDefaultContext()
 	podList, err := ks.client.Pods(api.NamespaceValue(ctx)).List(labels.Everything())
@@ -478,6 +494,7 @@ func (ks *KubernetesScheduler) recoverTasks() error {
 		if t, ok, err := podtask.RecoverFrom(&pod); err != nil {
 			log.Errorf("failed to recover task from pod, will attempt to delete '%v/%v': %v", pod.Namespace, pod.Name, err)
 			err := ks.client.Pods(pod.Namespace).Delete(pod.Name)
+			//TODO(jdef) check for temporary or not-found errors
 			if err != nil {
 				log.Errorf("failed to delete pod '%v/%v': %v", pod.Namespace, pod.Name, err)
 			}
