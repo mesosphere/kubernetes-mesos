@@ -307,22 +307,20 @@ func (k *KubernetesScheduler) reconcileNonTerminalTask(driver bindings.Scheduler
 			k.taskRegistry.Register(t, nil)
 			k.taskRegistry.UpdateStatus(taskStatus)
 			return
-		} else {
-			if err != nil {
-				log.Errorf("failed to recover task from pod %v/%v: %v", namespace, name, err)
-				//should kill the pod and the task
-				if err := k.client.Pods(namespace).Delete(name); err == nil {
-					log.Errorf("failed to delete pod %v/%v: %v", namespace, name, err)
-				}
-			} else {
-				//this is pretty unexpected: we received a TASK_STARTING message, but the apiserver's pod
-				//metadata is not appropriate for task reconstruction -- which should almost certainly never
-				//be the case unless someone swapped out the pod on us (and kept the same namespace/name) while
-				//we were failed over.
-
-				//kill this task, allow the newly launched scheduler to schedule the new pod
-				log.Warningf("unexpected pod metadata for task %v in apiserver, assuming new unscheduled pod spec: %+v", taskId, pod)
+		} else if err != nil {
+			log.Errorf("failed to recover task from pod %v/%v: %v", namespace, name, err)
+			//should kill the pod and the task
+			if err := k.client.Pods(namespace).Delete(name); err == nil {
+				log.Errorf("failed to delete pod %v/%v: %v", namespace, name, err)
 			}
+		} else {
+			//this is pretty unexpected: we received a TASK_STARTING message, but the apiserver's pod
+			//metadata is not appropriate for task reconstruction -- which should almost certainly never
+			//be the case unless someone swapped out the pod on us (and kept the same namespace/name) while
+			//we were failed over.
+
+			//kill this task, allow the newly launched scheduler to schedule the new pod
+			log.Warningf("unexpected pod metadata for task %v in apiserver, assuming new unscheduled pod spec: %+v", taskId, pod)
 		}
 	} else if errors.IsNotFound(err) {
 		// pod lookup failed, should delete the task since the pod is no longer valid; may be redundant, that's ok
@@ -331,7 +329,7 @@ func (k *KubernetesScheduler) reconcileNonTerminalTask(driver bindings.Scheduler
 		log.V(2).Infof("failed to reconcile task due to API server timeout: %v", err)
 		return
 	} else {
-		log.Warningf("unexpected API server error, aborting reconcile for task %v: %v", taskId, err)
+		log.Errorf("unexpected API server error, aborting reconcile for task %v: %v", taskId, err)
 		return
 	}
 	if _, err := driver.KillTask(taskStatus.TaskId); err != nil {
