@@ -49,8 +49,8 @@ endif
 export SHELL
 export KUBE_GO_PACKAGE
 
-all: patch
-	env GOPATH=$(BUILDDIR) go install -ldflags "$$(cat $(KUBE_GIT_VERSION_FILE))" $(K8S_CMD)
+all: patch version
+	env GOPATH=$(BUILDDIR) go install -ldflags "$(shell cat $(KUBE_GIT_VERSION_FILE))" $(K8S_CMD)
 	env GOPATH=$(BUILDDIR) go install $(FRAMEWORK_FLAGS) $(FRAMEWORK_CMD)
 
 error:
