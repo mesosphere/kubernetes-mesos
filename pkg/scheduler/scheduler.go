@@ -175,6 +175,7 @@ func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDri
 		ri := time.Duration(k.reconcileInterval) * time.Second
 		log.Infof("will perform task reconciliation at interval: %v", ri)
 		r := &Reconciler{Action: k.ReconcileTasks}
+		//TODO(jdef) save the cancellation chan from Run? (if we're stopped)
 		go util.Forever(func() { r.Run(driver) }, ri)
 	}
 }
@@ -380,7 +381,7 @@ func (k *KubernetesScheduler) Error(driver bindings.SchedulerDriver, message str
 
 // intended to be invoked as a Reconciler.Action by Reconciler.Run
 func (k *KubernetesScheduler) ReconcileTasks(driver bindings.SchedulerDriver, canceled <-chan struct{}) error {
-	log.Info("reconcile running tasks")
+	log.Info("reconcile tasks")
 
 	// tell mesos to send us the latest status updates for all the tasks that it knows about
 	statusList := []*mesos.TaskStatus{}
@@ -418,7 +419,7 @@ func (k *KubernetesScheduler) ReconcileTasks(driver bindings.SchedulerDriver, ca
 				k.RLock()
 				defer k.RUnlock()
 				for taskId := range remaining {
-					if task, _ := k.taskRegistry.Get(taskId); filter(task) && task.UpdatedTime.Before(start) {
+					if task, _ := k.taskRegistry.Get(taskId); task != nil && filter(task) && task.UpdatedTime.Before(start) {
 						// keep this task in remaining list
 						continue
 					}
