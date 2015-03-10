@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,10 +25,11 @@ import (
 )
 
 const (
-	defaultOfferTTL       = 5    // seconds that an offer is viable, prior to being expired
-	defaultOfferLingerTTL = 120  // seconds that an expired offer lingers in history
-	defaultListenerDelay  = 1    // number of seconds between offer listener notifications
-	defaultUpdatesBacklog = 2048 // size of the pod updates channel
+	defaultOfferTTL                   = 5    // seconds that an offer is viable, prior to being expired
+	defaultOfferLingerTTL             = 120  // seconds that an expired offer lingers in history
+	defaultListenerDelay              = 1    // number of seconds between offer listener notifications
+	defaultUpdatesBacklog             = 2048 // size of the pod updates channel
+	defaultFrameworkIdRefreshInterval = 30   // every X number of seconds we update the frameworkId stored in etcd
 )
 
 type Slave struct {
@@ -68,7 +70,7 @@ type KubernetesScheduler struct {
 	scheduleFunc      PodScheduleFunc
 	client            *client.Client
 	etcdClient        tools.EtcdClient
-	failoverTimeout   float64
+	failoverTimeout   float64 // in seconds
 	reconcileInterval int64
 
 	// Mesos context.
@@ -163,7 +165,11 @@ func (k *KubernetesScheduler) Reregistered(driver bindings.SchedulerDriver, mast
 
 func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDriver) {
 	if k.failoverTimeout > 0 {
-		go util.Forever(k.storeFrameworkId, 30*time.Second) // TODO(jdef) implies minimum failoverTimeout of 30s?
+		refreshInterval := defaultFrameworkIdRefreshInterval * time.Second
+		if k.failoverTimeout < defaultFrameworkIdRefreshInterval {
+			refreshInterval = time.Duration(math.Max(1, k.failoverTimeout/2)) * time.Second
+		}
+		go util.Forever(k.storeFrameworkId, refreshInterval)
 	}
 	if k.reconcileInterval > 0 {
 		ri := time.Duration(k.reconcileInterval) * time.Second
