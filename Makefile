@@ -35,7 +35,7 @@ DESTDIR		?= /target
 # default build tags
 TAGS		?=
 
-BUILDDIR	?= $(current_dir)/.build
+BUILDDIR	?= $(current_dir)/_build
 
 .PHONY: all error require-godep require-vendor install info bootstrap format test patch version test.v clean vet fix prepare
 
@@ -49,7 +49,7 @@ endif
 export SHELL
 export KUBE_GO_PACKAGE
 
-all: prepare patch
+all: patch
 	env GOPATH=$(BUILDDIR) go install -ldflags "$$(cat $(KUBE_GIT_VERSION_FILE))" $(K8S_CMD)
 	env GOPATH=$(BUILDDIR) go install $(FRAMEWORK_FLAGS) $(FRAMEWORK_CMD)
 
@@ -63,7 +63,7 @@ require-godep:
 require-vendor:
 
 clean:
-	env GOPATH=$(BUILDDIR) go clean -r -i -x $(K8S_CMD) $(FRAMEWORK_CMD)
+	test -n "$(BUILDDIR)" && rm -rf $(BUILDDIR)/*
 
 format:
 	env GOPATH=$(BUILDDIR) go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
@@ -88,14 +88,15 @@ info:
 	@echo CMD_DIRS=$(CMD_DIRS)
 	@echo FRAMEWORK_CMD=$(FRAMEWORK_CMD)
 
+# noop for now; may be needed if vendoring, dep mgmt tooling changes
 bootstrap:
 
 prepare:
 	test -L $(BUILDDIR)/src/$(K8SM_GO_PACKAGE) && rm -f $(BUILDDIR)/src/$(K8SM_GO_PACKAGE) || true
-	rsync -a --delete $(current_dir)/Godeps/_workspace/ $(BUILDDIR)
+	rsync -au $(current_dir)/Godeps/_workspace/ $(BUILDDIR)
 	(xdir=$$(dirname $(BUILDDIR)/src/$(K8SM_GO_PACKAGE)); mkdir -p $$xdir && cd $$xdir && ln -s $(current_dir) $$(basename $(K8SM_GO_PACKAGE)))
 
-patch: $(PATCH_SCRIPT)
+patch: prepare $(PATCH_SCRIPT)
 	env GOPATH=$(BUILDDIR) $(PATCH_SCRIPT)
 
 version: $(KUBE_GIT_VERSION_FILE)
