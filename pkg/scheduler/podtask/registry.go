@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
@@ -31,7 +32,7 @@ type Registry interface {
 	TaskForPod(podID string) (taskID string, ok bool)
 	UpdateStatus(status *mesos.TaskStatus) (*T, StateType)
 	// return a list of task ID's that match the given filter, or all task ID's if filter == nil
-	List(filter *StateType) []string
+	List(func(*T) bool) []string
 }
 
 type inMemoryRegistry struct {
@@ -49,11 +50,11 @@ func NewInMemoryRegistry() Registry {
 	}
 }
 
-func (k *inMemoryRegistry) List(filter *StateType) (taskids []string) {
+func (k *inMemoryRegistry) List(accepts func(t *T) bool) (taskids []string) {
 	k.rw.RLock()
 	defer k.rw.RUnlock()
 	for id, task := range k.taskRegistry {
-		if filter == nil || *filter == task.State {
+		if accepts == nil || accepts(task) {
 			taskids = append(taskids, id)
 		}
 	}
@@ -129,7 +130,10 @@ func (k *inMemoryRegistry) UpdateStatus(status *mesos.TaskStatus) (*T, StateType
 }
 
 func (k *inMemoryRegistry) handleTaskStaging(task *T, state StateType, status *mesos.TaskStatus) {
-	log.Errorf("Not implemented: task staging")
+	if status.GetSource() != mesos.TaskStatus_SOURCE_MASTER {
+		log.Errorf("received STAGING for task %v with unexpected source: %v",
+			status.GetTaskId().GetValue(), status.GetSource())
+	}
 }
 
 func (k *inMemoryRegistry) handleTaskStarting(task *T, state StateType, status *mesos.TaskStatus) {
@@ -167,13 +171,21 @@ func (k *inMemoryRegistry) handleTaskRunning(task *T, state StateType, status *m
 	}
 }
 
-func fillRunningPodInfo(task *T, taskStatus *mesos.TaskStatus) {
+func ParsePodStatusResult(taskStatus *mesos.TaskStatus) (result api.PodStatusResult, err error) {
 	if taskStatus.Data != nil {
-		if err := json.Unmarshal(taskStatus.Data, &task.Pod.Status); err != nil {
-			log.Errorf("Invalid TaskStatus.Data for task '%v': %v", task.ID, err)
-		}
+		err = json.Unmarshal(taskStatus.Data, &result)
 	} else {
-		log.Errorf("Missing TaskStatus.Data for task '%v'", task.ID)
+		err = fmt.Errorf("missing TaskStatus.Data")
+	}
+	return
+}
+
+func fillRunningPodInfo(task *T, taskStatus *mesos.TaskStatus) {
+	if result, err := ParsePodStatusResult(taskStatus); err != nil {
+		log.Errorf("invalid TaskStatus.Data for task '%v': %v", task.ID, err)
+	} else {
+		task.Pod.Status = result.Status
+		log.Infof("received pod status for task %v: %+v", task.ID, task.Pod.Status)
 	}
 }
 

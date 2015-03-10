@@ -81,7 +81,6 @@ type offerSpec struct {
 }
 
 type Perishable interface {
-	queue.Delayed
 	// returns true if this offer has expired
 	HasExpired() bool
 	// if not yet expired, return mesos offer details; otherwise nil
@@ -93,16 +92,21 @@ type Perishable interface {
 	// expire or delete this offer from storage
 	age(s *offerStorage)
 	// return a unique identifier for this offer
-	uid() string
+	Id() string
 	// return the slave host for this offer
-	host() string
+	Host() string
+	addTo(*queue.DelayQueue)
 }
 
-func (e *expiredOffer) uid() string {
+func (e *expiredOffer) addTo(q *queue.DelayQueue) {
+	q.Add(e)
+}
+
+func (e *expiredOffer) Id() string {
 	return e.id
 }
 
-func (e *expiredOffer) host() string {
+func (e *expiredOffer) Host() string {
 	return e.hostname
 }
 
@@ -140,27 +144,31 @@ func (to *liveOffer) Details() *mesos.Offer {
 
 func (to *liveOffer) Acquire() (acquired bool) {
 	if acquired = atomic.CompareAndSwapInt32(&to.acquired, 0, 1); acquired {
-		metrics.OffersAcquired.WithLabelValues(to.host()).Inc()
+		metrics.OffersAcquired.WithLabelValues(to.Host()).Inc()
 	}
 	return
 }
 
 func (to *liveOffer) Release() {
 	if released := atomic.CompareAndSwapInt32(&to.acquired, 1, 0); released {
-		metrics.OffersReleased.WithLabelValues(to.host()).Inc()
+		metrics.OffersReleased.WithLabelValues(to.Host()).Inc()
 	}
 }
 
 func (to *liveOffer) age(s *offerStorage) {
-	s.Delete(to.uid())
+	s.Delete(to.Id())
 }
 
-func (to *liveOffer) uid() string {
+func (to *liveOffer) Id() string {
 	return to.Offer.Id.GetValue()
 }
 
-func (to *liveOffer) host() string {
+func (to *liveOffer) Host() string {
 	return to.Offer.GetHostname()
+}
+
+func (to *liveOffer) addTo(q *queue.DelayQueue) {
+	q.Add(to)
 }
 
 // return the time remaining before the offer expires
@@ -176,7 +184,7 @@ func CreateRegistry(c RegistryConfig) Registry {
 			if perishable, ok := v.(Perishable); !ok {
 				return "", fmt.Errorf("expected perishable offer, not '%+v'", v)
 			} else {
-				return perishable.uid(), nil
+				return perishable.Id(), nil
 			}
 		})),
 		listeners: queue.NewDelayFIFO(),
@@ -192,10 +200,10 @@ func (s *offerStorage) Add(offers []*mesos.Offer) {
 			expiration: now.Add(s.TTL),
 			acquired:   0,
 		}
-		log.V(3).Infof("Receiving offer %v", timed.uid())
+		log.V(3).Infof("Receiving offer %v", timed.Id())
 		s.offers.Add(timed)
 		s.delayed.Add(timed)
-		metrics.OffersReceived.WithLabelValues(timed.host()).Inc()
+		metrics.OffersReceived.WithLabelValues(timed.Host()).Inc()
 	}
 }
 
@@ -213,7 +221,7 @@ func (s *offerStorage) Delete(offerId string) {
 				if err := s.DeclineOffer(offerId); err != nil {
 					log.Warningf("Failed to decline offer %v: %v", offerId, err)
 				} else {
-					metrics.OffersDeclined.WithLabelValues(offer.host()).Inc()
+					metrics.OffersDeclined.WithLabelValues(offer.Host()).Inc()
 				}
 			} else {
 				// some pod has acquired this and may attempt to launch a task with it
@@ -236,7 +244,7 @@ func (s *offerStorage) Delete(offerId string) {
 						if err := s.DeclineOffer(offerId); err != nil {
 							log.Warningf("Failed to decline (previously claimed) offer %v: %v", offerId, err)
 						} else {
-							metrics.OffersDeclined.WithLabelValues(offer.host()).Inc()
+							metrics.OffersDeclined.WithLabelValues(offer.Host()).Inc()
 						}
 					}
 				})
@@ -296,6 +304,10 @@ func (s *offerStorage) Walk(w Walker) error {
 	return nil
 }
 
+func Expired(offerId, hostname string, ttl time.Duration) *expiredOffer {
+	return &expiredOffer{offerSpec{id: offerId, hostname: hostname}, time.Now().Add(ttl)}
+}
+
 func (s *offerStorage) expireOffer(offer Perishable) {
 	// the offer may or may not be expired due to TTL so check for details
 	// since that's a more reliable determinant of lingering status
@@ -305,7 +317,7 @@ func (s *offerStorage) expireOffer(offer Perishable) {
 		log.V(3).Infof("Expiring offer %v", offerId)
 		if s.LingerTTL > 0 {
 			log.V(3).Infof("offer will linger: %v", offerId)
-			expired := &expiredOffer{offerSpec{id: offerId, hostname: offer.host()}, time.Now().Add(s.LingerTTL)}
+			expired := Expired(offerId, offer.Host(), s.LingerTTL)
 			s.offers.Update(expired)
 			s.delayed.Add(expired)
 		} else {
@@ -371,7 +383,7 @@ func (s *offerStorage) ageOffers() {
 	if details := offer.Details(); details != nil && !offer.HasExpired() {
 		// live offer has not expired yet: timed out early
 		// FWIW: early timeouts are more frequent when GOMAXPROCS is > 1
-		s.delayed.Add(offer)
+		offer.addTo(s.delayed)
 	} else {
 		offer.age(s)
 	}
@@ -434,7 +446,7 @@ func (s *offerStorage) Init() {
 			result := util.NewStringSet()
 			for _, v := range s.offers.List() {
 				if offer, ok := v.(Perishable); ok {
-					result.Insert(offer.uid())
+					result.Insert(offer.Id())
 				}
 			}
 			return result

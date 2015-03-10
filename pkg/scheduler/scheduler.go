@@ -2,12 +2,16 @@ package scheduler
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
@@ -21,10 +25,11 @@ import (
 )
 
 const (
-	defaultOfferTTL       = 5    // seconds that an offer is viable, prior to being expired
-	defaultOfferLingerTTL = 120  // seconds that an expired offer lingers in history
-	defaultListenerDelay  = 1    // number of seconds between offer listener notifications
-	defaultUpdatesBacklog = 2048 // size of the pod updates channel
+	defaultOfferTTL                   = 5    // seconds that an offer is viable, prior to being expired
+	defaultOfferLingerTTL             = 120  // seconds that an expired offer lingers in history
+	defaultListenerDelay              = 1    // number of seconds between offer listener notifications
+	defaultUpdatesBacklog             = 2048 // size of the pod updates channel
+	defaultFrameworkIdRefreshInterval = 30   // every X number of seconds we update the frameworkId stored in etcd
 )
 
 type Slave struct {
@@ -59,31 +64,51 @@ type KubernetesScheduler struct {
 	// In particular, changes to podtask.T objects are currently guarded by this lock.
 	*sync.RWMutex
 
+	// Config related
+
+	executor          *mesos.ExecutorInfo
+	scheduleFunc      PodScheduleFunc
+	client            *client.Client
+	etcdClient        tools.EtcdClient
+	failoverTimeout   float64 // in seconds
+	reconcileInterval int64
+
 	// Mesos context.
-	executor    *mesos.ExecutorInfo
-	driver      bindings.SchedulerDriver
-	frameworkId *mesos.FrameworkID
-	masterInfo  *mesos.MasterInfo
-	registered  bool
+
+	driver         bindings.SchedulerDriver
+	frameworkId    *mesos.FrameworkID
+	masterInfo     *mesos.MasterInfo
+	registered     bool
+	onRegistration sync.Once
 
 	offers       offers.Registry
 	slaves       map[string]*Slave // SlaveID => slave.
 	slaveIDs     map[string]string // Slave's hostname => slaveID
 	taskRegistry podtask.Registry
 
-	scheduleFunc PodScheduleFunc // The function that does scheduling.
+	plugin PluginInterface
+}
 
-	client     *client.Client
-	plugin     PluginInterface
-	etcdClient tools.EtcdClient
+type Config struct {
+	Executor          *mesos.ExecutorInfo
+	ScheduleFunc      PodScheduleFunc
+	Client            *client.Client
+	EtcdClient        tools.EtcdClient
+	FailoverTimeout   float64
+	ReconcileInterval int64
 }
 
 // New create a new KubernetesScheduler
-func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *client.Client, etcdClient tools.EtcdClient) *KubernetesScheduler {
+func New(config Config) *KubernetesScheduler {
 	var k *KubernetesScheduler
 	k = &KubernetesScheduler{
-		RWMutex:  new(sync.RWMutex),
-		executor: executor,
+		RWMutex:           new(sync.RWMutex),
+		executor:          config.Executor,
+		scheduleFunc:      config.ScheduleFunc,
+		client:            config.Client,
+		etcdClient:        config.EtcdClient,
+		failoverTimeout:   config.FailoverTimeout,
+		reconcileInterval: config.ReconcileInterval,
 		offers: offers.CreateRegistry(offers.RegistryConfig{
 			DeclineOffer: func(id string) error {
 				offerId := mutil.NewOfferID(id)
@@ -98,17 +123,15 @@ func New(executor *mesos.ExecutorInfo, scheduleFunc PodScheduleFunc, client *cli
 		slaves:       make(map[string]*Slave),
 		slaveIDs:     make(map[string]string),
 		taskRegistry: podtask.NewInMemoryRegistry(),
-		scheduleFunc: scheduleFunc,
-		client:       client,
-		etcdClient:   etcdClient,
 	}
 	return k
 }
 
-func (k *KubernetesScheduler) Init(d bindings.SchedulerDriver, pl PluginInterface) {
+func (k *KubernetesScheduler) Init(d bindings.SchedulerDriver, pl PluginInterface) error {
 	k.driver = d
 	k.plugin = pl
 	k.offers.Init()
+	return k.recoverTasks()
 }
 
 // Registered is called when the scheduler registered with the master successfully.
@@ -117,18 +140,16 @@ func (k *KubernetesScheduler) Registered(driver bindings.SchedulerDriver,
 	k.frameworkId = frameworkId
 	k.masterInfo = masterInfo
 	k.registered = true
-	go k.storeFrameworkId() //TODO(jdef) only do this if we're checkpointing?
+
 	log.Infof("Scheduler registered with the master: %v with frameworkId: %v\n", masterInfo, frameworkId)
 
-	//TODO(jdef) partial reconciliation started... needs work
-	r := &Reconciler{Action: k.ReconcileRunningTasks}
-	go util.Forever(func() { r.Run(driver) }, 5*time.Minute) // TODO(jdef) parameterize reconciliation interval
+	k.onRegistration.Do(func() { k.onInitialRegistration(driver) })
 }
 
 func (k *KubernetesScheduler) storeFrameworkId() {
-	_, err := k.etcdClient.Set(meta.FrameworkIDKey, k.frameworkId.GetValue(), 0)
+	_, err := k.etcdClient.Set(meta.FrameworkIDKey, k.frameworkId.GetValue(), uint64(k.failoverTimeout))
 	if err != nil {
-		log.Error(err)
+		log.Errorf("failed to renew frameworkId TTL: %v", err)
 	}
 }
 
@@ -136,11 +157,26 @@ func (k *KubernetesScheduler) storeFrameworkId() {
 // This happends when the master fails over.
 func (k *KubernetesScheduler) Reregistered(driver bindings.SchedulerDriver, masterInfo *mesos.MasterInfo) {
 	log.Infof("Scheduler reregistered with the master: %v\n", masterInfo)
+	k.masterInfo = masterInfo
 	k.registered = true
 
-	//TODO(jdef) partial reconciliation started... needs work
-	r := &Reconciler{Action: k.ReconcileRunningTasks}
-	go util.Forever(func() { r.Run(driver) }, 5*time.Minute) // TODO(jdef) parameterize reconciliation interval
+	k.onRegistration.Do(func() { k.onInitialRegistration(driver) })
+}
+
+func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDriver) {
+	if k.failoverTimeout > 0 {
+		refreshInterval := defaultFrameworkIdRefreshInterval * time.Second
+		if k.failoverTimeout < defaultFrameworkIdRefreshInterval {
+			refreshInterval = time.Duration(math.Max(1, k.failoverTimeout/2)) * time.Second
+		}
+		go util.Forever(k.storeFrameworkId, refreshInterval)
+	}
+	if k.reconcileInterval > 0 {
+		ri := time.Duration(k.reconcileInterval) * time.Second
+		log.Infof("will perform task reconciliation at interval: %v", ri)
+		r := &Reconciler{Action: k.ReconcileTasks}
+		go util.Forever(func() { r.Run(driver) }, ri)
+	}
 }
 
 // Disconnected is called when the scheduler loses connection to the master.
@@ -203,25 +239,28 @@ func (k *KubernetesScheduler) OfferRescinded(driver bindings.SchedulerDriver, of
 // StatusUpdate is called when a status update message is sent to the scheduler.
 func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
 	//TODO(jdef) we're going to make changes to podtask.T objects in here and since the current TaskRegistry
-	//implementation is in-memory we need a critical section for this.
+	//implementation is in-memory, and hands us pointers to shared objects, we need a critical section for this.
 	k.Lock()
 	defer k.Unlock()
 
 	log.Infof("Received status update %v\n", taskStatus)
 
 	switch taskStatus.GetState() {
-	case mesos.TaskState_TASK_STAGING:
-		log.Errorf("Not implemented: task staging")
-	case mesos.TaskState_TASK_RUNNING, mesos.TaskState_TASK_FINISHED, mesos.TaskState_TASK_STARTING:
-		if !func() (exists bool) {
-			slaveId := taskStatus.GetSlaveId().GetValue()
-			_, exists = k.slaves[slaveId]
-			return
-		}() {
-			log.Warningf("Ignore status %+v because the slave does not exist", taskStatus)
+	case mesos.TaskState_TASK_RUNNING, mesos.TaskState_TASK_FINISHED, mesos.TaskState_TASK_STARTING, mesos.TaskState_TASK_STAGING:
+		if _, state := k.taskRegistry.UpdateStatus(taskStatus); state == podtask.StateUnknown {
+			if taskStatus.GetState() != mesos.TaskState_TASK_FINISHED {
+				//TODO(jdef) what if I receive this after a TASK_LOST or TASK_KILLED?
+				//I don't want to reincarnate then..  TASK_LOST is a special case because
+				//the master is stateless and there are scenarios where I may get TASK_LOST
+				//followed by TASK_RUNNING.
+				k.reconcileNonTerminalTask(driver, taskStatus)
+			} // else, we don't really care about FINISHED tasks that aren't registered
+		} else if _, knownSlave := k.slaves[taskStatus.GetSlaveId().GetValue()]; !knownSlave {
+			// a registered task has an update reported by a slave that we don't recognize.
+			// this should never happen! So we don't reconcile it.
+			log.Errorf("Ignore status %+v because the slave does not exist", taskStatus)
 			return
 		}
-		fallthrough
 	case mesos.TaskState_TASK_KILLED:
 		k.taskRegistry.UpdateStatus(taskStatus)
 	case mesos.TaskState_TASK_FAILED:
@@ -248,6 +287,56 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 	}
 }
 
+func (k *KubernetesScheduler) reconcileNonTerminalTask(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
+	// attempt to recover task from pod info:
+	// - task data should contain an api.PodStatusResult
+	// - the Name can be parsed by kubelet.ParseFullName() to yield a pod Name and Namespace
+	// - pull the pod metadata down from the api server
+	// - perform task recovery based on pod metadata
+	result, err := podtask.ParsePodStatusResult(taskStatus)
+	taskId := taskStatus.TaskId.GetValue()
+	if err != nil {
+		// possible rogue pod exists at this point because we can't identify it; should kill the task
+		log.Errorf("possible rogue pod; illegal task status data for task %v, expected an api.PodStatusResult: %v", taskId, err)
+	} else if name, namespace, _ := kubelet.ParsePodFullName(result.Name); name == "" || namespace == "" {
+		// possible rogue pod exists at this point because we can't identify it; should kill the task
+		log.Errorf("possible rogue pod; illegal api.PodStatusResult, unable to parse full pod name from: '%v' for task %v", result.Name, taskId)
+	} else if pod, err := k.client.Pods(namespace).Get(name); err == nil {
+		if t, ok, err := podtask.RecoverFrom(pod); ok {
+			log.Infof("recovered task %v from metadata in pod %v/%v", taskId, namespace, name)
+			k.taskRegistry.Register(t, nil)
+			k.taskRegistry.UpdateStatus(taskStatus)
+			return
+		} else if err != nil {
+			log.Errorf("failed to recover task from pod %v/%v: %v", namespace, name, err)
+			//should kill the pod and the task
+			if err := k.client.Pods(namespace).Delete(name); err == nil {
+				log.Errorf("failed to delete pod %v/%v: %v", namespace, name, err)
+			}
+		} else {
+			//this is pretty unexpected: we received a TASK_STARTING message, but the apiserver's pod
+			//metadata is not appropriate for task reconstruction -- which should almost certainly never
+			//be the case unless someone swapped out the pod on us (and kept the same namespace/name) while
+			//we were failed over.
+
+			//kill this task, allow the newly launched scheduler to schedule the new pod
+			log.Warningf("unexpected pod metadata for task %v in apiserver, assuming new unscheduled pod spec: %+v", taskId, pod)
+		}
+	} else if errors.IsNotFound(err) {
+		// pod lookup failed, should delete the task since the pod is no longer valid; may be redundant, that's ok
+		log.Infof("killing task %v since pod %v/%v no longer exists", taskId, namespace, name)
+	} else if errors.IsServerTimeout(err) {
+		log.V(2).Infof("failed to reconcile task due to API server timeout: %v", err)
+		return
+	} else {
+		log.Errorf("unexpected API server error, aborting reconcile for task %v: %v", taskId, err)
+		return
+	}
+	if _, err := driver.KillTask(taskStatus.TaskId); err != nil {
+		log.Errorf("failed to kill task %v: %v", taskId, err)
+	}
+}
+
 // FrameworkMessage is called when the scheduler receives a message from the executor.
 func (k *KubernetesScheduler) FrameworkMessage(driver bindings.SchedulerDriver,
 	executorId *mesos.ExecutorID, slaveId *mesos.SlaveID, message string) {
@@ -268,7 +357,9 @@ func (k *KubernetesScheduler) SlaveLost(driver bindings.SchedulerDriver, slaveId
 		}
 	}
 
-	// TODO(jdef): delete slave from our internal list?
+	// TODO(jdef): delete slave from our internal list? probably not since we may need to reconcile
+	// tasks. it would be nice to somehow flag the slave as lost so that, perhaps, we can periodically
+	// flush lost slaves older than X, and for which no tasks or pods reference.
 
 	// unfinished tasks/pods will be dropped. use a replication controller if you want pods to
 	// be restarted when slaves die.
@@ -288,35 +379,46 @@ func (k *KubernetesScheduler) Error(driver bindings.SchedulerDriver, message str
 }
 
 // intended to be invoked as a Reconciler.Action by Reconciler.Run
-func (k *KubernetesScheduler) ReconcileRunningTasks(driver bindings.SchedulerDriver, canceled <-chan struct{}) error {
+func (k *KubernetesScheduler) ReconcileTasks(driver bindings.SchedulerDriver, canceled <-chan struct{}) error {
 	log.Info("reconcile running tasks")
 
+	// tell mesos to send us the latest status updates for all the tasks that it knows about
 	statusList := []*mesos.TaskStatus{}
 	if _, err := driver.ReconcileTasks(statusList); err != nil {
 		return err
 	}
 
-	filter := podtask.StateRunning
+	filter := func(t *podtask.T) bool {
+		switch t.State {
+		case podtask.StateRunning:
+			return true
+		case podtask.StatePending:
+			return t.Has(podtask.Launched)
+		default:
+			return false
+		}
+	}
 	remaining := util.NewStringSet()
-	remaining.Insert(k.taskRegistry.List(&filter)...)
+	remaining.Insert(k.taskRegistry.List(filter)...)
 	start := time.Now()
 	const maxBackoff = 120 * time.Second // TODO(jdef) extract constant
 	first := true
 	for backoff := 1 * time.Second; first || remaining.Len() > 0; backoff = backoff * 2 {
 		first = false
-		//TODO(jdef) reconcileTasks(remaining, canceled)
+		// nothing to do here other than wait for status updates..
 		if backoff > maxBackoff {
 			backoff = maxBackoff
 		}
 		select {
 		case <-canceled:
+			log.Infoln("reconciliation cancelled")
 			return nil //TODO(jdef) should probably return a cancelation error
 		case <-time.After(backoff):
 			func() {
 				k.RLock()
 				defer k.RUnlock()
 				for taskId := range remaining {
-					if task, state := k.taskRegistry.Get(taskId); state == podtask.StateRunning && task.UpdatedTime.Before(start) {
+					if task, _ := k.taskRegistry.Get(taskId); filter(task) && task.UpdatedTime.Before(start) {
 						// keep this task in remaining list
 						continue
 					}
@@ -347,6 +449,42 @@ func (r *Reconciler) Run(driver bindings.SchedulerDriver) <-chan struct{} {
 			}
 		}()
 		return canceled
+	}
+	return nil
+}
+
+func (ks *KubernetesScheduler) recoverTasks() error {
+	ctx := api.NewDefaultContext()
+	podList, err := ks.client.Pods(api.NamespaceValue(ctx)).List(labels.Everything())
+	if err != nil {
+		log.V(1).Info("failed to recover pod registry, madness may ensue: %v", err)
+		return err
+	}
+	recoverSlave := func(t *podtask.T) {
+		ks.Lock()
+		defer ks.Unlock()
+
+		slaveId := t.TaskInfo.SlaveId.GetValue()
+		slave, exists := ks.slaves[slaveId]
+		if !exists {
+			slave = newSlave(t.Offer.Host())
+			ks.slaves[slaveId] = slave
+		}
+		slave.Offers[t.Offer.Id()] = empty{}
+		ks.slaveIDs[slave.HostName] = slaveId
+	}
+	for _, pod := range podList.Items {
+		if t, ok, err := podtask.RecoverFrom(&pod); err != nil {
+			log.Errorf("failed to recover task from pod, will attempt to delete '%v/%v': %v", pod.Namespace, pod.Name, err)
+			err := ks.client.Pods(pod.Namespace).Delete(pod.Name)
+			if err != nil {
+				log.Errorf("failed to delete pod '%v/%v': %v", pod.Namespace, pod.Name, err)
+			}
+		} else if ok {
+			ks.taskRegistry.Register(t, nil)
+			recoverSlave(t)
+			log.Infof("recovered task %v from pod %v/%v", t.ID, pod.Namespace, pod.Name)
+		}
 	}
 	return nil
 }

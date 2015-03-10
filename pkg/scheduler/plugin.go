@@ -204,10 +204,7 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *pod
 		boundPod.Annotations = make(map[string]string)
 	}
 	boundPod.Annotations[annotation.BindingHostKey] = machine
-	boundPod.Annotations[annotation.TaskIdKey] = task.ID
-	boundPod.Annotations[annotation.SlaveIdKey] = task.TaskInfo.SlaveId.GetValue()
-	boundPod.Annotations[annotation.OfferIdKey] = offerId
-	//TODO(jdef): include TaskInfo.Resources in annotations?
+	task.SaveRecoveryInfo(boundPod.Annotations)
 
 	//TODO(jdef) using anything other than the default k8s host-port mapping may
 	//confuse k8s pod rectification loops. in the future this point may become

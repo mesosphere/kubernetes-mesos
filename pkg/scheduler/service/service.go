@@ -34,7 +34,6 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/clientauth"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
@@ -58,7 +57,8 @@ import (
 )
 
 const (
-	defaultMesosUser = "root" // should have privs to execute docker and iptables commands
+	defaultMesosUser         = "root" // should have privs to execute docker and iptables commands
+	defaultReconcileInterval = 300    // 5m default task reconciliation interval
 )
 
 type SchedulerServer struct {
@@ -84,6 +84,7 @@ type SchedulerServer struct {
 	MesosAuthProvider    string
 	DriverPort           uint
 	HostnameOverride     string
+	ReconcileInterval    int64
 }
 
 // NewSchedulerServer creates a new SchedulerServer with default parameters
@@ -95,6 +96,8 @@ func NewSchedulerServer() *SchedulerServer {
 		ExecutorRunProxy:  true,
 		MesosAuthProvider: sasl.ProviderName,
 		MesosUser:         defaultMesosUser,
+		ReconcileInterval: defaultReconcileInterval,
+		Checkpoint:        true,
 	}
 	return &s
 }
@@ -114,7 +117,7 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.MesosAuthPrincipal, "mesos_authentication_principal", s.MesosAuthPrincipal, "Mesos authentication principal.")
 	fs.StringVar(&s.MesosAuthSecretFile, "mesos_authentication_secret_file", s.MesosAuthSecretFile, "Mesos authentication secret file.")
 	fs.BoolVar(&s.Checkpoint, "checkpoint", s.Checkpoint, "Enable/disable checkpointing for the kubernetes-mesos framework.")
-	fs.Float64Var(&s.FailoverTimeout, "failover_timeout", s.FailoverTimeout, fmt.Sprintf("Framework failover timeout, in ns."))
+	fs.Float64Var(&s.FailoverTimeout, "failover_timeout", s.FailoverTimeout, fmt.Sprintf("Framework failover timeout, in sec."))
 	fs.BoolVar(&s.ExecutorBindall, "executor_bindall", s.ExecutorBindall, "When true will set -address and -hostname_override of the executor to 0.0.0.0.")
 	fs.BoolVar(&s.ExecutorRunProxy, "executor_run_proxy", s.ExecutorRunProxy, "Run the kube-proxy as a child process of the executor.")
 	fs.BoolVar(&s.ExecutorProxyBindall, "executor_proxy_bindall", s.ExecutorProxyBindall, "When true pass -proxy_bindall to the executor.")
@@ -122,6 +125,7 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 	fs.UintVar(&s.DriverPort, "driver_port", s.DriverPort, "Port that the Mesos scheduler driver process should listen on.")
 	fs.StringVar(&s.HostnameOverride, "hostname_override", s.HostnameOverride, "If non-empty, will use this string as identification instead of the actual hostname.")
 	fs.IntVar(&s.ExecutorLogV, "executor_logv", s.ExecutorLogV, "Logging verbosity of spawned executor processes.")
+	fs.Int64Var(&s.ReconcileInterval, "reconcile_interval", s.ReconcileInterval, "Interval at which to execute task reconciliation, in sec. Zero disables.")
 }
 
 // returns (downloadURI, basename(path))
@@ -254,7 +258,14 @@ func (s *SchedulerServer) Run(_ []string) error {
 
 	// Create mesos scheduler driver.
 	executor := s.prepareExecutorInfo()
-	mesosPodScheduler := scheduler.New(executor, scheduler.FCFSScheduleFunc, client, etcdClient)
+	mesosPodScheduler := scheduler.New(scheduler.Config{
+		Executor:          executor,
+		ScheduleFunc:      scheduler.FCFSScheduleFunc,
+		Client:            client,
+		EtcdClient:        etcdClient,
+		FailoverTimeout:   s.FailoverTimeout,
+		ReconcileInterval: s.ReconcileInterval,
+	})
 	info, cred, err := s.buildFrameworkInfo(etcdClient)
 	if err != nil {
 		log.Fatalf("Misconfigured mesos framework: %v", err)
@@ -281,7 +292,9 @@ func (s *SchedulerServer) Run(_ []string) error {
 
 	pluginStart := make(chan struct{})
 	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(pluginStart))
-	mesosPodScheduler.Init(driver, kpl)
+	if err = mesosPodScheduler.Init(driver, kpl); err != nil {
+		log.Fatalf("failed to initialize pod scheduler: %v", err)
+	}
 
 	if st, err := driver.Start(); err == nil {
 		if st != mesos.Status_DRIVER_RUNNING {
@@ -300,10 +313,6 @@ func (s *SchedulerServer) Run(_ []string) error {
 		log.Fatalf("Failed to start driver: %v", err)
 	}
 
-	//TODO(jdef) we need real task reconciliation at some point
-	log.V(1).Info("Clearing old pods from the registry")
-	clearOldPods(client)
-
 	go util.Forever(func() {
 		log.V(1).Info("Starting HTTP interface")
 		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), nil))
@@ -318,22 +327,28 @@ func (s *SchedulerServer) Run(_ []string) error {
 
 func (s *SchedulerServer) buildFrameworkInfo(client tools.EtcdClient) (info *mesos.FrameworkInfo, cred *mesos.Credential, err error) {
 
-	var frameworkId *mesos.FrameworkID
-	var failover *float64
-
-	//TODO(jdef) does this really align with how checkpoint and failoverTimeout are intended
-	//to be used? Perhaps they should be more independent.
-	if s.Checkpoint {
-		response, err := client.Get(meta.FrameworkIDKey, false, false)
-		if err != nil {
+	var (
+		frameworkId *mesos.FrameworkID
+		failover    *float64
+	)
+	if s.FailoverTimeout > 0 {
+		failover = proto.Float64(s.FailoverTimeout)
+		if response, err := client.Get(meta.FrameworkIDKey, false, false); err != nil {
 			if !tools.IsEtcdNotFound(err) {
-				log.Fatal(err)
+				log.Fatalf("unexpected failure attempting to load framework ID from etcd: %v", err)
 			}
+			log.V(1).Infof("did not find framework ID in etcd")
 		} else if response.Node.Value != "" {
 			log.Infof("configuring FrameworkInfo with Id found in etcd: '%s'", response.Node.Value)
 			frameworkId = mutil.NewFrameworkID(response.Node.Value)
 		}
-		failover = proto.Float64(s.FailoverTimeout)
+	} else {
+		if _, err := client.Delete(meta.FrameworkIDKey, true); err != nil {
+			if !tools.IsEtcdNotFound(err) {
+				log.Fatalf("failed to delete framework ID from etcd: %v", err)
+			}
+			log.V(1).Infof("nothing to delete: did not find framework ID in etcd")
+		}
 	}
 
 	username, err := s.getUsername()
@@ -379,27 +394,4 @@ func (s *SchedulerServer) getUsername() (username string, err error) {
 		}
 	}
 	return
-}
-
-func clearOldPods(c *client.Client) {
-	ctx := api.NewDefaultContext()
-	podList, err := c.Pods(api.NamespaceValue(ctx)).List(labels.Everything())
-	if err != nil {
-		log.Warningf("failed to clear pod registry, madness may ensue: %v", err)
-		return
-	}
-	for _, pod := range podList.Items {
-		podName := pod.Name
-		if podName == "" {
-			podName = string(pod.UID)
-			if podName == "" {
-				log.Warningf("failed to delete pod, it has no Name or UID: '%+v'", pod)
-				continue
-			}
-		}
-		err := c.Pods(pod.Namespace).Delete(podName)
-		if err != nil {
-			log.Warningf("failed to delete pod '%v': %v", podName, err)
-		}
-	}
 }
