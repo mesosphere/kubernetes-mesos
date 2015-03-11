@@ -17,5 +17,5 @@ func main() {
 
 	verflag.PrintAndExitIfRequested()
 
-	s.Run(pflag.CommandLine.Args())
+	s.Run(nil, pflag.CommandLine.Args())
 }

@@ -14,12 +14,14 @@ import (
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/credentialprovider"
 	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/hyperkube"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	kconfig "github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/config"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/server"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	log "github.com/golang/glog"
+	"github.com/kardianos/osext"
 	bindings "github.com/mesos/mesos-go/executor"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor"
 
@@ -57,6 +59,25 @@ func NewKubeletExecutorServer() *KubeletExecutorServer {
 	return k
 }
 
+// NewHyperkubeServer creates a new hyperkube Server object that includes the
+// description and flags.
+func NewHyperkubeServer() *hyperkube.Server {
+	s := NewKubeletExecutorServer()
+	hks := hyperkube.Server{
+		SimpleUsage: "executor",
+		Long: `The kubelet-executor binary is responsible for maintaining a set of containers
+on a particular node. It syncs data from a specialized Mesos source that tracks
+task launches and kills. It then queries Docker to see what is currently
+running.  It synchronizes the configuration data, with the running set of
+containers by starting or stopping Docker containers.`,
+		Run: func(hks *hyperkube.Server, args []string) error {
+			return s.Run(hks, args)
+		},
+	}
+	s.AddFlags(hks.Flags())
+	return &hks
+}
+
 func (s *KubeletExecutorServer) AddFlags(fs *pflag.FlagSet) {
 	s.KubeletServer.AddFlags(fs)
 	fs.BoolVar(&s.RunProxy, "run_proxy", s.RunProxy, "Maintain a running kube-proxy instance as a child proc of this kubelet-executor.")
@@ -68,7 +89,7 @@ func (s *KubeletExecutorServer) AddFlags(fs *pflag.FlagSet) {
 }
 
 // Run runs the specified KubeletExecutorServer.
-func (s *KubeletExecutorServer) Run(_ []string) error {
+func (s *KubeletExecutorServer) Run(hks *hyperkube.Server, _ []string) error {
 	util.ReallyCrash = s.ReallyCrashForTesting
 	rand.Seed(time.Now().UTC().UnixNano())
 
@@ -113,7 +134,7 @@ func (s *KubeletExecutorServer) Run(_ []string) error {
 
 	finished := make(chan struct{})
 	server.RunKubelet(&kcfg, server.KubeletBuilder(func(kc *server.KubeletConfig) (server.KubeletBootstrap, *kconfig.PodConfig, error) {
-		return s.createAndInitKubelet(kc, finished)
+		return s.createAndInitKubelet(kc, hks, finished)
 	}))
 
 	// block until driver is shut down
@@ -133,7 +154,7 @@ func defaultBindingAddress() string {
 	}
 }
 
-func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, finished chan struct{}) (server.KubeletBootstrap, *kconfig.PodConfig, error) {
+func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, hks *hyperkube.Server, finished chan struct{}) (server.KubeletBootstrap, *kconfig.PodConfig, error) {
 	watch := kubelet.SetupEventSending(kc.KubeClient, kc.Hostname)
 	pc := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
 	updates := pc.Channel(MESOS_CFG_SOURCE)
@@ -174,6 +195,7 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, 
 		etcdConfigFile:         ks.EtcdConfigFile,
 		totalMaxDeadContainers: ks.TotalMaxDeadContainers,
 		dockerClient:           kc.DockerClient,
+		hks:                    hks,
 	}
 
 	exec := executor.New(k.Kubelet, updates, MESOS_CFG_SOURCE, kc.KubeClient, watch, kc.DockerClient)
@@ -215,6 +237,7 @@ type kubeletExecutor struct {
 	etcdConfigFile         string
 	totalMaxDeadContainers uint
 	dockerClient           dockertools.DockerInterface
+	hks                    *hyperkube.Server
 }
 
 func (kl *kubeletExecutor) ListenAndServe(address net.IP, port uint, enableDebuggingHandlers bool) {
@@ -242,20 +265,43 @@ func (kl *kubeletExecutor) ListenAndServe(address net.IP, port uint, enableDebug
 // this function blocks as long as the proxy service is running; intended to be
 // executed asynchronously.
 func (kl *kubeletExecutor) runProxyService() {
+
 	// TODO(jdef): would be nice if we could run the proxy via an in-memory
 	// kubelet config source (in case it crashes, kubelet would restart it);
 	// not sure that k8s supports host-networking space for pods
 	log.Infof("Starting proxy process...")
 
+	//TODO(jdef) constant should be shared with km package
+	const (
+		KM_PROXY = "proxy"
+	)
+
+	binary := kl.proxyExec
+	args := []string{}
+	if _, err := os.Stat(binary); os.IsNotExist(err) {
+		if _, err := kl.hks.FindServer(KM_PROXY); err != nil {
+			log.Errorf("failed to locate proxy executable at '%v' and km not present: %v", binary, err)
+			return
+		}
+		log.V(1).Infof("using km proxy service")
+		if binary, err = osext.Executable(); err != nil {
+			log.Errorf("failed to run proxy, could not determine currently running executable: %v", err)
+		}
+		args = append(args, KM_PROXY)
+	} else if err != nil {
+		log.Errorf("failure while attempting to locate proxy executable: %v", err)
+		return
+	} // else, noop
+
 	bindAddress := "0.0.0.0"
 	if !kl.proxyBindall {
 		bindAddress = kl.address.String()
 	}
-	args := []string{
+	args = append(args,
 		fmt.Sprintf("--bind_address=%s", bindAddress),
 		fmt.Sprintf("--v=%d", kl.proxyLogV),
 		"--logtostderr=true",
-	}
+	)
 	if len(kl.etcdServerList) > 0 {
 		etcdServerArguments := strings.Join(kl.etcdServerList, ",")
 		args = append(args, "--etcd_servers="+etcdServerArguments)
@@ -263,9 +309,9 @@ func (kl *kubeletExecutor) runProxyService() {
 		args = append(args, "--etcd_config="+kl.etcdConfigFile)
 	}
 
-	log.Infof("Spawning process executable %s with args '%+v'", kl.proxyExec, args)
+	log.Infof("Spawning process executable %s with args '%+v'", binary, args)
 
-	cmd := exec.Command(kl.proxyExec, args...)
+	cmd := exec.Command(binary, args...)
 	_, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Fatal(err)

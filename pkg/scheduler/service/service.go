@@ -33,12 +33,14 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/clientauth"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/hyperkube"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/gogo/protobuf/proto"
 	log "github.com/golang/glog"
+	"github.com/kardianos/osext"
 	"github.com/mesos/mesos-go/auth"
 	"github.com/mesos/mesos-go/auth/sasl"
 	"github.com/mesos/mesos-go/auth/sasl/mech"
@@ -102,6 +104,23 @@ func NewSchedulerServer() *SchedulerServer {
 	return &s
 }
 
+// NewHyperkubeServer creates a new hyperkube Server object that includes the
+// description and flags.
+func NewHyperkubeServer() *hyperkube.Server {
+	s := NewSchedulerServer()
+
+	hks := hyperkube.Server{
+		SimpleUsage: "scheduler",
+		Long: `Implements the Kubernetes-Mesos scheduler. This will launch Mesos tasks which
+results in pods assigned to kubelets based on capacity and constraints.`,
+		Run: func(hks *hyperkube.Server, args []string) error {
+			return s.Run(hks, args)
+		},
+	}
+	s.AddFlags(hks.Flags())
+	return &hks
+}
+
 func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&s.Port, "port", s.Port, "The port that the scheduler's http service runs on")
 	fs.Var(&s.Address, "address", "The IP address to serve on (set to 0.0.0.0 for all interfaces)")
@@ -129,7 +148,7 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 }
 
 // returns (downloadURI, basename(path))
-func (s *SchedulerServer) serveExecutorArtifact(path string) (*string, string) {
+func (s *SchedulerServer) serveExecutorArtifact(path string) (string, string) {
 	serveFile := func(pattern string, filename string) {
 		http.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			http.ServeFile(w, r, filename)
@@ -149,58 +168,85 @@ func (s *SchedulerServer) serveExecutorArtifact(path string) (*string, string) {
 	hostURI := fmt.Sprintf("http://%s:%d/%s", s.Address.String(), s.Port, base)
 	log.V(2).Infof("Hosting artifact '%s' at '%s'", path, hostURI)
 
-	return &hostURI, base
+	return hostURI, base
 }
 
-func (s *SchedulerServer) prepareExecutorInfo() *mesos.ExecutorInfo {
-	executorUris := []*mesos.CommandInfo_URI{}
-	uri, proxyCmd := s.serveExecutorArtifact(s.ProxyPath)
-	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri, Executable: proto.Bool(true)})
-	uri, executorCmd := s.serveExecutorArtifact(s.ExecutorPath)
-	executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri, Executable: proto.Bool(true)})
+func (s *SchedulerServer) prepareExecutorInfo(hks *hyperkube.Server) *mesos.ExecutorInfo {
+	ci := &mesos.CommandInfo{
+		Shell: proto.Bool(false),
+	}
+
+	//TODO(jdef) these should be shared constants with km
+	const (
+		KM_EXECUTOR = "executor"
+		KM_PROXY    = "proxy"
+	)
+
+	if s.ExecutorPath != "" {
+		uri, executorCmd := s.serveExecutorArtifact(s.ExecutorPath)
+		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(true)})
+		ci.Value = proto.String(fmt.Sprintf("./%s", executorCmd))
+	} else if _, err := hks.FindServer(KM_EXECUTOR); err != nil {
+		log.Fatalf("either run this scheduler via km or else --executor_path is required: %v", err)
+	} else if filename, err := osext.Executable(); err != nil {
+		log.Fatalf("failed to determine path to currently running executable: %v", err)
+	} else {
+		uri, kmCmd := s.serveExecutorArtifact(filename)
+		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(true)})
+		ci.Value = proto.String(fmt.Sprintf("./%s", kmCmd))
+		ci.Arguments = append(ci.Arguments, KM_EXECUTOR)
+	}
+
+	if s.ProxyPath != "" {
+		uri, proxyCmd := s.serveExecutorArtifact(s.ProxyPath)
+		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(true)})
+		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--proxy_exec=./%s", proxyCmd))
+	} else if _, err := hks.FindServer(KM_PROXY); err != nil {
+		log.Fatalf("either run this scheduler via km or else --proxy_path is required: %v", err)
+	} else if s.ExecutorPath != "" {
+		log.Fatalf("proxy can only use km binary if executor does the same")
+	} // else, executor is smart enough to know when proxy_path is required, or to use km
 
 	//TODO(jdef): provide some way (env var?) for user's to customize executor config
 	//TODO(jdef): set -hostname_override and -address to 127.0.0.1 if `address` is 127.0.0.1
 	//TODO(jdef): propagate dockercfg from RootDirectory?
 
 	apiServerArgs := strings.Join(s.APIServerList, ",")
-
-	executorCommand := fmt.Sprintf("./%s --v=%d --allow_privileged=%t --api_servers=%s --proxy_exec=./%s",
-		executorCmd, s.ExecutorLogV, s.AllowPrivileged, apiServerArgs, proxyCmd)
+	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--api_servers=%s", apiServerArgs))
+	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--v=%d", s.ExecutorLogV))
+	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--allow_privileged=%t", s.AllowPrivileged))
 
 	if s.ExecutorBindall {
-		executorCommand = fmt.Sprintf("%s --hostname_override=0.0.0.0 --address=0.0.0.0", executorCommand)
+		ci.Arguments = append(ci.Arguments, "--hostname_override=0.0.0.0")
+		ci.Arguments = append(ci.Arguments, "--address=0.0.0.0")
 	}
 
-	executorCommand = fmt.Sprintf("%s --proxy_bindall=%v", executorCommand, s.ExecutorProxyBindall)
-	executorCommand = fmt.Sprintf("%s --run_proxy=%v", executorCommand, s.ExecutorRunProxy)
+	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--proxy_bindall=%v", s.ExecutorProxyBindall))
+	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--run_proxy=%v", s.ExecutorRunProxy))
 
 	if len(s.EtcdServerList) > 0 {
 		etcdServerArguments := strings.Join(s.EtcdServerList, ",")
-		executorCommand = fmt.Sprintf("%s --etcd_servers=%s", executorCommand, etcdServerArguments)
+		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--etcd_servers=%s", etcdServerArguments))
 	} else {
 		uri, basename := s.serveExecutorArtifact(s.EtcdConfigFile)
-		executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri})
-		executorCommand = fmt.Sprintf("%s --etcd_config=./%s", executorCommand, basename)
+		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri)})
+		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--etcd_config=./%s", basename))
 	}
 
 	if s.AuthPath != "" {
 		uri, basename := s.serveExecutorArtifact(s.AuthPath)
-		executorUris = append(executorUris, &mesos.CommandInfo_URI{Value: uri})
-		executorCommand = fmt.Sprintf("%s --auth_path=%s", executorCommand, basename)
+		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri)})
+		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--auth_path=%s", basename))
 	}
 
-	log.V(1).Infof("prepared executor command '%v'", executorCommand)
+	log.V(1).Infof("prepared executor command '%v' with args '+%v'", ci.Value, ci.Arguments)
 
 	// Create mesos scheduler driver.
 	return &mesos.ExecutorInfo{
 		ExecutorId: &mesos.ExecutorID{Value: proto.String(config.DefaultInfoID)},
-		Command: &mesos.CommandInfo{
-			Value: proto.String(executorCommand),
-			Uris:  executorUris,
-		},
-		Name:   proto.String(config.DefaultInfoName),
-		Source: proto.String(config.DefaultInfoSource),
+		Command:    ci,
+		Name:       proto.String(config.DefaultInfoName),
+		Source:     proto.String(config.DefaultInfoSource),
 	}
 }
 
@@ -234,7 +280,7 @@ func (s *SchedulerServer) createAPIServerClient() (*client.Client, error) {
 	return c, nil
 }
 
-func (s *SchedulerServer) Run(_ []string) error {
+func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 
 	metrics.Register()
 	http.Handle("/metrics", prometheus.Handler())
@@ -257,7 +303,7 @@ func (s *SchedulerServer) Run(_ []string) error {
 	record.StartRecording(client.Events(""), api.EventSource{Component: "scheduler"})
 
 	// Create mesos scheduler driver.
-	executor := s.prepareExecutorInfo()
+	executor := s.prepareExecutorInfo(hks)
 	mesosPodScheduler := scheduler.New(scheduler.Config{
 		Executor:          executor,
 		ScheduleFunc:      scheduler.FCFSScheduleFunc,

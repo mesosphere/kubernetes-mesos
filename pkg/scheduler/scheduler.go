@@ -272,6 +272,9 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 		}
 	case mesos.TaskState_TASK_LOST:
 		task, state := k.taskRegistry.UpdateStatus(taskStatus)
+
+		//TODO(jdef) check for Source:*SOURCE_SLAVE,Reason:*REASON_EXECUTOR_TERMINATED
+
 		if state == podtask.StateRunning && taskStatus.ExecutorId != nil && taskStatus.SlaveId != nil {
 			//TODO(jdef) this may not be meaningful once we have proper checkpointing and master detection
 			//If we're reconciling and receive this then the executor may be

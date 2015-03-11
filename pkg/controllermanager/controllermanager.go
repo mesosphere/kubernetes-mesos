@@ -35,6 +35,7 @@ import (
 	replicationControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/controller"
 	server "github.com/GoogleCloudPlatform/kubernetes/pkg/controllermanager"
 	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/hyperkube"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/resourcequota"
 	kendpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
@@ -59,6 +60,22 @@ func NewCMServer() *CMServer {
 	s.UseHostPortEndpoints = true
 	s.MinionRegexp = "^.*$"
 	return s
+}
+
+// NewHyperkubeServer creates a new hyperkube Server object that includes the
+// description and flags.
+func NewHyperkubeServer() *hyperkube.Server {
+	s := NewCMServer()
+
+	hks := hyperkube.Server{
+		SimpleUsage: "controller-manager",
+		Long:        "A server that runs a set of active components. This includes replication controllers, service endpoints and nodes.",
+		Run: func(_ *hyperkube.Server, args []string) error {
+			return s.Run(args)
+		},
+	}
+	s.AddFlags(hks.Flags())
+	return &hks
 }
 
 // AddFlags adds flags for a specific CMServer to the specified FlagSet
