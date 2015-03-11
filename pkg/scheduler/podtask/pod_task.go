@@ -203,11 +203,7 @@ func (t *T) SaveRecoveryInfo(dict map[string]string) {
 //
 // assumes that the pod data comes from the k8s registry and reflects the desired state.
 //
-func RecoverFrom(pod *api.Pod) (*T, bool, error) {
-	if pod == nil {
-		return nil, false, fmt.Errorf("illegal argument: pod was nil")
-	}
-
+func RecoverFrom(pod api.Pod) (*T, bool, error) {
 	// we only expect annotations if pod has been bound, which implies that it has already
 	// been scheduled and launched
 	if pod.Status.Host == "" && len(pod.Annotations) == 0 {
@@ -233,7 +229,7 @@ func RecoverFrom(pod *api.Pod) (*T, bool, error) {
 
 	now := time.Now()
 	t := &T{
-		Pod:        pod,
+		Pod:        &pod,
 		TaskInfo:   newTaskInfo("Pod"),
 		CreateTime: now,
 		podKey:     key,
