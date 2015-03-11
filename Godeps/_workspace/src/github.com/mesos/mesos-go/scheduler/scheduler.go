@@ -739,7 +739,7 @@ func (driver *MesosSchedulerDriver) doReliableRegistration(maxBackoff float64) {
 }
 
 // return true if we should attempt another registration later
-func (driver *MesosSchedulerDriver) registerOnce() (proceed bool) {
+func (driver *MesosSchedulerDriver) registerOnce() bool {
 
 	var (
 		failover bool
@@ -749,9 +749,9 @@ func (driver *MesosSchedulerDriver) registerOnce() (proceed bool) {
 		driver.lock.RLock()
 		defer driver.lock.RUnlock()
 
-		//TODO(jdef) also, check that we know which master to send to; if none, return false
-		if driver.stopped || driver.connected || (driver.credential != nil && !driver.authenticated) {
-			log.Infof("skipping registration request: stopped=%v, connected=%v, authenticated=%v", driver.stopped, driver.connected, driver.authenticated)
+		if driver.stopped || driver.connected || driver.MasterPid == nil || (driver.credential != nil && !driver.authenticated) {
+			log.V(1).Infof("skipping registration request: stopped=%v, connected=%v, authenticated=%v",
+				driver.stopped, driver.connected, driver.authenticated)
 			return false
 		}
 		failover = driver.failover
@@ -779,8 +779,9 @@ func (driver *MesosSchedulerDriver) registerOnce() (proceed bool) {
 				log.Errorf("failed to stop scheduler driver: %v", err)
 			}
 		}
+		return true
 	}
-	return
+	return false
 }
 
 //Join blocks until the driver is stopped.
