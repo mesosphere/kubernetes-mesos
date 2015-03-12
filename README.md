@@ -72,13 +72,9 @@ If you are not running in a production setting then a single etcd instance will 
 To run etcd, see [github.com/coreos/etcd][6], or run it via docker:
 
 ```shell
-$ export servicehost=...  # IP address of the framework host
+$ sudo docker run -d --hostname $(hostname -f) -p 4001:4001 -p 7001:7001 coreos/etcd
 
-$ sudo docker run -d --net=host coreos/etcd go-wrapper run \
-   -advertise-client-urls=http://${servicehost}:4001 \
-   -listen-client-urls=http://${servicehost}:4001 \
-   -initial-advertise-peer-urls=http://${servicehost}:7001 \
-   -listen-peer-urls=http://${servicehost}:7001
+$ export servicehost=...  # IP address of the framework host, perhaps $(hostname -i)
 ```
 
 #### kubernetes-mesos
