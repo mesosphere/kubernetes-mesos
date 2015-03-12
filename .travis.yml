@@ -1,0 +1,10 @@
+language: go
+
+go:
+  - 1.3
+  - 1.4
+
+install:
+  - if ! go get code.google.com/p/go.tools/cmd/cover; then go get golang.org/x/tools/cmd/cover; fi
+  - go get github.com/mattn/goveralls
+  - make
