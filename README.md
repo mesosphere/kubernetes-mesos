@@ -66,6 +66,10 @@ Once your Mesos cluster is up and running you're ready to fire up kubernetes-mes
 To keep things simple the following guide also assumes that you intend to run the mesos-master, etcd, and the kubernetes-mesos framework processes on the same host, exposed on an IP address referred to hereafter as `${servicehost}`.
 Alternatively, the instructions also support a multi-mesos-master cluster running with Zookeeper.
 
+```shell
+$ export servicehost=...  # IP address of the framework host, perhaps $(hostname -i)
+```
+
 #### etcd
 
 If you are not running in a production setting then a single etcd instance will suffice.
@@ -73,8 +77,6 @@ To run etcd, see [github.com/coreos/etcd][6], or run it via docker:
 
 ```shell
 $ sudo docker run -d --hostname $(hostname -f) -p 4001:4001 -p 7001:7001 coreos/etcd
-
-$ export servicehost=...  # IP address of the framework host, perhaps $(hostname -i)
 ```
 
 #### kubernetes-mesos
