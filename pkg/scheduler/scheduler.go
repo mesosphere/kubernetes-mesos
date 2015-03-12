@@ -481,6 +481,7 @@ func newReconciler(action func(bindings.SchedulerDriver, <-chan struct{}) error)
 	return &Reconciler{
 		Action:   action,
 		explicit: make(chan struct{}, 1),
+		implicit: make(chan struct{}, 1),
 	}
 }
 
@@ -513,11 +514,12 @@ func (r *Reconciler) Run(driver bindings.SchedulerDriver) {
 				// give preference to a pending request for explicit
 				break
 			default: // continue
-				log.Infof("implicit reconcile tasks")
+				log.Infoln("implicit reconcile tasks")
 				_, err := driver.ReconcileTasks([]*mesos.TaskStatus{})
 				if err != nil {
 					log.Errorf("failed trying to execute implicit reconciliation: %v", err)
 				}
+				goto slowdown
 			}
 		case <-r.done:
 			return
@@ -547,6 +549,7 @@ func (r *Reconciler) Run(driver bindings.SchedulerDriver) {
 				log.Errorf("reconciler action failed: %v", err)
 			}
 		}()
+	slowdown:
 		// don't allow reconciliation to run very frequently, either explicit or implicit
 		select {
 		case <-r.done:
