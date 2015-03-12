@@ -504,6 +504,7 @@ func (r *Reconciler) RequestImplicit() {
 // cancelled before the new reconciliation operation begins.
 func (r *Reconciler) Run(driver bindings.SchedulerDriver) {
 	var cancel, finished chan struct{}
+requestLoop:
 	for {
 		select {
 		case <-r.implicit:
@@ -511,12 +512,19 @@ func (r *Reconciler) Run(driver bindings.SchedulerDriver) {
 			case <-r.done:
 				return
 			case <-r.explicit:
-				// give preference to a pending request for explicit
-				break
+				break // give preference to a pending request for explicit
 			default: // continue
+				// don't run implicit reconciliation while explicit is ongoing
+				if finished != nil {
+					select {
+					case <-finished: // continue w/ implicit
+					default:
+						log.Infoln("skipping implicit reconcile because explicit reconcile is ongoing")
+						continue requestLoop
+					}
+				}
 				log.Infoln("implicit reconcile tasks")
-				_, err := driver.ReconcileTasks([]*mesos.TaskStatus{})
-				if err != nil {
+				if _, err := driver.ReconcileTasks([]*mesos.TaskStatus{}); err != nil {
 					log.Errorf("failed trying to execute implicit reconciliation: %v", err)
 				}
 				goto slowdown
@@ -536,6 +544,7 @@ func (r *Reconciler) Run(driver bindings.SchedulerDriver) {
 			case <-r.done:
 				return
 			case <-finished: // noop, expected
+			//TODO(jdef) extract constant
 			case <-time.After(30 * time.Second): // very unexpected
 				log.Error("reconciler action failed to stop upon cancellation")
 			}
@@ -554,6 +563,7 @@ func (r *Reconciler) Run(driver bindings.SchedulerDriver) {
 		select {
 		case <-r.done:
 			return
+		//TODO(jdef) extract constant
 		case <-time.After(15 * time.Second): // noop
 		}
 	} // for
