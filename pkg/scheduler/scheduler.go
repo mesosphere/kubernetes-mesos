@@ -289,7 +289,18 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 			log.V(2).Info("forwarding TASK_LOST message to executor %v on slave %v", taskStatus.ExecutorId, taskStatus.SlaveId)
 			data := fmt.Sprintf("task-lost:%s", task.ID) //TODO(jdef) use a real message type
 			if _, err := driver.SendFrameworkMessage(taskStatus.ExecutorId, taskStatus.SlaveId, data); err != nil {
-				log.Error(err)
+				log.Error(err.Error())
+			}
+		} else if (state == podtask.StateRunning || (state == podtask.StatePending && task.Pod != nil)) &&
+			taskStatus.GetReason() == mesos.TaskStatus_REASON_RECONCILIATION &&
+			taskStatus.GetSource() == mesos.TaskStatus_SOURCE_MASTER && taskStatus.SlaveId != nil {
+
+			// pod has task metadata that refers to a task that Mesos no longer knows about. Our only recourse
+			// is to destroy the pod and hope that there's a replication controller backing it up.
+			namespace, name := task.Pod.Namespace, task.Pod.Name
+			log.Warningf("deleting rogue pod %v/%v for lost task %v", namespace, name, task.ID)
+			if err := k.client.Pods(namespace).Delete(name); err != nil {
+				log.Errorf("failed to delete pod %v/%v for lost task %v: %v", namespace, name, task.ID, err)
 			}
 		}
 	}
@@ -332,8 +343,8 @@ func (k *KubernetesScheduler) reconcileNonTerminalTask(driver bindings.Scheduler
 			return
 		} else if err != nil {
 			//should kill the pod and the task
-			log.Errorf("failed to recover task from pod %v/%v: %v", namespace, name, err)
-			if err := k.client.Pods(namespace).Delete(name); err == nil {
+			log.Errorf("killing pod, failed to recover task from pod %v/%v: %v", namespace, name, err)
+			if err := k.client.Pods(namespace).Delete(name); err != nil {
 				log.Errorf("failed to delete pod %v/%v: %v", namespace, name, err)
 			}
 		} else {
