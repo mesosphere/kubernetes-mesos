@@ -462,40 +462,44 @@
 			"Rev": "6633656539c1639d9d78127b7d47c622b5d7b6dc"
 		},
 		{
+			"ImportPath": "github.com/kardianos/osext",
+			"Rev": "ccfcd0245381f0c94c68f50626665eed3c6b726a"
+		},
+		{
 			"ImportPath": "github.com/matttproud/golang_protobuf_extensions/ext",
 			"Rev": "ba7d65ac66e9da93a714ca18f6d1bc7a0c09100c"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/auth",
-			"Rev": "9237f12ac229506a6cad172284cb1c9c5bd945f9"
+			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/detector",
-			"Rev": "9237f12ac229506a6cad172284cb1c9c5bd945f9"
+			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/executor",
-			"Rev": "9237f12ac229506a6cad172284cb1c9c5bd945f9"
+			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/mesosproto",
-			"Rev": "9237f12ac229506a6cad172284cb1c9c5bd945f9"
+			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/mesosutil",
-			"Rev": "9237f12ac229506a6cad172284cb1c9c5bd945f9"
+			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/messenger",
-			"Rev": "9237f12ac229506a6cad172284cb1c9c5bd945f9"
+			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/scheduler",
-			"Rev": "9237f12ac229506a6cad172284cb1c9c5bd945f9"
+			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/upid",
-			"Rev": "9237f12ac229506a6cad172284cb1c9c5bd945f9"
+			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
 		},
 		{
 			"ImportPath": "github.com/mitchellh/goamz/aws",

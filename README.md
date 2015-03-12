@@ -101,7 +101,7 @@ $ export mesos_master=zk://${zkserver1}:2181,${zkserver2}:2181,${zkserver3}:2181
 Fire up the kubernetes-mesos framework components (yes, these are **all** required for a working framework):
 
 ```shell
-$ ./bin/kube-apiserver \
+$ ./bin/km apiserver \
   --address=${servicehost} \
   --mesos_master=${mesos_master} \
   --etcd_servers=http://${servicehost}:4001 \
@@ -109,16 +109,14 @@ $ ./bin/kube-apiserver \
   --port=8888 \
   --cloud_provider=mesos
 
-$ ./bin/k8sm-controller-manager \
+$ ./bin/km controller-manager \
   --master=$servicehost:8888 \
   --mesos_master=${mesos_master}
 
-$ ./bin/k8sm-scheduler \
+$ ./bin/km scheduler \
   --address=${servicehost} \
   --mesos_master=${mesos_master} \
   --etcd_servers=http://${servicehost}:4001 \
-  --executor_path=$(pwd)/bin/k8sm-executor \
-  --proxy_path=$(pwd)/bin/kube-proxy \
   --mesos_user=root \
   --api_servers=$servicehost:8888
 ```

@@ -33,9 +33,7 @@ func InstallDebugHandlers(l sync.Locker, reg Registry) {
 				}
 				offerId := ""
 				if task.Offer != nil {
-					if details := task.Offer.Details(); details != nil {
-						offerId = details.Id.GetValue()
-					}
+					offerId = task.Offer.Id()
 				}
 				_, err = io.WriteString(w, fmt.Sprintf("%v\t%v/%v\t%v\t%v\n", task.ID, podNamespace, podName, state, offerId))
 				return
