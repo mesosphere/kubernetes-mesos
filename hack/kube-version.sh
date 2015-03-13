@@ -108,18 +108,18 @@ kube::version::ldflags() {
 
   local -a ldflags=()
   if [[ -n ${KUBE_GIT_COMMIT-} ]]; then
-    ldflags+=(-X "${KUBE_GO_PACKAGE}/pkg/version.gitCommit" "${KUBE_GIT_COMMIT}")
-    ldflags+=(-X "${KUBE_GO_PACKAGE}/pkg/version.gitTreeState" "${KUBE_GIT_TREE_STATE}")
+    ldflags+=(-X "${K8SM_GO_PACKAGE}/pkg/version.gitCommit" "${KUBE_GIT_COMMIT}")
+    ldflags+=(-X "${K8SM_GO_PACKAGE}/pkg/version.gitTreeState" "${KUBE_GIT_TREE_STATE}")
   fi
 
   if [[ -n ${KUBE_GIT_VERSION-} ]]; then
-    ldflags+=(-X "${KUBE_GO_PACKAGE}/pkg/version.gitVersion" "${KUBE_GIT_VERSION}")
+    ldflags+=(-X "${K8SM_GO_PACKAGE}/pkg/version.gitVersion" "${KUBE_GIT_VERSION}")
   fi
 
   if [[ -n ${KUBE_GIT_MAJOR-} && -n ${KUBE_GIT_MINOR-} ]]; then
     ldflags+=(
-      -X "${KUBE_GO_PACKAGE}/pkg/version.gitMajor" "${KUBE_GIT_MAJOR}"
-      -X "${KUBE_GO_PACKAGE}/pkg/version.gitMinor" "${KUBE_GIT_MINOR}"
+      -X "${K8SM_GO_PACKAGE}/pkg/version.gitMajor" "${KUBE_GIT_MAJOR}"
+      -X "${K8SM_GO_PACKAGE}/pkg/version.gitMinor" "${KUBE_GIT_MINOR}"
     )
   fi
 
