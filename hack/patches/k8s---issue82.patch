@@ -1,0 +1,39 @@
+diff --git a/cmd/kube-apiserver/apiserver.go b/cmd/kube-apiserver/apiserver.go
+index 3e10d4c..9fc9229 100644
+--- a/cmd/kube-apiserver/apiserver.go
++++ b/cmd/kube-apiserver/apiserver.go
+@@ -21,7 +21,7 @@ package main
+ import (
+ 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/server"
+ 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+-	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
++	"github.com/mesosphere/kubernetes-mesos/pkg/version/verflag"
+ 
+ 	"github.com/spf13/pflag"
+ )
+diff --git a/cmd/kube-proxy/proxy.go b/cmd/kube-proxy/proxy.go
+index aa12616..ceb1701 100644
+--- a/cmd/kube-proxy/proxy.go
++++ b/cmd/kube-proxy/proxy.go
+@@ -19,7 +19,7 @@ package main
+ import (
+ 	"github.com/GoogleCloudPlatform/kubernetes/pkg/proxy/server"
+ 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+-	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
++	"github.com/mesosphere/kubernetes-mesos/pkg/version/verflag"
+ 
+ 	"github.com/spf13/pflag"
+ )
+diff --git a/pkg/hyperkube/hyperkube.go b/pkg/hyperkube/hyperkube.go
+index 895ed72..636c4b8 100644
+--- a/pkg/hyperkube/hyperkube.go
++++ b/pkg/hyperkube/hyperkube.go
+@@ -26,7 +26,7 @@ import (
+ 	"path"
+ 
+ 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+-	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
++	"github.com/mesosphere/kubernetes-mesos/pkg/version/verflag"
+ 
+ 	"github.com/spf13/pflag"
+ )

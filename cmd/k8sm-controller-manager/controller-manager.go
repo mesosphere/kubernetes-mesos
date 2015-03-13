@@ -22,8 +22,8 @@ package main
 
 import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
 	"github.com/mesosphere/kubernetes-mesos/pkg/controllermanager"
+	"github.com/mesosphere/kubernetes-mesos/pkg/version/verflag"
 	"github.com/spf13/pflag"
 )
 

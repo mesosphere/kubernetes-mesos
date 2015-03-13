@@ -22,7 +22,7 @@ LIB_DIRS := $(shell cd $(current_dir) && find ./pkg -type f -name '*.go'|sort|wh
 
 FRAMEWORK_LIB	:= ${LIB_DIRS:%=${K8SM_GO_PACKAGE}/%}
 
-KUBE_GIT_VERSION_FILE := $(current_dir)/.kube-version
+GIT_VERSION_FILE := $(current_dir)/.kube-version
 
 SHELL		:= /bin/bash
 
@@ -50,8 +50,8 @@ export SHELL
 export KUBE_GO_PACKAGE
 
 all: patch version
-	env GOPATH=$(BUILDDIR) go install -ldflags "$(shell cat $(KUBE_GIT_VERSION_FILE))" $(K8S_CMD)
-	env GOPATH=$(BUILDDIR) go install $(FRAMEWORK_FLAGS) $(FRAMEWORK_CMD)
+	env GOPATH=$(BUILDDIR) go install $(K8S_CMD)
+	env GOPATH=$(BUILDDIR) go install -ldflags "$(shell cat $(GIT_VERSION_FILE))" $(FRAMEWORK_FLAGS) $(FRAMEWORK_CMD)
 
 error:
 	echo -E "$@: ${MSG}" >&2
@@ -63,6 +63,7 @@ require-godep:
 require-vendor:
 
 clean:
+	rm -f $(GIT_VERSION_FILE)
 	test -n "$(BUILDDIR)" && rm -rf $(BUILDDIR)/*
 
 format:
@@ -99,9 +100,9 @@ prepare:
 patch: prepare $(PATCH_SCRIPT)
 	env GOPATH=$(BUILDDIR) $(PATCH_SCRIPT)
 
-version: $(KUBE_GIT_VERSION_FILE)
+version: $(GIT_VERSION_FILE)
 
-$(KUBE_GIT_VERSION_FILE):
+$(GIT_VERSION_FILE):
 	@(pkg="$(BUILDDIR)"; cd "$${pkg%%:*}/src/$(KUBE_GO_PACKAGE)" && \
 	  source $(current_dir)/hack/kube-version.sh && \
 	  KUBE_GO_PACKAGE=$(KUBE_GO_PACKAGE) kube::version::ldflags) >$@

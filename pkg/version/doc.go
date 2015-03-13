@@ -14,26 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// apiserver is the main api server and master for the cluster.
-// it is responsible for serving the cluster management API.
-package main
-
-import (
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
-	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/service"
-	"github.com/mesosphere/kubernetes-mesos/pkg/version/verflag"
-	"github.com/spf13/pflag"
-)
-
-func main() {
-	s := service.NewSchedulerServer()
-	s.AddFlags(pflag.CommandLine)
-
-	util.InitFlags()
-	util.InitLogs()
-	defer util.FlushLogs()
-
-	verflag.PrintAndExitIfRequested()
-
-	s.Run(nil, pflag.CommandLine.Args())
-}
+// Package version supplies version information collected at build time to
+// kubernetes components.
+package version
