@@ -245,11 +245,15 @@ func (k *KubernetesScheduler) OfferRescinded(driver bindings.SchedulerDriver, of
 // StatusUpdate is called when a status update message is sent to the scheduler.
 func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
 
-	metrics.StatusUpdates.WithLabelValues(
-		taskStatus.GetSource().String(),
-		taskStatus.GetReason().String(),
-		taskStatus.GetState().String(),
-	).Inc()
+	source, reason := "none", "none"
+	if taskStatus.Source != nil {
+		source = (*taskStatus.Source).String()
+	}
+	if taskStatus.Reason != nil {
+		reason = (*taskStatus.Reason).String()
+	}
+	taskState := taskStatus.GetState()
+	metrics.StatusUpdates.WithLabelValues(source, reason, taskState.String()).Inc()
 
 	//TODO(jdef) we're going to make changes to podtask.T objects in here and since the current TaskRegistry
 	//implementation is in-memory, and hands us pointers to shared objects, we need a critical section for this.
@@ -258,10 +262,10 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 
 	log.Infof("Received status update %v\n", taskStatus)
 
-	switch taskStatus.GetState() {
+	switch taskState {
 	case mesos.TaskState_TASK_RUNNING, mesos.TaskState_TASK_FINISHED, mesos.TaskState_TASK_STARTING, mesos.TaskState_TASK_STAGING:
 		if _, state := k.taskRegistry.UpdateStatus(taskStatus); state == podtask.StateUnknown {
-			if taskStatus.GetState() != mesos.TaskState_TASK_FINISHED {
+			if taskState != mesos.TaskState_TASK_FINISHED {
 				//TODO(jdef) what if I receive this after a TASK_LOST or TASK_KILLED?
 				//I don't want to reincarnate then..  TASK_LOST is a special case because
 				//the master is stateless and there are scenarios where I may get TASK_LOST
