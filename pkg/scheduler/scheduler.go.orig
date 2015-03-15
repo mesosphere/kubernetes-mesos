@@ -568,18 +568,15 @@ requestLoop:
 				log.Error("reconciler action failed to stop upon cancellation")
 			}
 		}
-		// copy 'finished' to 'fin' here in case we end up with simultaneous go-routines,
-		// if cancellation takes too long or fails - we don't want to close the same chan
-		// more than once
 		cancel = make(chan struct{})
 		finished = make(chan struct{})
-		go func(fin chan struct{}) {
-			defer close(fin)
+		go func() {
+			defer close(finished)
 			err := r.Action(driver, cancel)
 			if err != nil {
 				log.Errorf("reconciler action failed: %v", err)
 			}
-		}(finished)
+		}()
 	slowdown:
 		// don't allow reconciliation to run very frequently, either explicit or implicit
 		select {
