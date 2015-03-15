@@ -470,8 +470,7 @@ func (k *KubernetesScheduler) explicitlyReconcileTasks(driver bindings.Scheduler
 		}
 		select {
 		case <-cancel:
-			log.Warningf("reconciliation cancelled")
-			return nil //TODO(jdef) should probably return a cancelation error
+			return reconciliationCancelledErr
 		case <-time.After(backoff):
 			func() {
 				k.RLock()
@@ -488,6 +487,10 @@ func (k *KubernetesScheduler) explicitlyReconcileTasks(driver bindings.Scheduler
 	}
 	return nil
 }
+
+var (
+	reconciliationCancelledErr = fmt.Errorf("explicit task reconciliation cancelled")
+)
 
 type Reconciler struct {
 	Action   func(driver bindings.SchedulerDriver, cancel <-chan struct{}) error
@@ -527,6 +530,7 @@ requestLoop:
 	for {
 		select {
 		case <-r.implicit:
+			metrics.ReconciliationRequested.WithLabelValues("implicit").Inc()
 			select {
 			case <-r.done:
 				return
@@ -543,6 +547,7 @@ requestLoop:
 					}
 				}
 				log.Infoln("implicit reconcile tasks")
+				metrics.ReconciliationExecuted.WithLabelValues("implicit").Inc()
 				if _, err := driver.ReconcileTasks([]*mesos.TaskStatus{}); err != nil {
 					log.Errorf("failed trying to execute implicit reconciliation: %v", err)
 				}
@@ -551,6 +556,7 @@ requestLoop:
 		case <-r.done:
 			return
 		case <-r.explicit: // continue
+			metrics.ReconciliationRequested.WithLabelValues("explicit").Inc()
 		}
 
 		if cancel != nil {
@@ -574,9 +580,18 @@ requestLoop:
 		cancel = make(chan struct{})
 		finished = make(chan struct{})
 		go func(fin chan struct{}) {
+			startedAt := time.Now()
+			defer func() {
+				metrics.ReconciliationLatency.Observe(metrics.InMicroseconds(time.Since(startedAt)))
+			}()
+
+			metrics.ReconciliationExecuted.WithLabelValues("explicit").Inc()
 			defer close(fin)
 			err := r.Action(driver, cancel)
-			if err != nil {
+			if err == reconciliationCancelledErr {
+				metrics.ReconciliationCancelled.WithLabelValues("explicit").Inc()
+				log.Infoln(err.Error())
+			} else if err != nil {
 				log.Errorf("reconciler action failed: %v", err)
 			}
 		}(finished)
