@@ -20,6 +20,7 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/messages"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 )
 
@@ -243,6 +244,13 @@ func (k *KubernetesScheduler) OfferRescinded(driver bindings.SchedulerDriver, of
 
 // StatusUpdate is called when a status update message is sent to the scheduler.
 func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
+
+	metrics.StatusUpdates.WithLabelValues(
+		taskStatus.GetSource().String(),
+		taskStatus.GetReason().String(),
+		taskStatus.GetState().String(),
+	).Inc()
+
 	//TODO(jdef) we're going to make changes to podtask.T objects in here and since the current TaskRegistry
 	//implementation is in-memory, and hands us pointers to shared objects, we need a critical section for this.
 	k.Lock()
