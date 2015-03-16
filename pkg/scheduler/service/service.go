@@ -338,8 +338,7 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		log.Fatalf("failed to create mesos scheduler driver: %v", err)
 	}
 
-	pluginStart := make(chan struct{})
-	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(pluginStart))
+	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig())
 	if err = mesosPodScheduler.Init(driver, kpl); err != nil {
 		log.Fatalf("failed to initialize pod scheduler: %v", err)
 	}
@@ -347,21 +346,23 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 	schedulerProcess.Begin()
 
 	//TODO(jdef) get rid of this once we have true master election
-	schedulerProcess.Elected(driver)
-
-	//TODO(jdef) refactor this so that it runs upon the first successful registration
-	go util.Forever(func() {
-		log.V(1).Info("Starting HTTP interface")
-		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), nil))
-	}, 5*time.Second)
-
-	log.V(1).Info("Spinning up scheduling loop")
-	close(pluginStart) // signal the plugin to spin up its background procs
-	kpl.Run()
+	schedulerProcess.Elect(driver)
 
 	select {
+	case <-schedulerProcess.Elected():
+		go util.Forever(func() {
+			log.V(1).Info("Starting HTTP interface")
+			log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), nil))
+		}, 5*time.Second) // TODO(jdef) extract constant
+
+		log.V(1).Info("Spinning up scheduling loop")
+		kpl.Run()
+		select {
+		case <-schedulerProcess.Done():
+			log.Infof("scheduler process exited")
+		}
 	case <-schedulerProcess.Done():
-		log.Infof("scheduler process exited")
+		log.Infof("scheduler process exited abnormally, before election")
 	}
 
 	//TODO(jdef) failover: start a new scheduler process with the same FD's for stdio and http

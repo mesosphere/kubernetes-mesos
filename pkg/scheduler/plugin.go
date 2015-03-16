@@ -627,7 +627,7 @@ func (k *deleter) deleteOne(pod *Pod) error {
 }
 
 // Create creates a scheduler plugin and all supporting background functions.
-func (k *KubernetesScheduler) NewPluginConfig(startLatch <-chan struct{}) *PluginConfig {
+func (k *KubernetesScheduler) NewPluginConfig() *PluginConfig {
 
 	// Watch and queue pods that need scheduling.
 	updates := make(chan queue.Entry, defaultUpdatesBacklog)
@@ -653,6 +653,7 @@ func (k *KubernetesScheduler) NewPluginConfig(startLatch <-chan struct{}) *Plugi
 		},
 		qr: q,
 	}
+	startLatch := make(chan struct{})
 	go func() {
 		select {
 		case <-startLatch:
@@ -677,19 +678,21 @@ func (k *KubernetesScheduler) NewPluginConfig(startLatch <-chan struct{}) *Plugi
 			NextPod: q.yield,
 			Error:   eh.handleSchedulingError,
 		},
-		api:     kapi,
-		client:  k.client,
-		qr:      q,
-		deleter: podDeleter,
+		api:      kapi,
+		client:   k.client,
+		qr:       q,
+		deleter:  podDeleter,
+		starting: startLatch,
 	}
 }
 
 type PluginConfig struct {
 	*plugin.Config
-	api     SchedulerInterface
-	client  *client.Client
-	qr      *queuer
-	deleter *deleter
+	api      SchedulerInterface
+	client   *client.Client
+	qr       *queuer
+	deleter  *deleter
+	starting chan struct{} // startup latch
 }
 
 func NewPlugin(c *PluginConfig) PluginInterface {
@@ -699,15 +702,22 @@ func NewPlugin(c *PluginConfig) PluginInterface {
 		client:    c.client,
 		qr:        c.qr,
 		deleter:   c.deleter,
+		starting:  c.starting,
 	}
 }
 
 type schedulingPlugin struct {
 	*plugin.Scheduler
-	api     SchedulerInterface
-	client  *client.Client
-	qr      *queuer
-	deleter *deleter
+	api      SchedulerInterface
+	client   *client.Client
+	qr       *queuer
+	deleter  *deleter
+	starting chan struct{}
+}
+
+func (s *schedulingPlugin) Run() {
+	close(s.starting)
+	s.Scheduler.Run()
 }
 
 // this pod may be out of sync with respect to the API server registry:

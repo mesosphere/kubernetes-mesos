@@ -33,7 +33,8 @@ func (stage *stageType) get() stageType {
 type SchedulerProcess struct {
 	proc.Process
 	bindings.Scheduler
-	stage stageType
+	stage   stageType
+	elected chan struct{} // upon close we've been elected
 }
 
 func New(sched bindings.Scheduler) *SchedulerProcess {
@@ -41,6 +42,7 @@ func New(sched bindings.Scheduler) *SchedulerProcess {
 		Process:   proc.New(),
 		Scheduler: sched,
 		stage:     initStage,
+		elected:   make(chan struct{}),
 	}
 	return p
 }
@@ -57,6 +59,7 @@ func (stage stageType) DoLater(p *SchedulerProcess, a proc.Action) {
 
 func (self *SchedulerProcess) Begin() {
 	if (&self.stage).transition(initStage, standbyStage) {
+		log.Infoln("scheduler process entered standby stage")
 		self.Process.Begin()
 		//TODO(jdef) start election listener
 	} else {
@@ -67,17 +70,20 @@ func (self *SchedulerProcess) Begin() {
 func (self *SchedulerProcess) End() {
 	defer self.Process.End()
 	(&self.stage).set(finStage)
+	log.Infoln("scheduler process entered fin stage")
 }
 
-func (self *SchedulerProcess) Elected(drv bindings.SchedulerDriver) {
+func (self *SchedulerProcess) Elect(drv bindings.SchedulerDriver) {
 	standbyStage.DoLater(self, proc.Action(func() {
 		if !(&self.stage).transition(standbyStage, masterStage) {
 			log.Errorf("failed to transition from standby to master stage, aborting")
 			self.End()
 			return
 		}
+		log.Infoln("scheduler process entered master stage")
 		stat, err := drv.Start()
 		if stat == mesos.Status_DRIVER_RUNNING && err == nil {
+			close(self.elected)
 			go func() {
 				defer self.End()
 				_, err := drv.Join()
@@ -94,6 +100,10 @@ func (self *SchedulerProcess) Elected(drv bindings.SchedulerDriver) {
 		}
 		self.End()
 	}))
+}
+
+func (self *SchedulerProcess) Elected() <-chan struct{} {
+	return self.elected
 }
 
 func (self *SchedulerProcess) Registered(drv bindings.SchedulerDriver, fid *mesos.FrameworkID, mi *mesos.MasterInfo) {
