@@ -51,6 +51,7 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
 	sconfig "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/ha"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
 	"github.com/prometheus/client_golang/prometheus"
@@ -317,8 +318,9 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		log.Fatalf("Misconfigured mesos framework: %v", err)
 	}
 	masterUri := kmcloud.MasterURI()
+	schedulerProcess := ha.New(mesosPodScheduler)
 	dconfig := bindings.DriverConfig{
-		Scheduler:        mesosPodScheduler,
+		Scheduler:        schedulerProcess,
 		Framework:        info,
 		Master:           masterUri,
 		Credential:       cred,
@@ -342,23 +344,12 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		log.Fatalf("failed to initialize pod scheduler: %v", err)
 	}
 
-	if st, err := driver.Start(); err == nil {
-		if st != mesos.Status_DRIVER_RUNNING {
-			log.Fatalf("Scheduler driver failed to start, has status: %v", st)
-		}
-		go func() {
-			if st, err = driver.Join(); err != nil {
-				log.Fatal(err)
-			} else if st != mesos.Status_DRIVER_RUNNING {
-				log.Fatalf("Scheduler driver failed to join, has status: %v", st)
-			} else {
-				log.Fatalf("Driver stopped, aborting scheduler") //TODO(jdef) should probably exit(0) here?
-			}
-		}()
-	} else {
-		log.Fatalf("Failed to start driver: %v", err)
-	}
+	schedulerProcess.Begin()
 
+	//TODO(jdef) get rid of this once we have true master election
+	schedulerProcess.Elected(driver)
+
+	//TODO(jdef) refactor this so that it runs upon the first successful registration
 	go util.Forever(func() {
 		log.V(1).Info("Starting HTTP interface")
 		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), nil))
@@ -368,7 +359,13 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 	close(pluginStart) // signal the plugin to spin up its background procs
 	kpl.Run()
 
-	select {}
+	select {
+	case <-schedulerProcess.Done():
+		log.Infof("scheduler process exited")
+	}
+
+	//TODO(jdef) failover: start a new scheduler process with the same FD's for stdio and http
+	return nil
 }
 
 func (s *SchedulerServer) buildFrameworkInfo(client tools.EtcdClient) (info *mesos.FrameworkInfo, cred *mesos.Credential, err error) {
