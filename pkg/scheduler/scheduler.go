@@ -112,6 +112,7 @@ func New(config Config) *KubernetesScheduler {
 		reconcileInterval: config.ReconcileInterval,
 		offers: offers.CreateRegistry(offers.RegistryConfig{
 			DeclineOffer: func(id string) error {
+				//TODO(jdef) only decline offers if we're connected/registered
 				offerId := mutil.NewOfferID(id)
 				filters := &mesos.Filters{}
 				_, err := k.driver.DeclineOffer(offerId, filters)
@@ -529,6 +530,7 @@ func (r *Reconciler) RequestImplicit() {
 // if reconciliation is requested while another is in progress, the in-progress operation will be
 // cancelled before the new reconciliation operation begins.
 func (r *Reconciler) Run(driver bindings.SchedulerDriver) {
+	//TODO(jdef) only reconcile if we're connected/registered
 	var cancel, finished chan struct{}
 requestLoop:
 	for {
