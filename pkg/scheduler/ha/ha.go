@@ -33,8 +33,9 @@ func (stage *stageType) get() stageType {
 type SchedulerProcess struct {
 	proc.Process
 	bindings.Scheduler
-	stage   stageType
-	elected chan struct{} // upon close we've been elected
+	stage    stageType
+	elected  chan struct{} // upon close we've been elected
+	failover chan struct{} // closed indicates that we should failover upon End()
 }
 
 func New(sched bindings.Scheduler) *SchedulerProcess {
@@ -43,6 +44,7 @@ func New(sched bindings.Scheduler) *SchedulerProcess {
 		Scheduler: sched,
 		stage:     initStage,
 		elected:   make(chan struct{}),
+		failover:  make(chan struct{}),
 	}
 	return p
 }
@@ -104,6 +106,10 @@ func (self *SchedulerProcess) Elect(drv bindings.SchedulerDriver) {
 
 func (self *SchedulerProcess) Elected() <-chan struct{} {
 	return self.elected
+}
+
+func (self *SchedulerProcess) Failover() <-chan struct{} {
+	return self.failover
 }
 
 func (self *SchedulerProcess) Registered(drv bindings.SchedulerDriver, fid *mesos.FrameworkID, mi *mesos.MasterInfo) {

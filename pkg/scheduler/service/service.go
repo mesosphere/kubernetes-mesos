@@ -22,9 +22,13 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
+	"os/signal"
 	"os/user"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	_ "github.com/mesosphere/kubernetes-mesos/pkg/profile"
@@ -88,6 +92,7 @@ type SchedulerServer struct {
 	DriverPort           uint
 	HostnameOverride     string
 	ReconcileInterval    int64
+	Graceful             bool
 }
 
 // NewSchedulerServer creates a new SchedulerServer with default parameters
@@ -146,6 +151,7 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.HostnameOverride, "hostname_override", s.HostnameOverride, "If non-empty, will use this string as identification instead of the actual hostname.")
 	fs.IntVar(&s.ExecutorLogV, "executor_logv", s.ExecutorLogV, "Logging verbosity of spawned executor processes.")
 	fs.Int64Var(&s.ReconcileInterval, "reconcile_interval", s.ReconcileInterval, "Interval at which to execute task reconciliation, in sec. Zero disables.")
+	fs.BoolVar(&s.Graceful, "graceful", s.Graceful, "Indicator of a graceful failover, intended for internal use only.")
 }
 
 // returns (downloadURI, basename(path))
@@ -240,7 +246,7 @@ func (s *SchedulerServer) prepareExecutorInfo(hks *hyperkube.Server) *mesos.Exec
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--auth_path=%s", basename))
 	}
 
-	log.V(1).Infof("prepared executor command '%v' with args '+%v'", ci.Value, ci.Arguments)
+	log.V(1).Infof("prepared executor command '%+v' with args '%+v'", ci.Value, ci.Arguments)
 
 	// Create mesos scheduler driver.
 	return &mesos.ExecutorInfo{
@@ -348,6 +354,9 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 	//TODO(jdef) get rid of this once we have true master election
 	schedulerProcess.Elect(driver)
 
+	failoverSignal := make(chan os.Signal, 1)
+	signal.Notify(failoverSignal, syscall.SIGUSR1)
+
 	select {
 	case <-schedulerProcess.Elected():
 		go util.Forever(func() {
@@ -358,15 +367,91 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		log.V(1).Info("Spinning up scheduling loop")
 		kpl.Run()
 		select {
+		case <-failoverSignal:
+			log.Infoln("received failover signal")
+			goto doFailover
+		case <-schedulerProcess.Failover():
+			goto doFailover
 		case <-schedulerProcess.Done():
-			log.Infof("scheduler process exited")
+			//TODO(jdef) should probably WARN here in HA mode
+			log.Infof("scheduler process exited without failover")
 		}
 	case <-schedulerProcess.Done():
-		log.Infof("scheduler process exited abnormally, before election")
+		log.Fatalf("scheduler process exited abnormally, before election")
+	}
+	os.Exit(0)
+
+doFailover:
+	if err := s.failover(driver, hks); err != nil {
+		schedulerProcess.End()
+		log.Fatalf("failed to failover, scheduler will terminate: %v", err)
 	}
 
-	//TODO(jdef) failover: start a new scheduler process with the same FD's for stdio and http
-	return nil
+	select {} // will never arrive here
+}
+
+func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks *hyperkube.Server) error {
+	stat, err := driver.Stop(true)
+	if stat != mesos.Status_DRIVER_STOPPED {
+		return fmt.Errorf("failed to stop driver for failover, received unexpected status code: %v", stat)
+	} else if err != nil {
+		return err
+	}
+
+	binary, err := osext.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to locate scheduler binary, failover aborted: %v", err)
+	}
+
+	// there's no guarantee that all goroutines are actually programmed intelligently with 'done'
+	// signals, so we'll need to restart if we want to really stop everything
+
+	// run the same command that we were launched with
+	//TODO(jdef) assumption here is that the sheduler is the only service running in this process, we should probably validate that somehow
+	args := []string{}
+	flags := pflag.CommandLine
+	if hks != nil {
+		args = append(args, hks.Name())
+		flags = hks.Flags()
+	}
+	flags.Visit(func(flag *pflag.Flag) {
+		if flag.Name != "api_servers" && flag.Name != "etcd_servers" {
+			args = append(args, fmt.Sprintf("--%s=%s", flag.Name, flag.Value.String()))
+		}
+	})
+	if !s.Graceful {
+		args = append(args, "--graceful")
+	}
+	if len(s.APIServerList) > 0 {
+		args = append(args, "--api_servers="+strings.Join(s.APIServerList, ","))
+	}
+	if len(s.EtcdServerList) > 0 {
+		args = append(args, "--etcd_servers="+strings.Join(s.EtcdServerList, ","))
+	}
+	args = append(args, flags.Args()...)
+
+	log.V(1).Infof("spawning scheduler for graceful failover: %s %+v", binary, args)
+
+	cmd := exec.Command(binary, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true, // disown the spawned scheduler
+	}
+
+	// TODO(jdef) pass in a pipe FD so that we can block, waiting for the child proc to be read
+	//cmd.ExtraFiles = []*os.File{}
+
+	exitcode := 0
+	log.Flush() // TODO(jdef) it would be really nice to ensure that no one else in our process was still logging
+	if err := cmd.Start(); err != nil {
+		//log to stdtout here to avoid conflicts with normal stderr logging
+		fmt.Fprintf(os.Stdout, "failed to spawn failover process: %v\n", err)
+		os.Exit(1)
+	}
+	os.Exit(exitcode)
+	select {} // will never reach here
 }
 
 func (s *SchedulerServer) buildFrameworkInfo(client tools.EtcdClient) (info *mesos.FrameworkInfo, cred *mesos.Credential, err error) {
