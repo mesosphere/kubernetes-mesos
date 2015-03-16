@@ -112,7 +112,6 @@ func New(config Config) *KubernetesScheduler {
 		reconcileInterval: config.ReconcileInterval,
 		offers: offers.CreateRegistry(offers.RegistryConfig{
 			DeclineOffer: func(id string) error {
-				//TODO(jdef) only decline offers if we're connected/registered
 				offerId := mutil.NewOfferID(id)
 				filters := &mesos.Filters{}
 				_, err := k.driver.DeclineOffer(offerId, filters)
@@ -246,15 +245,11 @@ func (k *KubernetesScheduler) OfferRescinded(driver bindings.SchedulerDriver, of
 // StatusUpdate is called when a status update message is sent to the scheduler.
 func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
 
-	source, reason := "none", "none"
-	if taskStatus.Source != nil {
-		source = (*taskStatus.Source).String()
-	}
-	if taskStatus.Reason != nil {
-		reason = (*taskStatus.Reason).String()
-	}
-	taskState := taskStatus.GetState()
-	metrics.StatusUpdates.WithLabelValues(source, reason, taskState.String()).Inc()
+	metrics.StatusUpdates.WithLabelValues(
+		taskStatus.GetSource().String(),
+		taskStatus.GetReason().String(),
+		taskStatus.GetState().String(),
+	).Inc()
 
 	//TODO(jdef) we're going to make changes to podtask.T objects in here and since the current TaskRegistry
 	//implementation is in-memory, and hands us pointers to shared objects, we need a critical section for this.
@@ -263,10 +258,10 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 
 	log.Infof("Received status update %v\n", taskStatus)
 
-	switch taskState {
+	switch taskStatus.GetState() {
 	case mesos.TaskState_TASK_RUNNING, mesos.TaskState_TASK_FINISHED, mesos.TaskState_TASK_STARTING, mesos.TaskState_TASK_STAGING:
 		if _, state := k.taskRegistry.UpdateStatus(taskStatus); state == podtask.StateUnknown {
-			if taskState != mesos.TaskState_TASK_FINISHED {
+			if taskStatus.GetState() != mesos.TaskState_TASK_FINISHED {
 				//TODO(jdef) what if I receive this after a TASK_LOST or TASK_KILLED?
 				//I don't want to reincarnate then..  TASK_LOST is a special case because
 				//the master is stateless and there are scenarios where I may get TASK_LOST
@@ -475,7 +470,8 @@ func (k *KubernetesScheduler) explicitlyReconcileTasks(driver bindings.Scheduler
 		}
 		select {
 		case <-cancel:
-			return reconciliationCancelledErr
+			log.Warningf("reconciliation cancelled")
+			return nil //TODO(jdef) should probably return a cancelation error
 		case <-time.After(backoff):
 			func() {
 				k.RLock()
@@ -492,10 +488,6 @@ func (k *KubernetesScheduler) explicitlyReconcileTasks(driver bindings.Scheduler
 	}
 	return nil
 }
-
-var (
-	reconciliationCancelledErr = fmt.Errorf("explicit task reconciliation cancelled")
-)
 
 type Reconciler struct {
 	Action   func(driver bindings.SchedulerDriver, cancel <-chan struct{}) error
@@ -530,13 +522,11 @@ func (r *Reconciler) RequestImplicit() {
 // if reconciliation is requested while another is in progress, the in-progress operation will be
 // cancelled before the new reconciliation operation begins.
 func (r *Reconciler) Run(driver bindings.SchedulerDriver) {
-	//TODO(jdef) only reconcile if we're connected/registered
 	var cancel, finished chan struct{}
 requestLoop:
 	for {
 		select {
 		case <-r.implicit:
-			metrics.ReconciliationRequested.WithLabelValues("implicit").Inc()
 			select {
 			case <-r.done:
 				return
@@ -553,7 +543,6 @@ requestLoop:
 					}
 				}
 				log.Infoln("implicit reconcile tasks")
-				metrics.ReconciliationExecuted.WithLabelValues("implicit").Inc()
 				if _, err := driver.ReconcileTasks([]*mesos.TaskStatus{}); err != nil {
 					log.Errorf("failed trying to execute implicit reconciliation: %v", err)
 				}
@@ -562,7 +551,6 @@ requestLoop:
 		case <-r.done:
 			return
 		case <-r.explicit: // continue
-			metrics.ReconciliationRequested.WithLabelValues("explicit").Inc()
 		}
 
 		if cancel != nil {
@@ -580,27 +568,15 @@ requestLoop:
 				log.Error("reconciler action failed to stop upon cancellation")
 			}
 		}
-		// copy 'finished' to 'fin' here in case we end up with simultaneous go-routines,
-		// if cancellation takes too long or fails - we don't want to close the same chan
-		// more than once
 		cancel = make(chan struct{})
 		finished = make(chan struct{})
-		go func(fin chan struct{}) {
-			startedAt := time.Now()
-			defer func() {
-				metrics.ReconciliationLatency.Observe(metrics.InMicroseconds(time.Since(startedAt)))
-			}()
-
-			metrics.ReconciliationExecuted.WithLabelValues("explicit").Inc()
-			defer close(fin)
+		go func() {
+			defer close(finished)
 			err := r.Action(driver, cancel)
-			if err == reconciliationCancelledErr {
-				metrics.ReconciliationCancelled.WithLabelValues("explicit").Inc()
-				log.Infoln(err.Error())
-			} else if err != nil {
+			if err != nil {
 				log.Errorf("reconciler action failed: %v", err)
 			}
-		}(finished)
+		}()
 	slowdown:
 		// don't allow reconciliation to run very frequently, either explicit or implicit
 		select {
