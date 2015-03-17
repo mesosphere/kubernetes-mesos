@@ -155,6 +155,13 @@ func defaultBindingAddress() string {
 }
 
 func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, hks *hyperkube.Server, finished chan struct{}) (server.KubeletBootstrap, *kconfig.PodConfig, error) {
+
+	// cache this for later use
+	binary, err := osext.Executable()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to determine currently running executable: %v", err)
+	}
+
 	watch := kubelet.SetupEventSending(kc.KubeClient, kc.Hostname)
 	pc := kconfig.NewPodConfig(kconfig.PodConfigNotificationSnapshotAndUpdates)
 	updates := pc.Channel(MESOS_CFG_SOURCE)
@@ -182,6 +189,7 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, 
 	if err != nil {
 		return nil, nil, err
 	}
+
 	k := &kubeletExecutor{
 		Kubelet:                kubelet,
 		finished:               finished,
@@ -196,6 +204,7 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, 
 		totalMaxDeadContainers: ks.TotalMaxDeadContainers,
 		dockerClient:           kc.DockerClient,
 		hks:                    hks,
+		executable:             binary,
 	}
 
 	exec := executor.New(k.Kubelet, updates, MESOS_CFG_SOURCE, kc.KubeClient, watch, kc.DockerClient)
@@ -238,6 +247,7 @@ type kubeletExecutor struct {
 	totalMaxDeadContainers uint
 	dockerClient           dockertools.DockerInterface
 	hks                    *hyperkube.Server
+	executable             string // path to binary of the currently executing process
 }
 
 func (kl *kubeletExecutor) ListenAndServe(address net.IP, port uint, enableDebuggingHandlers bool) {
@@ -283,11 +293,9 @@ func (kl *kubeletExecutor) runProxyService() {
 			log.Errorf("failed to locate proxy executable at '%v' and km not present: %v", binary, err)
 			return
 		}
-		log.V(1).Infof("using km proxy service")
-		if binary, err = osext.Executable(); err != nil {
-			log.Errorf("failed to run proxy, could not determine currently running executable: %v", err)
-		}
+		binary = kl.executable
 		args = append(args, KM_PROXY)
+		log.V(1).Infof("attempting to using km proxy service")
 	} else if err != nil {
 		log.Errorf("failure while attempting to locate proxy executable: %v", err)
 		return

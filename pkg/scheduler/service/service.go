@@ -93,6 +93,7 @@ type SchedulerServer struct {
 	HostnameOverride     string
 	ReconcileInterval    int64
 	Graceful             bool
+	executable           string // path to the binary running this service
 }
 
 // NewSchedulerServer creates a new SchedulerServer with default parameters
@@ -195,10 +196,8 @@ func (s *SchedulerServer) prepareExecutorInfo(hks *hyperkube.Server) *mesos.Exec
 		ci.Value = proto.String(fmt.Sprintf("./%s", executorCmd))
 	} else if _, err := hks.FindServer(KM_EXECUTOR); err != nil {
 		log.Fatalf("either run this scheduler via km or else --executor_path is required: %v", err)
-	} else if filename, err := osext.Executable(); err != nil {
-		log.Fatalf("failed to determine path to currently running executable: %v", err)
 	} else {
-		uri, kmCmd := s.serveExecutorArtifact(filename)
+		uri, kmCmd := s.serveExecutorArtifact(s.executable)
 		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(true)})
 		ci.Value = proto.String(fmt.Sprintf("./%s", kmCmd))
 		ci.Arguments = append(ci.Arguments, KM_EXECUTOR)
@@ -342,6 +341,15 @@ doFailover:
 }
 
 func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess, *bindings.DriverConfig, scheduler.PluginInterface, tools.EtcdClient) {
+
+	// cache this for later use. also useful in case the original binary gets deleted, e.g.
+	// during upgrades, development deployments, etc.
+	if filename, err := osext.Executable(); err != nil {
+		log.Fatalf("failed to determine path to currently running executable: %v", err)
+	} else {
+		s.executable = filename
+	}
+
 	metrics.Register()
 	http.Handle("/metrics", prometheus.Handler())
 
@@ -411,11 +419,6 @@ func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks *hyperku
 		return err
 	}
 
-	binary, err := osext.Executable()
-	if err != nil {
-		return fmt.Errorf("failed to locate scheduler binary, failover aborted: %v", err)
-	}
-
 	// there's no guarantee that all goroutines are actually programmed intelligently with 'done'
 	// signals, so we'll need to restart if we want to really stop everything
 
@@ -443,9 +446,9 @@ func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks *hyperku
 	}
 	args = append(args, flags.Args()...)
 
-	log.V(1).Infof("spawning scheduler for graceful failover: %s %+v", binary, args)
+	log.V(1).Infof("spawning scheduler for graceful failover: %s %+v", s.executable, args)
 
-	cmd := exec.Command(binary, args...)
+	cmd := exec.Command(s.executable, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
