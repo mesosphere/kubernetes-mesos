@@ -33,6 +33,7 @@ import (
 
 	_ "github.com/mesosphere/kubernetes-mesos/pkg/profile"
 
+	"code.google.com/p/go-uuid/uuid"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
@@ -52,9 +53,10 @@ import (
 	mutil "github.com/mesos/mesos-go/mesosutil"
 	bindings "github.com/mesos/mesos-go/scheduler"
 	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
-	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
+	"github.com/mesosphere/kubernetes-mesos/pkg/election"
+	execcfg "github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
-	sconfig "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
+	schedcfg "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/ha"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
@@ -93,6 +95,8 @@ type SchedulerServer struct {
 	HostnameOverride     string
 	ReconcileInterval    int64
 	Graceful             bool
+	FrameworkName        string
+	HA                   bool
 	executable           string // path to the binary running this service
 }
 
@@ -107,6 +111,8 @@ func NewSchedulerServer() *SchedulerServer {
 		MesosUser:         defaultMesosUser,
 		ReconcileInterval: defaultReconcileInterval,
 		Checkpoint:        true,
+		FrameworkName:     schedcfg.DefaultInfoName,
+		HA:                true,
 	}
 	return &s
 }
@@ -153,6 +159,8 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&s.ExecutorLogV, "executor_logv", s.ExecutorLogV, "Logging verbosity of spawned executor processes.")
 	fs.Int64Var(&s.ReconcileInterval, "reconcile_interval", s.ReconcileInterval, "Interval at which to execute task reconciliation, in sec. Zero disables.")
 	fs.BoolVar(&s.Graceful, "graceful", s.Graceful, "Indicator of a graceful failover, intended for internal use only.")
+	fs.BoolVar(&s.HA, "ha", s.HA, "Run the scheduler in high availability mode with leader election.")
+	fs.StringVar(&s.FrameworkName, "framework_name", s.FrameworkName, "The framework name to register with Mesos.")
 }
 
 // returns (downloadURI, basename(path))
@@ -249,10 +257,10 @@ func (s *SchedulerServer) prepareExecutorInfo(hks *hyperkube.Server) *mesos.Exec
 
 	// Create mesos scheduler driver.
 	return &mesos.ExecutorInfo{
-		ExecutorId: &mesos.ExecutorID{Value: proto.String(config.DefaultInfoID)},
+		ExecutorId: &mesos.ExecutorID{Value: proto.String(execcfg.DefaultInfoID)},
 		Command:    ci,
-		Name:       proto.String(config.DefaultInfoName),
-		Source:     proto.String(config.DefaultInfoSource),
+		Name:       proto.String(execcfg.DefaultInfoName),
+		Source:     proto.String(execcfg.DefaultInfoSource),
 	}
 }
 
@@ -287,12 +295,15 @@ func (s *SchedulerServer) createAPIServerClient() (*client.Client, error) {
 }
 
 func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
-	schedulerProcess, dconfig, kpl, etcdClient := s.bootstrap(hks)
+	schedulerProcess, dconfig, kpl, etcdClient, deferredInit := s.bootstrap(hks)
 	schedulerProcess.Begin()
 
-	//TODO(jdef) implement true master election
 	var driver bindings.SchedulerDriver
-	schedulerProcess.Elect(func() (drv bindings.SchedulerDriver, err error) {
+	driverFactory := ha.DriverFactory(func() (drv bindings.SchedulerDriver, err error) {
+		err = deferredInit()
+		if err != nil {
+			return
+		}
 		// defer obtaining framework ID to prevent multiple schedulers
 		// from overwriting each other's framework IDs
 		frameworkId, err := s.fetchFrameworkID(etcdClient)
@@ -303,6 +314,15 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		}
 		return
 	})
+	if s.HA {
+		srv := ha.NewCandidate(schedulerProcess, driverFactory)
+		path := fmt.Sprintf(meta.DefaultElectionFormat, s.FrameworkName)
+		sid := uuid.New()
+		log.Infof("registering for election at %v with id %v", path, sid)
+		go election.Notify(election.NewEtcdMasterElector(etcdClient), path, sid, srv)
+	} else {
+		schedulerProcess.Elect(driverFactory)
+	}
 
 	failoverSignal := make(chan os.Signal, 1)
 	signal.Notify(failoverSignal, syscall.SIGUSR1)
@@ -320,11 +340,14 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		case <-failoverSignal:
 			log.Infoln("received failover signal")
 			goto doFailover
-		case <-schedulerProcess.Failover():
-			goto doFailover
 		case <-schedulerProcess.Done():
-			//TODO(jdef) should probably WARN here in HA mode
-			log.Infof("scheduler process exited without failover")
+			select {
+			case <-schedulerProcess.Failover():
+				goto doFailover
+			default:
+				//TODO(jdef) should probably WARN here in HA mode
+				log.Infof("scheduler process exited without failover")
+			}
 		}
 	case <-schedulerProcess.Done():
 		log.Fatalf("scheduler process exited abnormally, before election")
@@ -340,7 +363,7 @@ doFailover:
 	select {} // will never arrive here
 }
 
-func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess, *bindings.DriverConfig, scheduler.PluginInterface, tools.EtcdClient) {
+func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess, *bindings.DriverConfig, scheduler.PluginInterface, tools.EtcdClient, func() error) {
 
 	// cache this for later use. also useful in case the original binary gets deleted, e.g.
 	// during upgrades, development deployments, etc.
@@ -348,6 +371,11 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 		log.Fatalf("failed to determine path to currently running executable: %v", err)
 	} else {
 		s.executable = filename
+	}
+
+	s.FrameworkName = strings.TrimSpace(s.FrameworkName)
+	if s.FrameworkName == "" {
+		log.Fatalf("framework_name must be a non-empty string")
 	}
 
 	metrics.Register()
@@ -381,11 +409,6 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 		ReconcileInterval: s.ReconcileInterval,
 	})
 
-	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig())
-	if err = mesosPodScheduler.Init(kpl); err != nil {
-		log.Fatalf("failed to initialize pod scheduler: %v", err)
-	}
-
 	schedulerProcess := ha.New(mesosPodScheduler)
 	masterUri := kmcloud.MasterURI()
 	info, cred, err := s.buildFrameworkInfo()
@@ -408,7 +431,13 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 		},
 	}
 
-	return schedulerProcess, dconfig, kpl, etcdClient
+	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig())
+	return schedulerProcess, dconfig, kpl, etcdClient, func() (err error) {
+		if err = mesosPodScheduler.Init(kpl); err != nil {
+			err = fmt.Errorf("failed to initialize pod scheduler: %v", err)
+		}
+		return
+	}
 }
 
 func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks *hyperkube.Server) error {
@@ -477,7 +506,7 @@ func (s *SchedulerServer) buildFrameworkInfo() (info *mesos.FrameworkInfo, cred 
 	}
 	log.V(2).Infof("Framework configured with mesos user %v", username)
 	info = &mesos.FrameworkInfo{
-		Name:       proto.String(sconfig.DefaultInfoName),
+		Name:       proto.String(s.FrameworkName),
 		User:       proto.String(username),
 		Checkpoint: proto.Bool(s.Checkpoint),
 	}

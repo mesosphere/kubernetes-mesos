@@ -9,6 +9,8 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/proc"
 )
 
+type DriverFactory func() (bindings.SchedulerDriver, error)
+
 type stageType int32
 
 const (
@@ -75,7 +77,7 @@ func (self *SchedulerProcess) End() {
 	log.Infoln("scheduler process entered fin stage")
 }
 
-func (self *SchedulerProcess) Elect(fetchDriver func() (bindings.SchedulerDriver, error)) {
+func (self *SchedulerProcess) Elect(newDriver DriverFactory) {
 	standbyStage.DoLater(self, proc.Action(func() {
 		if !(&self.stage).transition(standbyStage, masterStage) {
 			log.Errorf("failed to transition from standby to master stage, aborting")
@@ -83,7 +85,7 @@ func (self *SchedulerProcess) Elect(fetchDriver func() (bindings.SchedulerDriver
 			return
 		}
 		log.Infoln("scheduler process entered master stage")
-		drv, err := fetchDriver()
+		drv, err := newDriver()
 		if err != nil {
 			log.Errorf("failed to fetch scheduler driver: %v", err)
 			self.End()
