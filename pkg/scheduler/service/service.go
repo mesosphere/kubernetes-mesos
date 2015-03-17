@@ -288,71 +288,22 @@ func (s *SchedulerServer) createAPIServerClient() (*client.Client, error) {
 }
 
 func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
-
-	metrics.Register()
-	http.Handle("/metrics", prometheus.Handler())
-
-	etcdClient := kubelet.EtcdClientOrDie(s.EtcdServerList, s.EtcdConfigFile)
-	if etcdClient == nil {
-		log.Fatalf("specify either --etcd_servers or --etcd_config")
-	}
-
-	if len(s.APIServerList) < 1 {
-		log.Fatal("No api servers specified.")
-	}
-
-	client, err := s.createAPIServerClient()
-	if err != nil {
-		log.Fatalf("Unable to make apiserver client: %v", err)
-	}
-
-	// Send events to APIserver if there is a client.
-	record.StartRecording(client.Events(""), api.EventSource{Component: "scheduler"})
-
-	// Create mesos scheduler driver.
-	executor := s.prepareExecutorInfo(hks)
-	mesosPodScheduler := scheduler.New(scheduler.Config{
-		Executor:          executor,
-		ScheduleFunc:      scheduler.FCFSScheduleFunc,
-		Client:            client,
-		EtcdClient:        etcdClient,
-		FailoverTimeout:   s.FailoverTimeout,
-		ReconcileInterval: s.ReconcileInterval,
-	})
-	info, cred, err := s.buildFrameworkInfo(etcdClient)
-	if err != nil {
-		log.Fatalf("Misconfigured mesos framework: %v", err)
-	}
-	masterUri := kmcloud.MasterURI()
-	schedulerProcess := ha.New(mesosPodScheduler)
-	dconfig := bindings.DriverConfig{
-		Scheduler:        schedulerProcess,
-		Framework:        info,
-		Master:           masterUri,
-		Credential:       cred,
-		BindingAddress:   net.IP(s.Address),
-		BindingPort:      uint16(s.DriverPort),
-		HostnameOverride: s.HostnameOverride,
-		WithAuthContext: func(ctx context.Context) context.Context {
-			ctx = auth.WithLoginProvider(ctx, s.MesosAuthProvider)
-			ctx = sasl.WithBindingAddress(ctx, net.IP(s.Address))
-			return ctx
-		},
-	}
-	driver, err := bindings.NewMesosSchedulerDriver(dconfig)
-	if err != nil {
-		log.Fatalf("failed to create mesos scheduler driver: %v", err)
-	}
-
-	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig())
-	if err = mesosPodScheduler.Init(driver, kpl); err != nil {
-		log.Fatalf("failed to initialize pod scheduler: %v", err)
-	}
-
+	schedulerProcess, dconfig, kpl, etcdClient := s.bootstrap(hks)
 	schedulerProcess.Begin()
 
-	//TODO(jdef) get rid of this once we have true master election
-	schedulerProcess.Elect(driver)
+	//TODO(jdef) implement true master election
+	var driver bindings.SchedulerDriver
+	schedulerProcess.Elect(func() (drv bindings.SchedulerDriver, err error) {
+		// defer obtaining framework ID to prevent multiple schedulers
+		// from overwriting each other's framework IDs
+		frameworkId, err := s.fetchFrameworkID(etcdClient)
+		if err == nil {
+			dconfig.Framework.Id = frameworkId
+			drv, err = bindings.NewMesosSchedulerDriver(*dconfig)
+			driver = drv
+		}
+		return
+	})
 
 	failoverSignal := make(chan os.Signal, 1)
 	signal.Notify(failoverSignal, syscall.SIGUSR1)
@@ -388,6 +339,68 @@ doFailover:
 	}
 
 	select {} // will never arrive here
+}
+
+func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess, *bindings.DriverConfig, scheduler.PluginInterface, tools.EtcdClient) {
+	metrics.Register()
+	http.Handle("/metrics", prometheus.Handler())
+
+	etcdClient := kubelet.EtcdClientOrDie(s.EtcdServerList, s.EtcdConfigFile)
+	if etcdClient == nil {
+		log.Fatalf("specify either --etcd_servers or --etcd_config")
+	}
+
+	if len(s.APIServerList) < 1 {
+		log.Fatal("No api servers specified.")
+	}
+
+	client, err := s.createAPIServerClient()
+	if err != nil {
+		log.Fatalf("Unable to make apiserver client: %v", err)
+	}
+
+	// Send events to APIserver if there is a client.
+	record.StartRecording(client.Events(""), api.EventSource{Component: "scheduler"})
+
+	// Create mesos scheduler driver.
+	executor := s.prepareExecutorInfo(hks)
+	mesosPodScheduler := scheduler.New(scheduler.Config{
+		Executor:          executor,
+		ScheduleFunc:      scheduler.FCFSScheduleFunc,
+		Client:            client,
+		EtcdClient:        etcdClient,
+		FailoverTimeout:   s.FailoverTimeout,
+		ReconcileInterval: s.ReconcileInterval,
+	})
+
+	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig())
+	if err = mesosPodScheduler.Init(kpl); err != nil {
+		log.Fatalf("failed to initialize pod scheduler: %v", err)
+	}
+
+	schedulerProcess := ha.New(mesosPodScheduler)
+	masterUri := kmcloud.MasterURI()
+	info, cred, err := s.buildFrameworkInfo()
+	if err != nil {
+		log.Fatalf("Misconfigured mesos framework: %v", err)
+	}
+
+	dconfig := &bindings.DriverConfig{
+		Scheduler:        schedulerProcess,
+		Framework:        info,
+		Master:           masterUri,
+		Credential:       cred,
+		BindingAddress:   net.IP(s.Address),
+		BindingPort:      uint16(s.DriverPort),
+		HostnameOverride: s.HostnameOverride,
+		WithAuthContext: func(ctx context.Context) context.Context {
+			ctx = auth.WithLoginProvider(ctx, s.MesosAuthProvider)
+			ctx = sasl.WithBindingAddress(ctx, net.IP(s.Address))
+			return ctx
+		},
+	}
+
+	return schedulerProcess, dconfig, kpl, etcdClient
 }
 
 func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks *hyperkube.Server) error {
@@ -454,43 +467,19 @@ func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks *hyperku
 	select {} // will never reach here
 }
 
-func (s *SchedulerServer) buildFrameworkInfo(client tools.EtcdClient) (info *mesos.FrameworkInfo, cred *mesos.Credential, err error) {
-
-	var (
-		frameworkId *mesos.FrameworkID
-		failover    *float64
-	)
-	if s.FailoverTimeout > 0 {
-		failover = proto.Float64(s.FailoverTimeout)
-		if response, err := client.Get(meta.FrameworkIDKey, false, false); err != nil {
-			if !tools.IsEtcdNotFound(err) {
-				log.Fatalf("unexpected failure attempting to load framework ID from etcd: %v", err)
-			}
-			log.V(1).Infof("did not find framework ID in etcd")
-		} else if response.Node.Value != "" {
-			log.Infof("configuring FrameworkInfo with Id found in etcd: '%s'", response.Node.Value)
-			frameworkId = mutil.NewFrameworkID(response.Node.Value)
-		}
-	} else {
-		if _, err := client.Delete(meta.FrameworkIDKey, true); err != nil {
-			if !tools.IsEtcdNotFound(err) {
-				log.Fatalf("failed to delete framework ID from etcd: %v", err)
-			}
-			log.V(1).Infof("nothing to delete: did not find framework ID in etcd")
-		}
-	}
-
+func (s *SchedulerServer) buildFrameworkInfo() (info *mesos.FrameworkInfo, cred *mesos.Credential, err error) {
 	username, err := s.getUsername()
 	if err != nil {
 		return nil, nil, err
 	}
 	log.V(2).Infof("Framework configured with mesos user %v", username)
 	info = &mesos.FrameworkInfo{
-		Name:            proto.String(sconfig.DefaultInfoName),
-		User:            proto.String(username),
-		Checkpoint:      proto.Bool(s.Checkpoint),
-		Id:              frameworkId,
-		FailoverTimeout: failover,
+		Name:       proto.String(sconfig.DefaultInfoName),
+		User:       proto.String(username),
+		Checkpoint: proto.Bool(s.Checkpoint),
+	}
+	if s.FailoverTimeout > 0 {
+		info.FailoverTimeout = proto.Float64(s.FailoverTimeout)
 	}
 	if s.MesosRole != "" {
 		info.Role = proto.String(s.MesosRole)
@@ -510,6 +499,29 @@ func (s *SchedulerServer) buildFrameworkInfo(client tools.EtcdClient) (info *mes
 		}
 	}
 	return
+}
+
+func (s *SchedulerServer) fetchFrameworkID(client tools.EtcdClient) (*mesos.FrameworkID, error) {
+	if s.FailoverTimeout > 0 {
+		if response, err := client.Get(meta.FrameworkIDKey, false, false); err != nil {
+			if !tools.IsEtcdNotFound(err) {
+				return nil, fmt.Errorf("unexpected failure attempting to load framework ID from etcd: %v", err)
+			}
+			log.V(1).Infof("did not find framework ID in etcd")
+		} else if response.Node.Value != "" {
+			log.Infof("configuring FrameworkInfo with Id found in etcd: '%s'", response.Node.Value)
+			return mutil.NewFrameworkID(response.Node.Value), nil
+		}
+	} else {
+		//TODO(jdef) this seems like a totally hackish way to clean up the framework ID
+		if _, err := client.Delete(meta.FrameworkIDKey, true); err != nil {
+			if !tools.IsEtcdNotFound(err) {
+				return nil, fmt.Errorf("failed to delete framework ID from etcd: %v", err)
+			}
+			log.V(1).Infof("nothing to delete: did not find framework ID in etcd")
+		}
+	}
+	return nil, nil
 }
 
 func (s *SchedulerServer) getUsername() (username string, err error) {

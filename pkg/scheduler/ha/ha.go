@@ -75,7 +75,7 @@ func (self *SchedulerProcess) End() {
 	log.Infoln("scheduler process entered fin stage")
 }
 
-func (self *SchedulerProcess) Elect(drv bindings.SchedulerDriver) {
+func (self *SchedulerProcess) Elect(fetchDriver func() (bindings.SchedulerDriver, error)) {
 	standbyStage.DoLater(self, proc.Action(func() {
 		if !(&self.stage).transition(standbyStage, masterStage) {
 			log.Errorf("failed to transition from standby to master stage, aborting")
@@ -83,6 +83,12 @@ func (self *SchedulerProcess) Elect(drv bindings.SchedulerDriver) {
 			return
 		}
 		log.Infoln("scheduler process entered master stage")
+		drv, err := fetchDriver()
+		if err != nil {
+			log.Errorf("failed to fetch scheduler driver: %v", err)
+			self.End()
+			return
+		}
 		stat, err := drv.Start()
 		if stat == mesos.Status_DRIVER_RUNNING && err == nil {
 			close(self.elected)

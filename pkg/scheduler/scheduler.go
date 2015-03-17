@@ -75,7 +75,7 @@ type KubernetesScheduler struct {
 
 	// Mesos context.
 
-	driver         bindings.SchedulerDriver
+	driver         bindings.SchedulerDriver // late initialization
 	frameworkId    *mesos.FrameworkID
 	masterInfo     *mesos.MasterInfo
 	registered     bool
@@ -129,8 +129,7 @@ func New(config Config) *KubernetesScheduler {
 	return k
 }
 
-func (k *KubernetesScheduler) Init(d bindings.SchedulerDriver, pl PluginInterface) error {
-	k.driver = d
+func (k *KubernetesScheduler) Init(pl PluginInterface) error {
 	k.plugin = pl
 	k.offers.Init()
 	return k.recoverTasks()
@@ -168,6 +167,7 @@ func (k *KubernetesScheduler) Reregistered(driver bindings.SchedulerDriver, mast
 }
 
 func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDriver) {
+	k.driver = driver
 	if k.failoverTimeout > 0 {
 		refreshInterval := defaultFrameworkIdRefreshInterval * time.Second
 		if k.failoverTimeout < defaultFrameworkIdRefreshInterval {
