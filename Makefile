@@ -48,6 +48,7 @@ endif
 
 export SHELL
 export KUBE_GO_PACKAGE
+export K8SM_GO_PACKAGE
 
 all: patch version
 	env GOPATH=$(BUILDDIR) go install $(K8S_CMD)
@@ -103,9 +104,9 @@ patch: prepare $(PATCH_SCRIPT)
 version: $(GIT_VERSION_FILE)
 
 $(GIT_VERSION_FILE):
-	@(pkg="$(BUILDDIR)"; cd "$${pkg%%:*}/src/$(KUBE_GO_PACKAGE)" && \
+	@(pkg="$(BUILDDIR)"; cd "$${pkg%%:*}/src/$(K8SM_GO_PACKAGE)" && \
 	  source $(current_dir)/hack/kube-version.sh && \
-	  KUBE_GO_PACKAGE=$(KUBE_GO_PACKAGE) kube::version::ldflags) >$@
+	  K8SM_GO_PACKAGE=$(K8SM_GO_PACKAGE) kube::version::ldflags) >$@
 
 $(PATCH_SCRIPT):
 	test -x $@ || chmod +x $@
