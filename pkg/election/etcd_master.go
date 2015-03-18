@@ -61,7 +61,7 @@ func (e *etcdMasterElector) Elect(path, id string) watch.Interface {
 func (e *etcdMasterElector) run(path, id string) {
 	masters := make(chan string)
 	errors := make(chan error)
-	go e.master(path, id, 30, masters, errors, e.done)
+	go e.master(path, id, 30, masters, errors, e.done) // TODO(jdef) extract constant
 	for {
 		select {
 		case m := <-masters:

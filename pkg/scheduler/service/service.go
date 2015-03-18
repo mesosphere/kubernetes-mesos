@@ -97,7 +97,10 @@ type SchedulerServer struct {
 	Graceful             bool
 	FrameworkName        string
 	HA                   bool
-	executable           string // path to the binary running this service
+	HADomain             string
+
+	executable string // path to the binary running this service
+	client     *client.Client
 }
 
 // NewSchedulerServer creates a new SchedulerServer with default parameters
@@ -112,7 +115,10 @@ func NewSchedulerServer() *SchedulerServer {
 		ReconcileInterval: defaultReconcileInterval,
 		Checkpoint:        true,
 		FrameworkName:     schedcfg.DefaultInfoName,
-		HA:                true,
+		HA:                false,
+		// TODO(jdef) hard dependency on schedcfg.DefaultInfoName, also assumes
+		// that mesos-dns has a k8s plugin that registers services there.
+		HADomain: "services.kubernetes.mesos",
 	}
 	return &s
 }
@@ -159,12 +165,13 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&s.ExecutorLogV, "executor_logv", s.ExecutorLogV, "Logging verbosity of spawned executor processes.")
 	fs.Int64Var(&s.ReconcileInterval, "reconcile_interval", s.ReconcileInterval, "Interval at which to execute task reconciliation, in sec. Zero disables.")
 	fs.BoolVar(&s.Graceful, "graceful", s.Graceful, "Indicator of a graceful failover, intended for internal use only.")
-	fs.BoolVar(&s.HA, "ha", s.HA, "Run the scheduler in high availability mode with leader election.")
+	fs.BoolVar(&s.HA, "ha", s.HA, "Run the scheduler in high availability mode with leader election: requires pre-deployed proxies and mesos-dns.")
 	fs.StringVar(&s.FrameworkName, "framework_name", s.FrameworkName, "The framework name to register with Mesos.")
+	fs.StringVar(&s.HADomain, "ha_domain", s.HADomain, "Domain of the HA scheduler service, only used in HA mode.")
 }
 
 // returns (downloadURI, basename(path))
-func (s *SchedulerServer) serveExecutorArtifact(path string) (string, string) {
+func (s *SchedulerServer) serveFrameworkArtifact(path string) (string, string) {
 	serveFile := func(pattern string, filename string) {
 		http.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			http.ServeFile(w, r, filename)
@@ -181,7 +188,12 @@ func (s *SchedulerServer) serveExecutorArtifact(path string) (string, string) {
 	}
 	serveFile("/"+base, path)
 
-	hostURI := fmt.Sprintf("http://%s:%d/%s", s.Address.String(), s.Port, base)
+	hostURI := ""
+	if s.HA {
+		hostURI = fmt.Sprintf("http://%s.%s:%d/%s", SCHEDULER_SERVICE_NAME, s.HADomain, ports.SchedulerPort, base)
+	} else {
+		hostURI = fmt.Sprintf("http://%s:%d/%s", s.Address.String(), s.Port, base)
+	}
 	log.V(2).Infof("Hosting artifact '%s' at '%s'", path, hostURI)
 
 	return hostURI, base
@@ -199,20 +211,20 @@ func (s *SchedulerServer) prepareExecutorInfo(hks *hyperkube.Server) *mesos.Exec
 	)
 
 	if s.ExecutorPath != "" {
-		uri, executorCmd := s.serveExecutorArtifact(s.ExecutorPath)
+		uri, executorCmd := s.serveFrameworkArtifact(s.ExecutorPath)
 		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(true)})
 		ci.Value = proto.String(fmt.Sprintf("./%s", executorCmd))
 	} else if _, err := hks.FindServer(KM_EXECUTOR); err != nil {
 		log.Fatalf("either run this scheduler via km or else --executor_path is required: %v", err)
 	} else {
-		uri, kmCmd := s.serveExecutorArtifact(s.executable)
+		uri, kmCmd := s.serveFrameworkArtifact(s.executable)
 		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(true)})
 		ci.Value = proto.String(fmt.Sprintf("./%s", kmCmd))
 		ci.Arguments = append(ci.Arguments, KM_EXECUTOR)
 	}
 
 	if s.ProxyPath != "" {
-		uri, proxyCmd := s.serveExecutorArtifact(s.ProxyPath)
+		uri, proxyCmd := s.serveFrameworkArtifact(s.ProxyPath)
 		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(true)})
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--proxy_exec=./%s", proxyCmd))
 	} else if _, err := hks.FindServer(KM_PROXY); err != nil {
@@ -242,13 +254,13 @@ func (s *SchedulerServer) prepareExecutorInfo(hks *hyperkube.Server) *mesos.Exec
 		etcdServerArguments := strings.Join(s.EtcdServerList, ",")
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--etcd_servers=%s", etcdServerArguments))
 	} else {
-		uri, basename := s.serveExecutorArtifact(s.EtcdConfigFile)
+		uri, basename := s.serveFrameworkArtifact(s.EtcdConfigFile)
 		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri)})
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--etcd_config=./%s", basename))
 	}
 
 	if s.AuthPath != "" {
-		uri, basename := s.serveExecutorArtifact(s.AuthPath)
+		uri, basename := s.serveFrameworkArtifact(s.AuthPath)
 		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri)})
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--auth_path=%s", basename))
 	}
@@ -295,8 +307,16 @@ func (s *SchedulerServer) createAPIServerClient() (*client.Client, error) {
 }
 
 func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
+
 	schedulerProcess, dconfig, kpl, etcdClient, deferredInit := s.bootstrap(hks)
 	schedulerProcess.Begin()
+
+	go s.serviceWriterLoop(schedulerProcess.Done())
+
+	go util.Forever(func() {
+		log.V(1).Info("Starting HTTP interface")
+		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), nil))
+	}, 5*time.Second) // TODO(jdef) extract constant
 
 	var driver bindings.SchedulerDriver
 	driverFactory := ha.DriverFactory(func() (drv bindings.SchedulerDriver, err error) {
@@ -329,11 +349,6 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 
 	select {
 	case <-schedulerProcess.Elected():
-		go util.Forever(func() {
-			log.V(1).Info("Starting HTTP interface")
-			log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), nil))
-		}, 5*time.Second) // TODO(jdef) extract constant
-
 		log.V(1).Info("Spinning up scheduling loop")
 		kpl.Run()
 		select {
@@ -378,6 +393,11 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 		log.Fatalf("framework_name must be a non-empty string")
 	}
 
+	if s.HA && s.ExecutorRunProxy {
+		log.Info("disabling executor_run_proxy for HA, assumes proxy is already running on all slaves")
+		s.ExecutorRunProxy = false
+	}
+
 	metrics.Register()
 	http.Handle("/metrics", prometheus.Handler())
 
@@ -394,6 +414,7 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 	if err != nil {
 		log.Fatalf("Unable to make apiserver client: %v", err)
 	}
+	s.client = client
 
 	// Send events to APIserver if there is a client.
 	record.StartRecording(client.Events(""), api.EventSource{Component: "scheduler"})
