@@ -146,12 +146,11 @@ results in pods assigned to kubelets based on capacity and constraints.`,
 			return s.Run(hks, args)
 		},
 	}
-	s.AddFlags(hks.Flags())
 	s.AddHyperkubeFlags(hks.Flags())
 	return &hks
 }
 
-func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
+func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&s.Port, "port", s.Port, "The port that the scheduler's http service runs on")
 	fs.Var(&s.Address, "address", "The IP address to serve on (set to 0.0.0.0 for all interfaces)")
 	fs.Var(&s.APIServerList, "api_servers", "List of Kubernetes API servers for publishing events, and reading pods and services. (ip:port), comma separated.")
@@ -180,11 +179,13 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 }
 
 func (s *SchedulerServer) AddStandaloneFlags(fs *pflag.FlagSet) {
+	s.addCoreFlags(fs)
 	fs.StringVar(&s.ExecutorPath, "executor_path", s.ExecutorPath, "Location of the kubernetes executor executable")
 	fs.StringVar(&s.ProxyPath, "proxy_path", s.ProxyPath, "Location of the kubernetes proxy executable")
 }
 
 func (s *SchedulerServer) AddHyperkubeFlags(fs *pflag.FlagSet) {
+	s.addCoreFlags(fs)
 	fs.StringVar(&s.KMPath, "km_path", s.KMPath, "Location of the km executable, may be a URI or an absolute file path.")
 }
 
