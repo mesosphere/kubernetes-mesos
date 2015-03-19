@@ -2,7 +2,9 @@ package scheduler
 
 import (
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"sync"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	mutil "github.com/mesos/mesos-go/mesosutil"
 	bindings "github.com/mesos/mesos-go/scheduler"
+	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/messages"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
@@ -132,19 +135,53 @@ func New(config Config) *KubernetesScheduler {
 func (k *KubernetesScheduler) Init(pl PluginInterface) error {
 	k.plugin = pl
 	k.offers.Init()
+	k.InstallDebugHandlers()
 	return k.recoverTasks()
 }
 
+func (k *KubernetesScheduler) InstallDebugHandlers() {
+	http.HandleFunc("/debug/actions/kamikaze", func(w http.ResponseWriter, r *http.Request) {
+		ids := func() (ids []string) {
+			k.Lock()
+			defer k.Unlock()
+			if !k.registered {
+				log.Errorf("cannot execute kamikaze request, scheduler is disconnected")
+				w.WriteHeader(http.StatusServiceUnavailable)
+			} else {
+				ids = []string{}
+				for slaveId, _ := range k.slaves {
+					ids = append(ids, slaveId)
+				}
+			}
+			return
+		}()
+		for _, slaveId := range ids {
+			_, err := k.driver.SendFrameworkMessage(
+				mutil.NewExecutorID(config.DefaultInfoID),
+				mutil.NewSlaveID(slaveId),
+				messages.Kamikaze)
+			if err != nil {
+				log.Warningf("failed to send kamikaze message to slave %s: %v", slaveId, err)
+			} else {
+				io.WriteString(w, fmt.Sprintf("kamikaze slave %s\n", slaveId))
+			}
+		}
+		io.WriteString(w, "OK")
+	})
+}
+
 // Registered is called when the scheduler registered with the master successfully.
-func (k *KubernetesScheduler) Registered(driver bindings.SchedulerDriver,
-	frameworkId *mesos.FrameworkID, masterInfo *mesos.MasterInfo) {
-	k.frameworkId = frameworkId
-	k.masterInfo = masterInfo
+func (k *KubernetesScheduler) Registered(drv bindings.SchedulerDriver, fid *mesos.FrameworkID, mi *mesos.MasterInfo) {
+	log.Infof("Scheduler registered with the master: %v with frameworkId: %v\n", mi, fid)
+
+	k.Lock()
+	defer k.Unlock()
+
+	k.frameworkId = fid
+	k.masterInfo = mi
 	k.registered = true
 
-	log.Infof("Scheduler registered with the master: %v with frameworkId: %v\n", masterInfo, frameworkId)
-
-	k.onRegistration.Do(func() { k.onInitialRegistration(driver) })
+	k.onRegistration.Do(func() { k.onInitialRegistration(drv) })
 	k.reconciler.RequestExplicit()
 }
 
@@ -157,12 +194,16 @@ func (k *KubernetesScheduler) storeFrameworkId() {
 
 // Reregistered is called when the scheduler re-registered with the master successfully.
 // This happends when the master fails over.
-func (k *KubernetesScheduler) Reregistered(driver bindings.SchedulerDriver, masterInfo *mesos.MasterInfo) {
-	log.Infof("Scheduler reregistered with the master: %v\n", masterInfo)
-	k.masterInfo = masterInfo
+func (k *KubernetesScheduler) Reregistered(drv bindings.SchedulerDriver, mi *mesos.MasterInfo) {
+	log.Infof("Scheduler reregistered with the master: %v\n", mi)
+
+	k.Lock()
+	defer k.Unlock()
+
+	k.masterInfo = mi
 	k.registered = true
 
-	k.onRegistration.Do(func() { k.onInitialRegistration(driver) })
+	k.onRegistration.Do(func() { k.onInitialRegistration(drv) })
 	k.reconciler.RequestExplicit()
 }
 
@@ -189,10 +230,10 @@ func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDri
 // Disconnected is called when the scheduler loses connection to the master.
 func (k *KubernetesScheduler) Disconnected(driver bindings.SchedulerDriver) {
 	log.Infof("Master disconnected!\n")
-	k.registered = false
 
 	k.Lock()
 	defer k.Unlock()
+	k.registered = false
 
 	// discard all cached offers to avoid unnecessary TASK_LOST updates
 	k.offers.Invalidate("")

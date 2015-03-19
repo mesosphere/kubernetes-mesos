@@ -71,34 +71,35 @@ const (
 )
 
 type SchedulerServer struct {
-	Port                 int
-	Address              util.IP
-	AuthPath             string
-	APIServerList        util.StringList
-	EtcdServerList       util.StringList
-	EtcdConfigFile       string
-	AllowPrivileged      bool
-	ExecutorPath         string
-	ProxyPath            string
-	MesosUser            string
-	MesosRole            string
-	MesosAuthPrincipal   string
-	MesosAuthSecretFile  string
-	Checkpoint           bool
-	FailoverTimeout      float64
-	ExecutorBindall      bool
-	ExecutorRunProxy     bool
-	ExecutorProxyBindall bool
-	ExecutorLogV         int
-	MesosAuthProvider    string
-	DriverPort           uint
-	HostnameOverride     string
-	ReconcileInterval    int64
-	Graceful             bool
-	FrameworkName        string
-	HA                   bool
-	HADomain             string
-	KMPath               string
+	Port                   int
+	Address                util.IP
+	AuthPath               string
+	APIServerList          util.StringList
+	EtcdServerList         util.StringList
+	EtcdConfigFile         string
+	AllowPrivileged        bool
+	ExecutorPath           string
+	ProxyPath              string
+	MesosUser              string
+	MesosRole              string
+	MesosAuthPrincipal     string
+	MesosAuthSecretFile    string
+	Checkpoint             bool
+	FailoverTimeout        float64
+	ExecutorBindall        bool
+	ExecutorRunProxy       bool
+	ExecutorProxyBindall   bool
+	ExecutorLogV           int
+	ExecutorSuicideTimeout time.Duration
+	MesosAuthProvider      string
+	DriverPort             uint
+	HostnameOverride       string
+	ReconcileInterval      int64
+	Graceful               bool
+	FrameworkName          string
+	HA                     bool
+	HADomain               string
+	KMPath                 string
 
 	executable string // path to the binary running this service
 	client     *client.Client
@@ -107,19 +108,20 @@ type SchedulerServer struct {
 // NewSchedulerServer creates a new SchedulerServer with default parameters
 func NewSchedulerServer() *SchedulerServer {
 	s := SchedulerServer{
-		Port:              ports.SchedulerPort,
-		Address:           util.IP(net.ParseIP("127.0.0.1")),
-		FailoverTimeout:   time.Duration((1 << 62) - 1).Seconds(),
-		ExecutorRunProxy:  true,
-		MesosAuthProvider: sasl.ProviderName,
-		MesosUser:         defaultMesosUser,
-		ReconcileInterval: defaultReconcileInterval,
-		Checkpoint:        true,
-		FrameworkName:     schedcfg.DefaultInfoName,
-		HA:                false,
+		Port:                   ports.SchedulerPort,
+		Address:                util.IP(net.ParseIP("127.0.0.1")),
+		FailoverTimeout:        time.Duration((1 << 62) - 1).Seconds(),
+		ExecutorRunProxy:       true,
+		ExecutorSuicideTimeout: execcfg.DefaultSuicideTimeout,
+		MesosAuthProvider:      sasl.ProviderName,
+		MesosUser:              defaultMesosUser,
+		ReconcileInterval:      defaultReconcileInterval,
+		Checkpoint:             true,
+		FrameworkName:          schedcfg.DefaultInfoName,
+		HA:                     false,
 		// TODO(jdef) hard dependency on schedcfg.DefaultInfoName, also assumes
 		// that mesos-dns has a k8s plugin that registers services there.
-		HADomain: "services.kubernetes.mesos",
+		// HADomain: "services.kubernetes.mesos",
 	}
 	// cache this for later use. also useful in case the original binary gets deleted, e.g.
 	// during upgrades, development deployments, etc.
@@ -171,11 +173,12 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.UintVar(&s.DriverPort, "driver_port", s.DriverPort, "Port that the Mesos scheduler driver process should listen on.")
 	fs.StringVar(&s.HostnameOverride, "hostname_override", s.HostnameOverride, "If non-empty, will use this string as identification instead of the actual hostname.")
 	fs.IntVar(&s.ExecutorLogV, "executor_logv", s.ExecutorLogV, "Logging verbosity of spawned executor processes.")
+	fs.DurationVar(&s.ExecutorSuicideTimeout, "executor_suicide_timeout", s.ExecutorSuicideTimeout, "Executor self-terminates after this period of inactivity. Zero disables suicide watch.")
 	fs.Int64Var(&s.ReconcileInterval, "reconcile_interval", s.ReconcileInterval, "Interval at which to execute task reconciliation, in sec. Zero disables.")
 	fs.BoolVar(&s.Graceful, "graceful", s.Graceful, "Indicator of a graceful failover, intended for internal use only.")
 	fs.BoolVar(&s.HA, "ha", s.HA, "Run the scheduler in high availability mode with leader election: requires pre-deployed proxies and mesos-dns.")
 	fs.StringVar(&s.FrameworkName, "framework_name", s.FrameworkName, "The framework name to register with Mesos.")
-	fs.StringVar(&s.HADomain, "ha_domain", s.HADomain, "Domain of the HA scheduler service, only used in HA mode.")
+	fs.StringVar(&s.HADomain, "ha_domain", s.HADomain, "Domain of the HA scheduler service, only used in HA mode. If specified may be used to construct artifact download URIs.")
 }
 
 func (s *SchedulerServer) AddStandaloneFlags(fs *pflag.FlagSet) {
@@ -208,7 +211,7 @@ func (s *SchedulerServer) serveFrameworkArtifact(path string) (string, string) {
 	serveFile("/"+base, path)
 
 	hostURI := ""
-	if s.HA {
+	if s.HA && s.HADomain != "" {
 		hostURI = fmt.Sprintf("http://%s.%s:%d/%s", SCHEDULER_SERVICE_NAME, s.HADomain, ports.SchedulerPort, base)
 	} else {
 		hostURI = fmt.Sprintf("http://%s:%d/%s", s.Address.String(), s.Port, base)
@@ -272,6 +275,7 @@ func (s *SchedulerServer) prepareExecutorInfo(hks *hyperkube.Server) *mesos.Exec
 	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--api_servers=%s", apiServerArgs))
 	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--v=%d", s.ExecutorLogV))
 	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--allow_privileged=%t", s.AllowPrivileged))
+	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--suicide_timeout=%v", s.ExecutorSuicideTimeout))
 
 	if s.ExecutorBindall {
 		ci.Arguments = append(ci.Arguments, "--hostname_override=0.0.0.0")

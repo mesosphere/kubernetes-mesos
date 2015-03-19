@@ -73,7 +73,6 @@ type KubernetesExecutor struct {
 	dockerClient   dockertools.DockerInterface
 	suicideWatch   *time.Timer
 	suicideTimeout time.Duration
-	shutdownOnce   sync.Once
 }
 
 func (k *KubernetesExecutor) isConnected() bool {
@@ -224,17 +223,24 @@ func (k *KubernetesExecutor) resetSuicideWatch() {
 		return
 	}
 	log.V(2).Info("resetting suicide watch for %s", k.suicideTimeout)
-	k.suicideWatch = time.AfterFunc(k.suicideTimeout, k.attemptSuicide)
+	k.suicideWatch = time.AfterFunc(k.suicideTimeout, func() {
+		k.lock.Lock()
+		defer k.lock.Unlock()
+
+		log.Warningf("Suicide timeout (%s) expired", k.suicideTimeout)
+		k.attemptSuicide()
+	})
 }
 
+// assumes that caller is holding state lock
 func (k *KubernetesExecutor) attemptSuicide() {
+	log.Infoln("Attempting suicide")
 	for {
 		switch state := (&k.state).get(); state {
 		case suicidalState, terminalState:
 			return
 		default:
 			if (&k.state).transition(state, suicidalState) {
-				log.Warningf("Suicide timeout (%s) expired", k.suicideTimeout)
 				//TODO(jdef) let the scheduler know?
 				//TODO(jdef) is suicide more graceful than slave-demanded shutdown?
 				k.doShutdown()
@@ -542,31 +548,46 @@ func (k *KubernetesExecutor) FrameworkMessage(driver bindings.ExecutorDriver, me
 		taskId := message[10:]
 		if taskId != "" {
 			// clean up pod state
+			k.lock.Lock()
+			defer k.lock.Unlock()
 			k.reportLostTask(driver, taskId, messages.TaskLostAck)
+		}
+	}
+
+	switch message {
+	case messages.Kamikaze:
+		k.lock.Lock()
+		defer k.lock.Unlock()
+		// attempt suicide if we're taskless
+		if count := len(k.tasks); count == 0 {
+			k.attemptSuicide()
+		} else {
+			log.Warningf("aborting kamikaze, task count != 0 (%d)", count)
 		}
 	}
 }
 
 // Shutdown is called when the executor receives a shutdown request.
 func (k *KubernetesExecutor) Shutdown(driver bindings.ExecutorDriver) {
+	k.lock.Lock()
+	defer k.lock.Unlock()
 	k.doShutdown()
 }
 
+// assumes that caller has obtained state lock
 func (k *KubernetesExecutor) doShutdown() {
-	k.shutdownOnce.Do(k._doShutdown)
-}
+	defer func() {
+		log.Exit("exiting with unclean shutdown: %v", recover())
+	}()
 
-func (k *KubernetesExecutor) _doShutdown() {
+	//TODO(jdef) stop the driver (if it's still running)
+
 	(&k.state).set(terminalState)
 	close(k.done)
 
 	log.Infoln("Shutdown the executor")
 
-	func() {
-		k.lock.Lock()
-		defer k.lock.Unlock()
-		k.tasks = map[string]*kuberTask{}
-	}()
+	k.tasks = map[string]*kuberTask{}
 
 	// according to docs, mesos will generate TASK_LOST updates for us
 	// if needed, so don't take extra time to do that here.
@@ -582,6 +603,8 @@ func (k *KubernetesExecutor) _doShutdown() {
 	// see the above TODO.
 	k.updateChan <- kubelet.PodUpdate{Op: kubelet.SET}
 	k.killKubeletContainers()
+
+	log.Infoln("exiting")
 	os.Exit(0)
 }
 

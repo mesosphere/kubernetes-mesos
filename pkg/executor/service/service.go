@@ -24,6 +24,7 @@ import (
 	"github.com/kardianos/osext"
 	bindings "github.com/mesos/mesos-go/executor"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor"
+	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 
 	"github.com/spf13/pflag"
 )
@@ -40,7 +41,7 @@ type KubeletExecutorServer struct {
 	ProxyLogfile           string
 	ProxyBindall           bool
 	TotalMaxDeadContainers uint
-	SuicideTimeout         uint // in seconds
+	SuicideTimeout         time.Duration
 }
 
 func NewKubeletExecutorServer() *KubeletExecutorServer {
@@ -49,8 +50,8 @@ func NewKubeletExecutorServer() *KubeletExecutorServer {
 		RunProxy:               true,
 		ProxyExec:              "./kube-proxy",
 		ProxyLogfile:           "./proxy-log",
-		TotalMaxDeadContainers: 20,                                 // arbitrary
-		SuicideTimeout:         uint((20 * time.Minute).Seconds()), // should be > slave recovery_timeout
+		TotalMaxDeadContainers: 20, // arbitrary
+		SuicideTimeout:         config.DefaultSuicideTimeout,
 	}
 	if pwd, err := os.Getwd(); err != nil {
 		log.Warningf("failed to determine current directory: %v", err)
@@ -105,7 +106,7 @@ func (s *KubeletExecutorServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.ProxyLogfile, "proxy_logfile", s.ProxyLogfile, "Path to the kube-proxy log file.")
 	fs.BoolVar(&s.ProxyBindall, "proxy_bindall", s.ProxyBindall, "When true will cause kube-proxy to bind to 0.0.0.0.")
 	fs.UintVar(&s.TotalMaxDeadContainers, "total_max_dead_containers", s.TotalMaxDeadContainers, "Max number of dead containers that GC allows to linger.")
-	fs.UintVar(&s.SuicideTimeout, "suicide_timeout", s.SuicideTimeout, "Self-terminate after this duration (in sec) of inactivity. Zero disables suicide watch.")
+	fs.DurationVar(&s.SuicideTimeout, "suicide_timeout", s.SuicideTimeout, "Self-terminate after this period of inactivity. Zero disables suicide watch.")
 }
 
 func (s *KubeletExecutorServer) AddStandaloneFlags(fs *pflag.FlagSet) {
@@ -236,7 +237,7 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, 
 		kc.KubeClient,
 		watch,
 		kc.DockerClient,
-		time.Duration(ks.SuicideTimeout)*time.Second)
+		ks.SuicideTimeout)
 
 	dconfig := bindings.DriverConfig{
 		Executor:         exec,
