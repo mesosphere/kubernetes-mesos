@@ -3,6 +3,7 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,8 +35,21 @@ type stateType int32
 const (
 	disconnectedState stateType = iota
 	connectedState
-	doneState
+	suicidalState
+	terminalState
 )
+
+func (s *stateType) get() stateType {
+	return stateType(atomic.LoadInt32((*int32)(s)))
+}
+
+func (s *stateType) set(x stateType) {
+	atomic.StoreInt32((*int32)(s), int32(x))
+}
+
+func (s *stateType) transition(from, to stateType) bool {
+	return atomic.CompareAndSwapInt32((*int32)(s), int32(from), int32(to))
+}
 
 type kuberTask struct {
 	mesosTaskInfo *mesos.TaskInfo
@@ -45,34 +59,29 @@ type kuberTask struct {
 // KubernetesExecutor is an mesos executor that runs pods
 // in a minion machine.
 type KubernetesExecutor struct {
-	kl           *kubelet.Kubelet // the kubelet instance.
-	updateChan   chan<- interface{}
-	state        stateType
-	tasks        map[string]*kuberTask
-	pods         map[string]*api.BoundPod
-	lock         sync.RWMutex
-	sourcename   string
-	client       *client.Client
-	events       <-chan watch.Event
-	done         chan struct{} // signals shutdown
-	outgoing     chan func() (mesos.Status, error)
-	dockerClient dockertools.DockerInterface
-}
-
-func (k *KubernetesExecutor) getState() stateType {
-	return stateType(atomic.LoadInt32((*int32)(&k.state)))
+	kl             *kubelet.Kubelet // the kubelet instance.
+	updateChan     chan<- interface{}
+	state          stateType
+	tasks          map[string]*kuberTask
+	pods           map[string]*api.BoundPod
+	lock           sync.RWMutex
+	sourcename     string
+	client         *client.Client
+	events         <-chan watch.Event
+	done           chan struct{} // signals shutdown
+	outgoing       chan func() (mesos.Status, error)
+	dockerClient   dockertools.DockerInterface
+	suicideWatch   *time.Timer
+	suicideTimeout time.Duration
+	shutdownOnce   sync.Once
 }
 
 func (k *KubernetesExecutor) isConnected() bool {
-	return connectedState == k.getState()
-}
-
-func (k *KubernetesExecutor) swapState(from, to stateType) bool {
-	return atomic.CompareAndSwapInt32((*int32)(&k.state), int32(from), int32(to))
+	return connectedState == (&k.state).get()
 }
 
 // New creates a new kubernetes executor.
-func New(kl *kubelet.Kubelet, ch chan<- interface{}, ns string, cl *client.Client, w watch.Interface, dc dockertools.DockerInterface) *KubernetesExecutor {
+func New(kl *kubelet.Kubelet, ch chan<- interface{}, ns string, cl *client.Client, w watch.Interface, dc dockertools.DockerInterface, suicideTimeout time.Duration) *KubernetesExecutor {
 	//TODO(jdef) do something real with these events..
 	events := w.ResultChan()
 	if events != nil {
@@ -84,20 +93,26 @@ func New(kl *kubelet.Kubelet, ch chan<- interface{}, ns string, cl *client.Clien
 		}()
 	}
 	k := &KubernetesExecutor{
-		kl:           kl,
-		updateChan:   ch,
-		state:        disconnectedState,
-		tasks:        make(map[string]*kuberTask),
-		pods:         make(map[string]*api.BoundPod),
-		sourcename:   ns,
-		client:       cl,
-		events:       events,
-		done:         make(chan struct{}),
-		outgoing:     make(chan func() (mesos.Status, error), 1024),
-		dockerClient: dc,
+		kl:             kl,
+		updateChan:     ch,
+		state:          disconnectedState,
+		tasks:          make(map[string]*kuberTask),
+		pods:           make(map[string]*api.BoundPod),
+		sourcename:     ns,
+		client:         cl,
+		events:         events,
+		done:           make(chan struct{}),
+		outgoing:       make(chan func() (mesos.Status, error), 1024),
+		dockerClient:   dc,
+		suicideTimeout: suicideTimeout,
 	}
 	go k.sendLoop()
 	return k
+}
+
+func (k *KubernetesExecutor) Init() {
+	k.killKubeletContainers()
+	k.resetSuicideWatch()
 }
 
 func (k *KubernetesExecutor) isDone() bool {
@@ -117,7 +132,7 @@ func (k *KubernetesExecutor) Registered(driver bindings.ExecutorDriver,
 	}
 	log.Infof("Executor %v of framework %v registered with slave %v\n",
 		executorInfo, frameworkInfo, slaveInfo)
-	if !k.swapState(disconnectedState, connectedState) {
+	if !(&k.state).transition(disconnectedState, connectedState) {
 		//programming error?
 		panic("already connected?!")
 	}
@@ -130,7 +145,7 @@ func (k *KubernetesExecutor) Reregistered(driver bindings.ExecutorDriver, slaveI
 		return
 	}
 	log.Infof("Reregistered with slave %v\n", slaveInfo)
-	if !k.swapState(disconnectedState, connectedState) {
+	if !(&k.state).transition(disconnectedState, connectedState) {
 		//programming error?
 		panic("already connected?!")
 	}
@@ -142,7 +157,7 @@ func (k *KubernetesExecutor) Disconnected(driver bindings.ExecutorDriver) {
 		return
 	}
 	log.Infof("Slave is disconnected\n")
-	if !k.swapState(connectedState, disconnectedState) {
+	if !(&k.state).transition(connectedState, disconnectedState) {
 		//programming error?
 		panic("already disconnected?!")
 	}
@@ -187,7 +202,45 @@ func (k *KubernetesExecutor) LaunchTask(driver bindings.ExecutorDriver, taskInfo
 	k.tasks[taskId] = &kuberTask{
 		mesosTaskInfo: taskInfo,
 	}
+	k.resetSuicideWatch()
+
 	go k.launchTask(driver, taskId, &pod)
+}
+
+// determine whether we need to start a suicide countdown. if so, then start
+// a timer that, upon expiration, causes this executor to commit suicide.
+// assumes that caller is holding the state lock.
+func (k *KubernetesExecutor) resetSuicideWatch() {
+	if k.suicideTimeout < 1 {
+		return
+	}
+	if len(k.tasks) > 0 {
+		if k.suicideWatch != nil {
+			k.suicideWatch.Stop()
+		}
+		return
+	}
+	if k.suicideWatch != nil && k.suicideWatch.Reset(k.suicideTimeout) {
+		return
+	}
+	log.V(2).Info("resetting suicide watch for %s", k.suicideTimeout)
+	k.suicideWatch = time.AfterFunc(k.suicideTimeout, k.attemptSuicide)
+}
+
+func (k *KubernetesExecutor) attemptSuicide() {
+	for {
+		switch state := (&k.state).get(); state {
+		case suicidalState, terminalState:
+			return
+		default:
+			if (&k.state).transition(state, suicidalState) {
+				log.Warningf("Suicide timeout (%s) expired", k.suicideTimeout)
+				//TODO(jdef) let the scheduler know?
+				//TODO(jdef) is suicide more graceful than slave-demanded shutdown?
+				k.doShutdown()
+			}
+		}
+	}
 }
 
 func (k *KubernetesExecutor) getPidInfo(name string) (api.PodStatus, error) {
@@ -212,10 +265,18 @@ func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId s
 		binding.Annotations[k] = v
 	}
 
+	deleteTask := func() {
+		k.lock.Lock()
+		defer k.lock.Unlock()
+		delete(k.tasks, taskId)
+		k.resetSuicideWatch()
+	}
+
 	log.Infof("Binding '%v' to '%v' with annotations %+v...", binding.PodID, binding.Host, binding.Annotations)
 	ctx := api.WithNamespace(api.NewDefaultContext(), binding.Namespace)
 	err := k.client.Post().Namespace(api.NamespaceValue(ctx)).Resource("bindings").Body(binding).Do().Error()
 	if err != nil {
+		deleteTask()
 		k.sendStatus(driver, newStatus(mutil.NewTaskID(taskId), mesos.TaskState_TASK_FAILED,
 			messages.CreateBindingFailure))
 		return
@@ -240,8 +301,10 @@ func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId s
 		},
 	})
 	if err != nil {
+		deleteTask()
 		log.Errorf("failed to marshal pod status result: %v", err)
-		k.sendStatus(driver, newStatus(mutil.NewTaskID(taskId), mesos.TaskState_TASK_FAILED, err.Error()))
+		k.sendStatus(driver, newStatus(mutil.NewTaskID(taskId), mesos.TaskState_TASK_FAILED,
+			err.Error()))
 		return
 	}
 
@@ -251,7 +314,7 @@ func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId s
 	// Add the task.
 	task, found := k.tasks[taskId]
 	if !found {
-		log.V(1).Infof("task %v no longer on record, probably killed, aborting launch sequence - reporting lost", taskId)
+		log.V(1).Infof("task %v not found, probably killed: aborting launch, reporting lost", taskId)
 		k.reportLostTask(driver, taskId, messages.LaunchTaskFailed)
 		return
 	}
@@ -386,10 +449,11 @@ func (k *KubernetesExecutor) checkForLostPodTask(driver bindings.ExecutorDriver,
 	k.lock.Lock()
 	defer k.lock.Unlock()
 
-	// TODO(jdef) we should really consider k.pods here, along with what docker is reporting, since the kubelet
-	// may constantly attempt to instantiate a pod as long as it's in the pod state that we're handing to it.
-	// otherwise, we're probably reporting a TASK_LOST prematurely. Should probably consult RestartPolicy to
-	// determine appropriate behavior. Should probably also gracefully handle docker daemon restarts.
+	// TODO(jdef) we should really consider k.pods here, along with what docker is reporting, since the
+	// kubelet may constantly attempt to instantiate a pod as long as it's in the pod state that we're
+	// handing to it. otherwise, we're probably reporting a TASK_LOST prematurely. Should probably
+	// consult RestartPolicy to determine appropriate behavior. Should probably also gracefully handle
+	// docker daemon restarts.
 	if _, ok := k.tasks[taskId]; ok {
 		if isKnownPod() {
 			return false
@@ -433,7 +497,8 @@ func (k *KubernetesExecutor) reportLostTask(driver bindings.ExecutorDriver, tid,
 	k.removePodTask(driver, tid, reason, mesos.TaskState_TASK_LOST)
 }
 
-// returns a chan that closes when the pod is no longer running in Docker
+// returns a chan that closes when the pod is no longer running in Docker.
+// Assumes that the caller is locking around pod and task state.
 func (k *KubernetesExecutor) removePodTask(driver bindings.ExecutorDriver, tid, reason string, state mesos.TaskState) {
 	task, ok := k.tasks[tid]
 	if !ok {
@@ -441,6 +506,7 @@ func (k *KubernetesExecutor) removePodTask(driver bindings.ExecutorDriver, tid, 
 		return
 	}
 	delete(k.tasks, tid)
+	k.resetSuicideWatch()
 
 	pid := task.podName
 	if _, found := k.pods[pid]; !found {
@@ -483,16 +549,18 @@ func (k *KubernetesExecutor) FrameworkMessage(driver bindings.ExecutorDriver, me
 
 // Shutdown is called when the executor receives a shutdown request.
 func (k *KubernetesExecutor) Shutdown(driver bindings.ExecutorDriver) {
-	if k.isDone() {
-		return
-	}
+	k.doShutdown()
+}
+
+func (k *KubernetesExecutor) doShutdown() {
+	k.shutdownOnce.Do(k._doShutdown)
+}
+
+func (k *KubernetesExecutor) _doShutdown() {
+	(&k.state).set(terminalState)
 	close(k.done)
 
 	log.Infoln("Shutdown the executor")
-	defer func() {
-		for !k.swapState(k.getState(), doneState) {
-		}
-	}()
 
 	func() {
 		k.lock.Lock()
@@ -503,16 +571,23 @@ func (k *KubernetesExecutor) Shutdown(driver bindings.ExecutorDriver) {
 	// according to docs, mesos will generate TASK_LOST updates for us
 	// if needed, so don't take extra time to do that here.
 
-	// also, clear the pod configuration so that after we issue our Kill
-	// kubernetes doesn't start spinning things up before we exit.
-	k.updateChan <- kubelet.PodUpdate{Op: kubelet.SET}
+	//TODO(jdef) more ideally we would do something like this instead:
+	// 1. stop the kubelet's pod watch/rectification loop
+	// 2. kill the kubelet containers
 
-	KillKubeletContainers(k.dockerClient)
+	// clear the pod configuration so that after we issue our Kill
+	// kubernetes doesn't start spinning things up before we exit.
+	// this is probably a little racy since the kubelet pod syncLoop
+	// may also attempt to delete containers the same time that we are.
+	// see the above TODO.
+	k.updateChan <- kubelet.PodUpdate{Op: kubelet.SET}
+	k.killKubeletContainers()
+	os.Exit(0)
 }
 
 // Destroy existing k8s containers
-func KillKubeletContainers(dockerClient dockertools.DockerInterface) {
-	if containers, err := dockertools.GetKubeletDockerContainers(dockerClient, true); err == nil {
+func (k *KubernetesExecutor) killKubeletContainers() {
+	if containers, err := dockertools.GetKubeletDockerContainers(k.dockerClient, true); err == nil {
 		opts := docker.RemoveContainerOptions{
 			RemoveVolumes: true,
 			Force:         true,
@@ -520,7 +595,7 @@ func KillKubeletContainers(dockerClient dockertools.DockerInterface) {
 		for _, container := range containers {
 			opts.ID = container.ID
 			log.V(2).Infof("Removing container: %v", opts.ID)
-			if err := dockerClient.RemoveContainer(opts); err != nil {
+			if err := k.dockerClient.RemoveContainer(opts); err != nil {
 				log.Warning(err)
 			}
 		}

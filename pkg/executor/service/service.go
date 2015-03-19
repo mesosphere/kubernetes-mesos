@@ -40,6 +40,7 @@ type KubeletExecutorServer struct {
 	ProxyLogfile           string
 	ProxyBindall           bool
 	TotalMaxDeadContainers uint
+	SuicideTimeout         uint // in seconds
 }
 
 func NewKubeletExecutorServer() *KubeletExecutorServer {
@@ -48,7 +49,8 @@ func NewKubeletExecutorServer() *KubeletExecutorServer {
 		RunProxy:               true,
 		ProxyExec:              "./kube-proxy",
 		ProxyLogfile:           "./proxy-log",
-		TotalMaxDeadContainers: 20, // arbitrary
+		TotalMaxDeadContainers: 20,                                 // arbitrary
+		SuicideTimeout:         uint((20 * time.Minute).Seconds()), // should be > slave recovery_timeout
 	}
 	if pwd, err := os.Getwd(); err != nil {
 		log.Warningf("failed to determine current directory: %v", err)
@@ -103,6 +105,7 @@ func (s *KubeletExecutorServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.ProxyLogfile, "proxy_logfile", s.ProxyLogfile, "Path to the kube-proxy log file.")
 	fs.BoolVar(&s.ProxyBindall, "proxy_bindall", s.ProxyBindall, "When true will cause kube-proxy to bind to 0.0.0.0.")
 	fs.UintVar(&s.TotalMaxDeadContainers, "total_max_dead_containers", s.TotalMaxDeadContainers, "Max number of dead containers that GC allows to linger.")
+	fs.UintVar(&s.SuicideTimeout, "suicide_timeout", s.SuicideTimeout, "Self-terminate after this duration (in sec) of inactivity. Zero disables suicide watch.")
 }
 
 func (s *KubeletExecutorServer) AddStandaloneFlags(fs *pflag.FlagSet) {
@@ -226,7 +229,15 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, 
 		hks:                    hks,
 	}
 
-	exec := executor.New(k.Kubelet, updates, MESOS_CFG_SOURCE, kc.KubeClient, watch, kc.DockerClient)
+	exec := executor.New(
+		k.Kubelet,
+		updates,
+		MESOS_CFG_SOURCE,
+		kc.KubeClient,
+		watch,
+		kc.DockerClient,
+		time.Duration(ks.SuicideTimeout)*time.Second)
+
 	dconfig := bindings.DriverConfig{
 		Executor:         exec,
 		HostnameOverride: ks.HostnameOverride,
@@ -241,7 +252,7 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, 
 	log.V(2).Infof("Initialize executor driver...")
 
 	k.BirthCry()
-	executor.KillKubeletContainers(kc.DockerClient)
+	exec.Init()
 
 	go k.GarbageCollectLoop()
 	// go k.MonitorCAdvisor(kc.CAdvisorPort) // TODO(jdef) support cadvisor at some point
