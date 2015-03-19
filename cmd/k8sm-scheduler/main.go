@@ -28,6 +28,7 @@ import (
 func main() {
 	s := service.NewSchedulerServer()
 	s.AddFlags(pflag.CommandLine)
+	s.AddStandaloneFlags(pflag.CommandLine)
 
 	util.InitFlags()
 	util.InitLogs()

@@ -98,6 +98,7 @@ type SchedulerServer struct {
 	FrameworkName        string
 	HA                   bool
 	HADomain             string
+	KMPath               string
 
 	executable string // path to the binary running this service
 	client     *client.Client
@@ -120,6 +121,15 @@ func NewSchedulerServer() *SchedulerServer {
 		// that mesos-dns has a k8s plugin that registers services there.
 		HADomain: "services.kubernetes.mesos",
 	}
+	// cache this for later use. also useful in case the original binary gets deleted, e.g.
+	// during upgrades, development deployments, etc.
+	if filename, err := osext.Executable(); err != nil {
+		log.Fatalf("failed to determine path to currently running executable: %v", err)
+	} else {
+		s.executable = filename
+		s.KMPath = filename
+	}
+
 	return &s
 }
 
@@ -137,6 +147,7 @@ results in pods assigned to kubelets based on capacity and constraints.`,
 		},
 	}
 	s.AddFlags(hks.Flags())
+	s.AddHyperkubeFlags(hks.Flags())
 	return &hks
 }
 
@@ -148,8 +159,6 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 	fs.Var(&s.EtcdServerList, "etcd_servers", "List of etcd servers to watch (http://ip:port), comma separated. Mutually exclusive with -etcd_config")
 	fs.StringVar(&s.EtcdConfigFile, "etcd_config", s.EtcdConfigFile, "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
 	fs.BoolVar(&s.AllowPrivileged, "allow_privileged", s.AllowPrivileged, "If true, allow privileged containers.")
-	fs.StringVar(&s.ExecutorPath, "executor_path", s.ExecutorPath, "Location of the kubernetes executor executable")
-	fs.StringVar(&s.ProxyPath, "proxy_path", s.ProxyPath, "Location of the kubernetes proxy executable")
 	fs.StringVar(&s.MesosUser, "mesos_user", s.MesosUser, "Mesos user for this framework, defaults to root.")
 	fs.StringVar(&s.MesosRole, "mesos_role", s.MesosRole, "Mesos role for this framework, defaults to none.")
 	fs.StringVar(&s.MesosAuthPrincipal, "mesos_authentication_principal", s.MesosAuthPrincipal, "Mesos authentication principal.")
@@ -168,6 +177,15 @@ func (s *SchedulerServer) AddFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&s.HA, "ha", s.HA, "Run the scheduler in high availability mode with leader election: requires pre-deployed proxies and mesos-dns.")
 	fs.StringVar(&s.FrameworkName, "framework_name", s.FrameworkName, "The framework name to register with Mesos.")
 	fs.StringVar(&s.HADomain, "ha_domain", s.HADomain, "Domain of the HA scheduler service, only used in HA mode.")
+}
+
+func (s *SchedulerServer) AddStandaloneFlags(fs *pflag.FlagSet) {
+	fs.StringVar(&s.ExecutorPath, "executor_path", s.ExecutorPath, "Location of the kubernetes executor executable")
+	fs.StringVar(&s.ProxyPath, "proxy_path", s.ProxyPath, "Location of the kubernetes proxy executable")
+}
+
+func (s *SchedulerServer) AddHyperkubeFlags(fs *pflag.FlagSet) {
+	fs.StringVar(&s.KMPath, "km_path", s.KMPath, "Location of the km executable, may be a URI or an absolute file path.")
 }
 
 // returns (downloadURI, basename(path))
@@ -217,9 +235,21 @@ func (s *SchedulerServer) prepareExecutorInfo(hks *hyperkube.Server) *mesos.Exec
 	} else if _, err := hks.FindServer(KM_EXECUTOR); err != nil {
 		log.Fatalf("either run this scheduler via km or else --executor_path is required: %v", err)
 	} else {
-		uri, kmCmd := s.serveFrameworkArtifact(s.executable)
-		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(true)})
-		ci.Value = proto.String(fmt.Sprintf("./%s", kmCmd))
+		if strings.Index(s.KMPath, "://") > 0 {
+			// URI could point directly to executable, e.g. hdfs:///km
+			// or else indirectly, e.g. http://acmestorage/tarball.tgz
+			// so we assume that for this case the command will always "km"
+			ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(s.KMPath), Executable: proto.Bool(true)})
+			ci.Value = proto.String("./km") // TODO(jdef) extract constant
+		} else if s.KMPath != "" {
+			uri, kmCmd := s.serveFrameworkArtifact(s.KMPath)
+			ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(true)})
+			ci.Value = proto.String(fmt.Sprintf("./%s", kmCmd))
+		} else {
+			uri, kmCmd := s.serveFrameworkArtifact(s.executable)
+			ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(true)})
+			ci.Value = proto.String(fmt.Sprintf("./%s", kmCmd))
+		}
 		ci.Arguments = append(ci.Arguments, KM_EXECUTOR)
 	}
 
@@ -380,22 +410,9 @@ doFailover:
 
 func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess, *bindings.DriverConfig, scheduler.PluginInterface, tools.EtcdClient, func() error) {
 
-	// cache this for later use. also useful in case the original binary gets deleted, e.g.
-	// during upgrades, development deployments, etc.
-	if filename, err := osext.Executable(); err != nil {
-		log.Fatalf("failed to determine path to currently running executable: %v", err)
-	} else {
-		s.executable = filename
-	}
-
 	s.FrameworkName = strings.TrimSpace(s.FrameworkName)
 	if s.FrameworkName == "" {
 		log.Fatalf("framework_name must be a non-empty string")
-	}
-
-	if s.HA && s.ExecutorRunProxy {
-		log.Info("disabling executor_run_proxy for HA, assumes proxy is already running on all slaves")
-		s.ExecutorRunProxy = false
 	}
 
 	metrics.Register()
