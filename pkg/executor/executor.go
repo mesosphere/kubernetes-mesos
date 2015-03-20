@@ -43,12 +43,26 @@ func (s *stateType) get() stateType {
 	return stateType(atomic.LoadInt32((*int32)(s)))
 }
 
-func (s *stateType) set(x stateType) {
-	atomic.StoreInt32((*int32)(s), int32(x))
-}
-
 func (s *stateType) transition(from, to stateType) bool {
 	return atomic.CompareAndSwapInt32((*int32)(s), int32(from), int32(to))
+}
+
+func (s *stateType) transitionTo(to stateType, unless ...stateType) bool {
+	if len(unless) == 0 {
+		atomic.StoreInt32((*int32)(s), int32(to))
+		return true
+	}
+	for {
+		state := s.get()
+		for _, x := range unless {
+			if state == x {
+				return false
+			}
+		}
+		if s.transition(state, to) {
+			return true
+		}
+	}
 }
 
 type kuberTask struct {
@@ -208,44 +222,51 @@ func (k *KubernetesExecutor) LaunchTask(driver bindings.ExecutorDriver, taskInfo
 
 // determine whether we need to start a suicide countdown. if so, then start
 // a timer that, upon expiration, causes this executor to commit suicide.
-// assumes that caller is holding the state lock.
 func (k *KubernetesExecutor) resetSuicideWatch() {
-	if k.suicideTimeout < 1 {
-		return
-	}
-	if len(k.tasks) > 0 {
-		if k.suicideWatch != nil {
-			k.suicideWatch.Stop()
-		}
-		return
-	}
-	if k.suicideWatch != nil && k.suicideWatch.Reset(k.suicideTimeout) {
-		return
-	}
-	log.V(2).Info("resetting suicide watch for %s", k.suicideTimeout)
-	k.suicideWatch = time.AfterFunc(k.suicideTimeout, func() {
+	go func() {
 		k.lock.Lock()
 		defer k.lock.Unlock()
 
-		log.Warningf("Suicide timeout (%s) expired", k.suicideTimeout)
-		k.attemptSuicide()
-	})
+		if k.suicideTimeout < 1 {
+			return
+		}
+		if k.suicideWatch != nil {
+			if len(k.tasks) > 0 {
+				k.suicideWatch.Stop()
+				return
+			}
+			if k.suicideWatch.Reset(k.suicideTimeout) {
+				return
+			}
+		}
+		log.V(2).Info("resetting suicide watch for %s", k.suicideTimeout)
+		k.suicideWatch = time.AfterFunc(k.suicideTimeout, func() {
+			log.Warningf("Suicide timeout (%s) expired", k.suicideTimeout)
+			k.attemptSuicide()
+		})
+	}()
 }
 
 // assumes that caller is holding state lock
 func (k *KubernetesExecutor) attemptSuicide() {
-	log.Infoln("Attempting suicide")
-	for {
-		switch state := (&k.state).get(); state {
-		case suicidalState, terminalState:
-			return
-		default:
-			if (&k.state).transition(state, suicidalState) {
-				//TODO(jdef) let the scheduler know?
-				//TODO(jdef) is suicide more graceful than slave-demanded shutdown?
-				k.doShutdown()
-			}
+	k.lock.Lock()
+	defer k.lock.Unlock()
+
+	//fail-safe
+	if len(k.tasks) > 0 {
+		ids := []string{}
+		for taskid := range k.tasks {
+			ids = append(ids, taskid)
 		}
+		log.Errorf("suicide attempt failed, there are still running tasks: %v", ids)
+		return
+	}
+
+	log.Infoln("Attempting suicide")
+	if (&k.state).transitionTo(suicidalState, suicidalState, terminalState) {
+		//TODO(jdef) let the scheduler know?
+		//TODO(jdef) is suicide more graceful than slave-demanded shutdown?
+		k.doShutdown()
 	}
 }
 
@@ -556,14 +577,7 @@ func (k *KubernetesExecutor) FrameworkMessage(driver bindings.ExecutorDriver, me
 
 	switch message {
 	case messages.Kamikaze:
-		k.lock.Lock()
-		defer k.lock.Unlock()
-		// attempt suicide if we're taskless
-		if count := len(k.tasks); count == 0 {
-			k.attemptSuicide()
-		} else {
-			log.Warningf("aborting kamikaze, task count != 0 (%d)", count)
-		}
+		k.attemptSuicide()
 	}
 }
 
@@ -582,7 +596,7 @@ func (k *KubernetesExecutor) doShutdown() {
 
 	//TODO(jdef) stop the driver (if it's still running)
 
-	(&k.state).set(terminalState)
+	(&k.state).transitionTo(terminalState)
 	close(k.done)
 
 	log.Infoln("Shutdown the executor")
