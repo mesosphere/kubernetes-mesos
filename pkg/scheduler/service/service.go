@@ -420,8 +420,8 @@ func validateLeadershipTransition(desired, current string) {
 		// should *never* happen, but..
 		log.Fatalf("illegal scheduler UID: %q", desired)
 	}
-	if d == c {
-		log.Fatalf("desired scheduler group (%x) == current scheduler group (%x)", d, c)
+	if d != c && c != 0 {
+		log.Fatalf("desired scheduler group (%x) != current scheduler group (%x)", d, c)
 	}
 }
 
