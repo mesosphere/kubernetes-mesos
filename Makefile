@@ -37,7 +37,7 @@ TAGS		?=
 
 BUILDDIR	?= $(current_dir)/_build
 
-.PHONY: all error require-godep require-vendor install info bootstrap format test patch version test.v clean vet fix prepare
+.PHONY: all error require-godep require-vendor install info bootstrap format test patch version test.v clean lint vet fix prepare
 
 # FRAMEWORK_FLAGS := -v -x -tags '$(TAGS)'
 FRAMEWORK_FLAGS := -tags '$(TAGS)'
@@ -69,6 +69,9 @@ clean:
 
 format:
 	env GOPATH=$(BUILDDIR) go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
+
+lint:
+	for pkg in $(FRAMEWORK_CMD) $(FRAMEWORK_LIB); do env GOPATH=$(BUILDDIR) go$@ $$pkg; done
 
 vet fix:
 	env GOPATH=$(BUILDDIR) go $@ $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
