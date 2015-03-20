@@ -416,11 +416,12 @@ func validateLeadershipTransition(desired, current string) {
 	log.Infof("validating leadership transition")
 	d := ParseUID(desired).Group()
 	c := ParseUID(current).Group()
-	if d != c {
-		log.Fatalf("desired scheduler group (%x) != current scheduler group (%x)", d, c)
-	} else if d == 0 {
+	if d == 0 {
 		// should *never* happen, but..
 		log.Fatalf("illegal scheduler UID: %q", desired)
+	}
+	if d == c {
+		log.Fatalf("desired scheduler group (%x) == current scheduler group (%x)", d, c)
 	}
 }
 
