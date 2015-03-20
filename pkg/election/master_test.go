@@ -29,6 +29,10 @@ type slowService struct {
 	changes chan<- bool
 }
 
+func (s *slowService) Validate(d, c Master) {
+	// noop
+}
+
 func (s *slowService) Start() {
 	if s.on {
 		s.t.Errorf("started already on service")

@@ -17,13 +17,23 @@ type candidateService struct {
 	sched     *SchedulerProcess
 	newDriver DriverFactory
 	role      roleType
+	valid     ValidationFunc
 }
 
-func NewCandidate(s *SchedulerProcess, f DriverFactory) election.Service {
+type ValidationFunc func(desiredUid, currentUid string)
+
+func NewCandidate(s *SchedulerProcess, f DriverFactory, v ValidationFunc) election.Service {
 	return &candidateService{
 		sched:     s,
 		newDriver: f,
 		role:      followerRole,
+		valid:     v,
+	}
+}
+
+func (self *candidateService) Validate(desired, current election.Master) {
+	if self.valid != nil {
+		self.valid(string(desired), string(current))
 	}
 }
 

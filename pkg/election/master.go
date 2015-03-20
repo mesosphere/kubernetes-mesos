@@ -39,6 +39,7 @@ type MasterElector interface {
 
 // Service represents anything that can start and stop on demand.
 type Service interface {
+	Validate(desired, current Master)
 	Start()
 	Stop()
 }
@@ -101,6 +102,7 @@ func (n *notifier) serviceLoop() {
 			n.cond.Wait()
 		}
 		if n.current != n.id && n.desired == n.id {
+			n.service.Validate(n.desired, n.current)
 			n.service.Start()
 		} else if n.current == n.id && n.desired != n.id {
 			n.service.Stop()

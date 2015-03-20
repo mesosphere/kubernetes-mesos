@@ -33,7 +33,6 @@ import (
 
 	_ "github.com/mesosphere/kubernetes-mesos/pkg/profile"
 
-	"code.google.com/p/go-uuid/uuid"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
@@ -359,24 +358,21 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 
 	var driver bindings.SchedulerDriver
 	driverFactory := ha.DriverFactory(func() (drv bindings.SchedulerDriver, err error) {
-		err = deferredInit()
-		if err != nil {
-			return
-		}
-		// defer obtaining framework ID to prevent multiple schedulers
-		// from overwriting each other's framework IDs
-		frameworkId, err := s.fetchFrameworkID(etcdClient)
-		if err == nil {
-			dconfig.Framework.Id = frameworkId
-			drv, err = bindings.NewMesosSchedulerDriver(*dconfig)
-			driver = drv
+		if err = deferredInit(); err == nil {
+			// defer obtaining framework ID to prevent multiple schedulers
+			// from overwriting each other's framework IDs
+			if dconfig.Framework.Id, err = s.fetchFrameworkID(etcdClient); err == nil {
+				drv, err = bindings.NewMesosSchedulerDriver(*dconfig)
+				driver = drv
+			}
 		}
 		return
 	})
 	if s.HA {
-		srv := ha.NewCandidate(schedulerProcess, driverFactory)
+		validation := ha.ValidationFunc(validateLeadershipTransition)
+		srv := ha.NewCandidate(schedulerProcess, driverFactory, validation)
 		path := fmt.Sprintf(meta.DefaultElectionFormat, s.FrameworkName)
-		sid := fmt.Sprintf("%x_%s", ehash, uuid.New())
+		sid := NewUID(ehash).String()
 		log.Infof("registering for election at %v with id %v", path, sid)
 		go election.Notify(election.NewEtcdMasterElector(etcdClient), path, sid, srv)
 	} else {
@@ -413,8 +409,19 @@ doFailover:
 		schedulerProcess.End()
 		log.Fatalf("failed to failover, scheduler will terminate: %v", err)
 	}
-
 	select {} // will never arrive here
+}
+
+func validateLeadershipTransition(desired, current string) {
+	log.Infof("validating leadership transition")
+	d := ParseUID(desired).Group()
+	c := ParseUID(current).Group()
+	if d != c {
+		log.Fatalf("desired scheduler group (%x) != current scheduler group (%x)", d, c)
+	} else if d == 0 {
+		// should *never* happen, but..
+		log.Fatalf("illegal scheduler UID: %q", desired)
+	}
 }
 
 func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess, *bindings.DriverConfig, scheduler.PluginInterface, tools.EtcdClient, func() error, uint64) {
