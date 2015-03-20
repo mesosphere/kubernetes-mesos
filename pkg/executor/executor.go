@@ -212,10 +212,17 @@ func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId s
 		binding.Annotations[k] = v
 	}
 
+	deleteTask := func() {
+		k.lock.Lock()
+		defer k.lock.Unlock()
+		delete(k.tasks, taskId)
+	}
+
 	log.Infof("Binding '%v' to '%v' with annotations %+v...", binding.PodID, binding.Host, binding.Annotations)
 	ctx := api.WithNamespace(api.NewDefaultContext(), binding.Namespace)
 	err := k.client.Post().Namespace(api.NamespaceValue(ctx)).Resource("bindings").Body(binding).Do().Error()
 	if err != nil {
+		deleteTask()
 		k.sendStatus(driver, newStatus(mutil.NewTaskID(taskId), mesos.TaskState_TASK_FAILED,
 			messages.CreateBindingFailure))
 		return
@@ -240,6 +247,7 @@ func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId s
 		},
 	})
 	if err != nil {
+		deleteTask()
 		log.Errorf("failed to marshal pod status result: %v", err)
 		k.sendStatus(driver, newStatus(mutil.NewTaskID(taskId), mesos.TaskState_TASK_FAILED, err.Error()))
 		return
