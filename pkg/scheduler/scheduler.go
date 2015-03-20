@@ -5,6 +5,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"reflect"
 	"sync"
 	"time"
 
@@ -89,8 +90,9 @@ type KubernetesScheduler struct {
 	slaveIDs     map[string]string // Slave's hostname => slaveID
 	taskRegistry podtask.Registry
 
-	plugin     PluginInterface
-	reconciler *Reconciler
+	plugin            PluginInterface
+	reconciler        *Reconciler
+	reconcileCooldown time.Duration
 }
 
 type Config struct {
@@ -100,6 +102,7 @@ type Config struct {
 	EtcdClient        tools.EtcdClient
 	FailoverTimeout   float64
 	ReconcileInterval int64
+	ReconcileCooldown time.Duration
 }
 
 // New create a new KubernetesScheduler
@@ -125,9 +128,10 @@ func New(config Config) *KubernetesScheduler {
 			LingerTTL:     defaultOfferLingerTTL * time.Second, // remember expired offers so that we can tell if a previously scheduler offer relies on one
 			ListenerDelay: defaultListenerDelay * time.Second,
 		}),
-		slaves:       make(map[string]*Slave),
-		slaveIDs:     make(map[string]string),
-		taskRegistry: podtask.NewInMemoryRegistry(),
+		slaves:            make(map[string]*Slave),
+		slaveIDs:          make(map[string]string),
+		taskRegistry:      podtask.NewInMemoryRegistry(),
+		reconcileCooldown: config.ReconcileCooldown,
 	}
 	return k
 }
@@ -207,6 +211,7 @@ func (k *KubernetesScheduler) Reregistered(drv bindings.SchedulerDriver, mi *mes
 	k.reconciler.RequestExplicit()
 }
 
+// perform one-time initialization actions upon the first registration event received from Mesos.
 func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDriver) {
 	k.driver = driver
 	if k.failoverTimeout > 0 {
@@ -216,7 +221,11 @@ func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDri
 		}
 		go util.Forever(k.storeFrameworkId, refreshInterval)
 	}
-	k.reconciler = newReconciler(k.explicitlyReconcileTasks)
+
+	r1 := k.makeTaskRegistryReconciler()
+	r2 := k.makePodRegistryReconciler()
+
+	k.reconciler = newReconciler(k.makeCompositeReconciler(r1, r2), k.reconcileCooldown)
 	go k.reconciler.Run(driver)
 
 	if k.reconcileInterval > 0 {
@@ -331,8 +340,6 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 	case mesos.TaskState_TASK_LOST:
 		task, state := k.taskRegistry.UpdateStatus(taskStatus)
 
-		//TODO(jdef) check for Source:*SOURCE_SLAVE,Reason:*REASON_EXECUTOR_TERMINATED
-
 		if state == podtask.StateRunning && taskStatus.ExecutorId != nil && taskStatus.SlaveId != nil {
 			//TODO(jdef) this may not be meaningful once we have proper checkpointing and master detection
 			//If we're reconciling and receive this then the executor may be
@@ -356,6 +363,9 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 			if err := k.client.Pods(namespace).Delete(name); err != nil {
 				log.Errorf("failed to delete pod %v/%v for lost task %v: %v", namespace, name, task.ID, err)
 			}
+		} else if taskStatus.GetReason() == mesos.TaskStatus_REASON_EXECUTOR_TERMINATED {
+			// attempt to prevent dangling pods in the pod and task registries
+			k.reconciler.RequestExplicit()
 		}
 	}
 }
@@ -466,43 +476,108 @@ func (k *KubernetesScheduler) Error(driver bindings.SchedulerDriver, message str
 	log.Fatalf("fatal scheduler error: %v\n", message)
 }
 
+// filter func used for explicit task reconciliation, selects only non-terminal tasks which
+// have been communicated to mesos (read: launched).
+func explicitTaskFilter(t *podtask.T) bool {
+	switch t.State {
+	case podtask.StateRunning:
+		return true
+	case podtask.StatePending:
+		return t.Has(podtask.Launched)
+	default:
+		return false
+	}
+}
+
+// invoke the given ReconcilerAction funcs in sequence, aborting the sequence if reconciliation
+// is cancelled. if any other errors occur the composite reconciler will attempt to complete the
+// sequence, reporting only the last generated error.
+func (k *KubernetesScheduler) makeCompositeReconciler(actions ...ReconcilerAction) ReconcilerAction {
+	return ReconcilerAction(func(d bindings.SchedulerDriver, c <-chan struct{}) (err error) {
+		for _, action := range actions {
+			if err = action(d, c); err == reconciliationCancelledErr {
+				break
+			} else if err != nil {
+				log.Warningf("composite reconciliation error: %v", err)
+			}
+		}
+		return
+	})
+}
+
+// reconciler action factory, performs explicit task reconciliation for non-terminal
+// tasks listed in the scheduler's internal taskRegistry.
+func (k *KubernetesScheduler) makeTaskRegistryReconciler() ReconcilerAction {
+	return ReconcilerAction(func(drv bindings.SchedulerDriver, cancel <-chan struct{}) error {
+		taskToSlave := make(map[string]string)
+		func() {
+			k.Lock()
+			defer k.Unlock()
+			for _, taskId := range k.taskRegistry.List(explicitTaskFilter) {
+				t, _ := k.taskRegistry.Get(taskId)
+				if t != nil && t.TaskInfo != nil {
+					taskToSlave[taskId] = t.TaskInfo.SlaveId.GetValue()
+				}
+			}
+		}()
+		return k.explicitlyReconcileTasks(drv, taskToSlave, cancel)
+	})
+}
+
+// reconciler action factory, performs explicit task reconciliation for non-terminal
+// tasks identified by annotations in the Kubernetes pod registry.
+func (k *KubernetesScheduler) makePodRegistryReconciler() ReconcilerAction {
+	return ReconcilerAction(func(drv bindings.SchedulerDriver, cancel <-chan struct{}) error {
+		ctx := api.NewDefaultContext()
+		podList, err := k.client.Pods(api.NamespaceValue(ctx)).List(labels.Everything())
+		if err != nil {
+			return fmt.Errorf("failed to reconcile pod registry: %v", err)
+		}
+		taskToSlave := make(map[string]string)
+		for _, pod := range podList.Items {
+			if len(pod.Annotations) == 0 {
+				continue
+			}
+			taskId, found := pod.Annotations[meta.TaskIdKey]
+			if !found {
+				continue
+			}
+			slaveId, found := pod.Annotations[meta.SlaveIdKey]
+			if !found {
+				continue
+			}
+			taskToSlave[taskId] = slaveId
+		}
+		return k.explicitlyReconcileTasks(drv, taskToSlave, cancel)
+	})
+}
+
 // execute an explicit task reconciliation, as per http://mesos.apache.org/documentation/latest/reconciliation/
-func (k *KubernetesScheduler) explicitlyReconcileTasks(driver bindings.SchedulerDriver, cancel <-chan struct{}) error {
+func (k *KubernetesScheduler) explicitlyReconcileTasks(driver bindings.SchedulerDriver, taskToSlave map[string]string, cancel <-chan struct{}) error {
 	log.Info("explicit reconcile tasks")
 
 	// tell mesos to send us the latest status updates for all the non-terminal tasks that we know about
 	statusList := []*mesos.TaskStatus{}
-	filter := func(t *podtask.T) bool {
-		switch t.State {
-		case podtask.StateRunning:
-			return true
-		case podtask.StatePending:
-			return t.Has(podtask.Launched)
-		default:
-			return false
+	remaining := util.KeySet(reflect.ValueOf(taskToSlave))
+	for taskId, slaveId := range taskToSlave {
+		if slaveId == "" {
+			delete(taskToSlave, taskId)
+			continue
 		}
-	}
-
-	remaining := util.NewStringSet()
-	remaining.Insert(k.taskRegistry.List(filter)...)
-	for taskId := range remaining {
-		slaveID := func(t *podtask.T, _ podtask.StateType) *mesos.SlaveID {
-			k.Lock()
-			defer k.Unlock()
-			if t != nil && t.TaskInfo != nil {
-				return t.TaskInfo.SlaveId
-			}
-			return nil
-		}(k.taskRegistry.Get(taskId))
-
 		statusList = append(statusList, &mesos.TaskStatus{
 			TaskId:  mutil.NewTaskID(taskId),
-			SlaveId: slaveID,
+			SlaveId: mutil.NewSlaveID(slaveId),
 			State:   mesos.TaskState_TASK_RUNNING.Enum(), // req'd field, doesn't have to reflect reality
 		})
 	}
-	if _, err := driver.ReconcileTasks(statusList); err != nil {
-		return err
+
+	select {
+	case <-cancel:
+		return reconciliationCancelledErr
+	default:
+		if _, err := driver.ReconcileTasks(statusList); err != nil {
+			return err
+		}
 	}
 
 	start := time.Now()
@@ -522,7 +597,7 @@ func (k *KubernetesScheduler) explicitlyReconcileTasks(driver bindings.Scheduler
 				k.RLock()
 				defer k.RUnlock()
 				for taskId := range remaining {
-					if task, _ := k.taskRegistry.Get(taskId); task != nil && filter(task) && task.UpdatedTime.Before(start) {
+					if task, _ := k.taskRegistry.Get(taskId); task != nil && explicitTaskFilter(task) && task.UpdatedTime.Before(start) {
 						// keep this task in remaining list
 						continue
 					}
@@ -538,18 +613,22 @@ var (
 	reconciliationCancelledErr = fmt.Errorf("explicit task reconciliation cancelled")
 )
 
+type ReconcilerAction func(driver bindings.SchedulerDriver, cancel <-chan struct{}) error
+
 type Reconciler struct {
-	Action   func(driver bindings.SchedulerDriver, cancel <-chan struct{}) error
+	Action   ReconcilerAction
 	explicit chan struct{} // send an empty struct to trigger explicit reconciliation
 	implicit chan struct{} // send an empty struct to trigger implicit reconciliation
 	done     chan struct{} // close this when you want the reconciler to exit
+	cooldown time.Duration
 }
 
-func newReconciler(action func(bindings.SchedulerDriver, <-chan struct{}) error) *Reconciler {
+func newReconciler(action ReconcilerAction, cooldown time.Duration) *Reconciler {
 	return &Reconciler{
 		Action:   action,
 		explicit: make(chan struct{}, 1),
 		implicit: make(chan struct{}, 1),
+		cooldown: cooldown,
 	}
 }
 
@@ -647,8 +726,7 @@ requestLoop:
 		select {
 		case <-r.done:
 			return
-		//TODO(jdef) extract constant
-		case <-time.After(15 * time.Second): // noop
+		case <-time.After(r.cooldown): // noop
 		}
 	} // for
 }

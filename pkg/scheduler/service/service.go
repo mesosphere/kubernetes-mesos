@@ -68,6 +68,7 @@ import (
 const (
 	defaultMesosUser         = "root" // should have privs to execute docker and iptables commands
 	defaultReconcileInterval = 300    // 5m default task reconciliation interval
+	defaultReconcileCooldown = 15 * time.Second
 )
 
 type SchedulerServer struct {
@@ -95,6 +96,7 @@ type SchedulerServer struct {
 	DriverPort             uint
 	HostnameOverride       string
 	ReconcileInterval      int64
+	ReconcileCooldown      time.Duration
 	Graceful               bool
 	FrameworkName          string
 	HA                     bool
@@ -116,6 +118,7 @@ func NewSchedulerServer() *SchedulerServer {
 		MesosAuthProvider:      sasl.ProviderName,
 		MesosUser:              defaultMesosUser,
 		ReconcileInterval:      defaultReconcileInterval,
+		ReconcileCooldown:      defaultReconcileCooldown,
 		Checkpoint:             true,
 		FrameworkName:          schedcfg.DefaultInfoName,
 		HA:                     false,
@@ -175,6 +178,7 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&s.ExecutorLogV, "executor_logv", s.ExecutorLogV, "Logging verbosity of spawned executor processes.")
 	fs.DurationVar(&s.ExecutorSuicideTimeout, "executor_suicide_timeout", s.ExecutorSuicideTimeout, "Executor self-terminates after this period of inactivity. Zero disables suicide watch.")
 	fs.Int64Var(&s.ReconcileInterval, "reconcile_interval", s.ReconcileInterval, "Interval at which to execute task reconciliation, in sec. Zero disables.")
+	fs.DurationVar(&s.ReconcileCooldown, "reconcile_cooldown", s.ReconcileCooldown, "Minimum rest period between task reconciliation operations.")
 	fs.BoolVar(&s.Graceful, "graceful", s.Graceful, "Indicator of a graceful failover, intended for internal use only.")
 	fs.BoolVar(&s.HA, "ha", s.HA, "Run the scheduler in high availability mode with leader election: requires pre-deployed proxies and mesos-dns.")
 	fs.StringVar(&s.FrameworkName, "framework_name", s.FrameworkName, "The framework name to register with Mesos.")
@@ -441,6 +445,11 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 	// Send events to APIserver if there is a client.
 	record.StartRecording(client.Events(""), api.EventSource{Component: "scheduler"})
 
+	if s.ReconcileCooldown < defaultReconcileCooldown {
+		s.ReconcileCooldown = defaultReconcileCooldown
+		log.Warningf("user-specified reconcile cooldown too small, defaulting to %v", s.ReconcileCooldown)
+	}
+
 	// Create mesos scheduler driver.
 	executor := s.prepareExecutorInfo(hks)
 	mesosPodScheduler := scheduler.New(scheduler.Config{
@@ -450,6 +459,7 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 		EtcdClient:        etcdClient,
 		FailoverTimeout:   s.FailoverTimeout,
 		ReconcileInterval: s.ReconcileInterval,
+		ReconcileCooldown: s.ReconcileCooldown,
 	})
 
 	schedulerProcess := ha.New(mesosPodScheduler)
