@@ -11,6 +11,14 @@ const (
 	offerSubsystem = "offers"
 )
 
+type OfferDeclinedReason string
+
+const (
+	OfferExpired   = OfferDeclinedReason("expired")
+	OfferRescinded = OfferDeclinedReason("rescinded")
+	OfferCompat    = OfferDeclinedReason("compat")
+)
+
 var (
 	OffersReceived = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -27,7 +35,7 @@ var (
 			Name:      "declined",
 			Help:      "Counter of offers declined by the framework broken out by slave host.",
 		},
-		[]string{"hostname"},
+		[]string{"hostname", "reason"},
 	)
 
 	OffersAcquired = prometheus.NewCounterVec(

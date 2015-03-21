@@ -20,9 +20,10 @@ import (
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	mutil "github.com/mesos/mesos-go/mesosutil"
 	bindings "github.com/mesos/mesos-go/scheduler"
-	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
+	execcfg "github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/messages"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
+	offerMetrics "github.com/mesosphere/kubernetes-mesos/pkg/offers/metrics"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
@@ -120,6 +121,17 @@ func New(config Config) *KubernetesScheduler {
 		failoverTimeout:   config.FailoverTimeout,
 		reconcileInterval: config.ReconcileInterval,
 		offers: offers.CreateRegistry(offers.RegistryConfig{
+			Compat: func(o *mesos.Offer) bool {
+				// filter the offers: the executor IDs must not identify a kubelet-
+				// executor with a group that doesn't match ours
+				for _, eid := range o.GetExecutorIds() {
+					execuid := uid.Parse(eid.GetValue())
+					if execuid.Name() == execcfg.DefaultInfoID && execuid.Group() != k.executorGroup {
+						return false
+					}
+				}
+				return true
+			},
 			DeclineOffer: func(id string) error {
 				//TODO(jdef) only decline offers if we're connected/registered
 				offerId := mutil.NewOfferID(id)
@@ -257,7 +269,6 @@ func (k *KubernetesScheduler) ResourceOffers(driver bindings.SchedulerDriver, of
 
 	k.Lock()
 	defer k.Unlock()
-	offers = k.compatibleOffers(driver, offers)
 
 	// Record the offers in the global offer map as well as each slave's offer map.
 	k.offers.Add(offers)
@@ -275,36 +286,13 @@ func (k *KubernetesScheduler) ResourceOffers(driver bindings.SchedulerDriver, of
 	}
 }
 
-//TODO(jdef) move this into pkg/offers and add metrics
-func (k *KubernetesScheduler) compatibleOffers(driver bindings.SchedulerDriver, offers []*mesos.Offer) (compat []*mesos.Offer) {
-	// filter the offers: the executor IDs must include an ID that matches
-	// the same group as the executor ID that we launch tasks with.
-	// decline all incompatible offers.
-offerLoop:
-	for _, o := range offers {
-		for _, eid := range o.GetExecutorIds() {
-			execuid := uid.Parse(eid.GetValue())
-			if execuid.Name() == config.DefaultInfoID && execuid.Group() != k.executorGroup {
-				filters := &mesos.Filters{}
-				if _, err := k.driver.DeclineOffer(o.Id, filters); err != nil {
-					log.Errorf("failed to decline incompatible offer %q: %v", o.Id.GetValue(), err)
-				}
-				continue offerLoop
-			}
-		}
-		compat = append(compat, o)
-	}
-	log.V(3).Infof("found %d compatible offers", len(compat))
-	return
-}
-
 // OfferRescinded is called when the resources are recinded from the scheduler.
 func (k *KubernetesScheduler) OfferRescinded(driver bindings.SchedulerDriver, offerId *mesos.OfferID) {
 	log.Infof("Offer rescinded %v\n", offerId)
 
 	oid := offerId.GetValue()
 	if offer, ok := k.offers.Get(oid); ok {
-		k.offers.Delete(oid)
+		k.offers.Delete(oid, offerMetrics.OfferRescinded)
 		if details := offer.Details(); details != nil {
 			k.Lock()
 			defer k.Unlock()
