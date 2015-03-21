@@ -180,7 +180,7 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.Int64Var(&s.ReconcileInterval, "reconcile_interval", s.ReconcileInterval, "Interval at which to execute task reconciliation, in sec. Zero disables.")
 	fs.DurationVar(&s.ReconcileCooldown, "reconcile_cooldown", s.ReconcileCooldown, "Minimum rest period between task reconciliation operations.")
 	fs.BoolVar(&s.Graceful, "graceful", s.Graceful, "Indicator of a graceful failover, intended for internal use only.")
-	fs.BoolVar(&s.HA, "ha", s.HA, "Run the scheduler in high availability mode with leader election: requires pre-deployed proxies and mesos-dns.")
+	fs.BoolVar(&s.HA, "ha", s.HA, "Run the scheduler in high availability mode with leader election. All peers should be configured exactly the same.")
 	fs.StringVar(&s.FrameworkName, "framework_name", s.FrameworkName, "The framework name to register with Mesos.")
 	fs.StringVar(&s.HADomain, "ha_domain", s.HADomain, "Domain of the HA scheduler service, only used in HA mode. If specified may be used to construct artifact download URIs.")
 }
