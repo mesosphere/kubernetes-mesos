@@ -1,4 +1,4 @@
-package service
+package uid
 
 import (
 	"testing"
@@ -9,7 +9,7 @@ func TestUID_Parse(t *testing.T) {
 	groups := []uint64{0x1234567890abcdef, 0x123, 0xface}
 
 	for i, good := range valid {
-		u := ParseUID(good)
+		u := Parse(good)
 		if u == nil {
 			t.Errorf("expected parsed UID, not nil")
 		}
@@ -23,7 +23,7 @@ func TestUID_Parse(t *testing.T) {
 
 	invalid := []string{"", "bad"}
 	for _, bad := range invalid {
-		u := ParseUID(bad)
+		u := Parse(bad)
 		if u != nil {
 			t.Errorf("expected nil UID instead of %v", u)
 		}

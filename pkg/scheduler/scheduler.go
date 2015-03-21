@@ -26,6 +26,7 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/uid"
 )
 
 const (
@@ -71,6 +72,7 @@ type KubernetesScheduler struct {
 	// Config related
 
 	executor          *mesos.ExecutorInfo
+	executorGroup     uint64
 	scheduleFunc      PodScheduleFunc
 	client            *client.Client
 	etcdClient        tools.EtcdClient
@@ -111,6 +113,7 @@ func New(config Config) *KubernetesScheduler {
 	k = &KubernetesScheduler{
 		RWMutex:           new(sync.RWMutex),
 		executor:          config.Executor,
+		executorGroup:     uid.Parse(config.Executor.ExecutorId.GetValue()).Group(),
 		scheduleFunc:      config.ScheduleFunc,
 		client:            config.Client,
 		etcdClient:        config.EtcdClient,
@@ -161,7 +164,7 @@ func (k *KubernetesScheduler) InstallDebugHandlers() {
 		}()
 		for _, slaveId := range ids {
 			_, err := k.driver.SendFrameworkMessage(
-				mutil.NewExecutorID(config.DefaultInfoID),
+				k.executor.ExecutorId,
 				mutil.NewSlaveID(slaveId),
 				messages.Kamikaze)
 			if err != nil {
@@ -254,6 +257,7 @@ func (k *KubernetesScheduler) ResourceOffers(driver bindings.SchedulerDriver, of
 
 	k.Lock()
 	defer k.Unlock()
+	offers = k.compatibleOffers(driver, offers)
 
 	// Record the offers in the global offer map as well as each slave's offer map.
 	k.offers.Add(offers)
@@ -269,6 +273,29 @@ func (k *KubernetesScheduler) ResourceOffers(driver bindings.SchedulerDriver, of
 		slave.Offers[offerId] = empty{}
 		k.slaveIDs[slave.HostName] = slaveId
 	}
+}
+
+//TODO(jdef) move this into pkg/offers and add metrics
+func (k *KubernetesScheduler) compatibleOffers(driver bindings.SchedulerDriver, offers []*mesos.Offer) (compat []*mesos.Offer) {
+	// filter the offers: the executor IDs must include an ID that matches
+	// the same group as the executor ID that we launch tasks with.
+	// decline all incompatible offers.
+offerLoop:
+	for _, o := range offers {
+		for _, eid := range o.GetExecutorIds() {
+			execuid := uid.Parse(eid.GetValue())
+			if execuid.Name() == config.DefaultInfoID && execuid.Group() != k.executorGroup {
+				filters := &mesos.Filters{}
+				if _, err := k.driver.DeclineOffer(o.Id, filters); err != nil {
+					log.Errorf("failed to decline incompatible offer %q: %v", o.Id.GetValue(), err)
+				}
+				continue offerLoop
+			}
+		}
+		compat = append(compat, o)
+	}
+	log.V(3).Infof("found %d compatible offers", len(compat))
+	return
 }
 
 // OfferRescinded is called when the resources are recinded from the scheduler.
