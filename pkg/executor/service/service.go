@@ -167,12 +167,8 @@ func (s *KubeletExecutorServer) Run(hks *hyperkube.Server, _ []string) error {
 		return s.createAndInitKubelet(kc, hks, finished)
 	}))
 
-	// block until driver is shut down
-	select {
-	case <-finished:
-	}
-	log.Infoln("kubelet executor exiting")
-	return nil
+	// block until executor is shut down or commits suicide
+	select {}
 }
 
 func defaultBindingAddress() string {
