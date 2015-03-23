@@ -87,7 +87,7 @@ type KubernetesExecutor struct {
 	dockerClient    dockertools.DockerInterface
 	suicideWatch    *time.Timer
 	suicideTimeout  time.Duration
-	kubeletFinished chan struct{} // signals that kubelet Run() died
+	kubeletFinished <-chan struct{} // signals that kubelet Run() died
 }
 
 type Config struct {
@@ -98,7 +98,7 @@ type Config struct {
 	Watch           watch.Interface
 	Docker          dockertools.DockerInterface
 	SuicideTimeout  time.Duration
-	KubeletFinished chan struct{}
+	KubeletFinished <-chan struct{}
 }
 
 func (k *KubernetesExecutor) isConnected() bool {
@@ -140,6 +140,10 @@ func (k *KubernetesExecutor) Init(driver bindings.ExecutorDriver) {
 	k.killKubeletContainers()
 	k.resetSuicideWatch(driver)
 	//TODO(jdef) monitor kubeletFinished and shutdown if it happens
+}
+
+func (k *KubernetesExecutor) Done() <-chan struct{} {
+	return k.done
 }
 
 func (k *KubernetesExecutor) isDone() bool {
@@ -607,6 +611,8 @@ func (k *KubernetesExecutor) doShutdown(driver bindings.ExecutorDriver) {
 	}()
 
 	(&k.state).transitionTo(terminalState)
+
+	// signal to all listeners that this KubeletExecutor is done!
 	close(k.done)
 
 	log.Infoln("Stopping executor driver")
@@ -623,19 +629,13 @@ func (k *KubernetesExecutor) doShutdown(driver bindings.ExecutorDriver) {
 
 	// clear the pod configuration cleanly: tell k8s "there are no pods"
 	// and let it clean things up (pods, volumes, etc).
-	k.updateChan <- kubelet.PodUpdate{Op: kubelet.SET}
-
-	// we can close this because we're the only ones that ever write to it,
-	// and all writes are guarded by the state lock, which should be Lock()ed.
-	// this should cause the kubelet Run() to exit (eventually).
-	close(k.updateChan)
 
 	select {
-	// kubelet.SyncHandler may still be running... wait for it to finish
+	// Kubelet.Run() may still be running... wait for it to finish
 	case <-k.kubeletFinished:
 
-	// TODO(jdef) extract constant, should be larger than kubelet sync interval,
-	// and smaller than whatever the slave graceful shutdown timeout period is.
+	// TODO(jdef) extract constant, should be smaller than whatever the
+	// slave graceful shutdown timeout period is.
 	case <-time.After(15 * time.Second):
 		log.Errorf("timed out waiting for kubelet Run() to die")
 	}

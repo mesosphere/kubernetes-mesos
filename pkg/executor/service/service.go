@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/credentialprovider"
 	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/hyperkube"
@@ -210,6 +211,18 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, 
 		return nil, nil, err
 	}
 
+	kubeletFinished := make(chan struct{})
+	exec := executor.New(executor.Config{
+		Kubelet:         kubelet,
+		Updates:         updates,
+		SourceName:      MESOS_CFG_SOURCE,
+		APIClient:       kc.KubeClient,
+		Watch:           watch,
+		Docker:          kc.DockerClient,
+		SuicideTimeout:  ks.SuicideTimeout,
+		KubeletFinished: kubeletFinished,
+	})
+
 	k := &kubeletExecutor{
 		Kubelet:                kubelet,
 		finished:               finished,
@@ -224,19 +237,9 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, 
 		totalMaxDeadContainers: ks.TotalMaxDeadContainers,
 		dockerClient:           kc.DockerClient,
 		hks:                    hks,
-		kubeletFinished:        make(chan struct{}),
+		kubeletFinished:        kubeletFinished,
+		executorDone:           exec.Done(),
 	}
-
-	exec := executor.New(executor.Config{
-		Kubelet:         k.Kubelet,
-		Updates:         updates,
-		SourceName:      MESOS_CFG_SOURCE,
-		APIClient:       kc.KubeClient,
-		Watch:           watch,
-		Docker:          kc.DockerClient,
-		SuicideTimeout:  ks.SuicideTimeout,
-		KubeletFinished: k.kubeletFinished,
-	})
 
 	dconfig := bindings.DriverConfig{
 		Executor:         exec,
@@ -277,7 +280,8 @@ type kubeletExecutor struct {
 	totalMaxDeadContainers uint
 	dockerClient           dockertools.DockerInterface
 	hks                    *hyperkube.Server
-	kubeletFinished        chan struct{} // closed once kubelet.Run() returns
+	kubeletFinished        chan struct{}   // closed once kubelet.Run() returns
+	executorDone           <-chan struct{} // from KubeletExecutor.Done()
 }
 
 func (kl *kubeletExecutor) ListenAndServe(address net.IP, port uint, enableDebuggingHandlers bool) {
@@ -407,7 +411,52 @@ func (kl *kubeletExecutor) GarbageCollectContainers() error {
 	}
 }
 
+// runs the main kubelet loop, closing the kubeletFinished chan when the loop exits.
+// never returns.
 func (kl *kubeletExecutor) Run(updates <-chan kubelet.PodUpdate) {
-	defer close(kl.kubeletFinished)
-	kl.Kubelet.Run(updates)
+	defer func() {
+		close(kl.kubeletFinished)
+		util.HandleCrash()
+		log.Infoln("kubelet run terminated") //TODO(jdef) turn down verbosity
+		// important: never return! this is in our contract
+		select {}
+	}()
+
+	// push updates through a closable pipe. when the executor indicates shutdown
+	// via Done() we want to stop the Kubelet from processing updates.
+	pipe := make(chan kubelet.PodUpdate)
+	go func() {
+		// closing pipe will cause our patched kubelet's syncLoop() to exit
+		defer close(pipe)
+	pipeLoop:
+		for {
+			select {
+			case <-kl.executorDone:
+				break pipeLoop
+			default:
+				select {
+				case u := <-updates:
+					select {
+					case pipe <- u: // noop
+					case <-kl.executorDone:
+						break pipeLoop
+					}
+				case <-kl.executorDone:
+					break pipeLoop
+				}
+			}
+		}
+	}()
+
+	// we expect that Run() will complete after the pipe is closed and the
+	// kubelet's syncLoop() has finished processing its backlog, which hopefully
+	// will not take very long. Peeking into the future (current k8s master) it
+	// seems that the backlog has grown from 1 to 50 -- this may negatively impact
+	// us going forward, time will tell.
+	util.Until(func() { kl.Kubelet.Run(pipe) }, 0, kl.executorDone)
+
+	err := kl.SyncPods([]api.BoundPod{}) //TODO(jdef) revisit this if/when executor failover lands
+	if err != nil {
+		log.Errorf("failed to cleanly remove all pods and associated state: %v", err)
+	}
 }
