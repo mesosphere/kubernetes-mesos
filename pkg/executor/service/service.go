@@ -228,16 +228,19 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, 
 		totalMaxDeadContainers: ks.TotalMaxDeadContainers,
 		dockerClient:           kc.DockerClient,
 		hks:                    hks,
+		kubeletFinished:        make(chan struct{}),
 	}
 
-	exec := executor.New(
-		k.Kubelet,
-		updates,
-		MESOS_CFG_SOURCE,
-		kc.KubeClient,
-		watch,
-		kc.DockerClient,
-		ks.SuicideTimeout)
+	exec := executor.New(executor.Config{
+		Kubelet:         k.Kubelet,
+		Updates:         updates,
+		SourceName:      MESOS_CFG_SOURCE,
+		APIClient:       kc.KubeClient,
+		Watch:           watch,
+		Docker:          kc.DockerClient,
+		SuicideTimeout:  ks.SuicideTimeout,
+		KubeletFinished: k.kubeletFinished,
+	})
 
 	dconfig := bindings.DriverConfig{
 		Executor:         exec,
@@ -253,7 +256,7 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(kc *server.KubeletConfig, 
 	log.V(2).Infof("Initialize executor driver...")
 
 	k.BirthCry()
-	exec.Init()
+	exec.Init(k.driver)
 
 	go k.GarbageCollectLoop()
 	// go k.MonitorCAdvisor(kc.CAdvisorPort) // TODO(jdef) support cadvisor at some point
@@ -278,6 +281,7 @@ type kubeletExecutor struct {
 	totalMaxDeadContainers uint
 	dockerClient           dockertools.DockerInterface
 	hks                    *hyperkube.Server
+	kubeletFinished        chan struct{} // closed once kubelet.Run() returns
 }
 
 func (kl *kubeletExecutor) ListenAndServe(address net.IP, port uint, enableDebuggingHandlers bool) {
@@ -405,4 +409,9 @@ func (kl *kubeletExecutor) GarbageCollectContainers() error {
 		}
 		return kl.PurgeOldest(ids, int(kl.totalMaxDeadContainers))
 	}
+}
+
+func (kl *kubeletExecutor) Run(updates <-chan kubelet.PodUpdate) {
+	defer close(kl.kubeletFinished)
+	kl.Kubelet.Run(updates)
 }
