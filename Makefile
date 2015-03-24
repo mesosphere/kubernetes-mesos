@@ -21,6 +21,7 @@ FRAMEWORK_CMD	:= ${CMD_DIRS:%=${K8SM_GO_PACKAGE}/%}
 LIB_DIRS := $(shell cd $(current_dir) && find ./pkg -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|sort|uniq|cut -f1 -d/ --complement)
 
 FRAMEWORK_LIB	:= ${LIB_DIRS:%=${K8SM_GO_PACKAGE}/%}
+TESTS		?= $(LIB_DIRS)
 
 GIT_VERSION_FILE := $(current_dir)/.kube-version
 
@@ -78,7 +79,7 @@ vet fix:
 
 test test.v:
 	test "$@" = "test.v" && args="-test.v" || args=""; \
-		env GOPATH=$(BUILDDIR) go test $$args $(FRAMEWORK_LIB)
+		env GOPATH=$(BUILDDIR) go test $$args $(TESTS:%=${K8SM_GO_PACKAGE}/%)
 
 install: all
 	mkdir -p $(DESTDIR)
