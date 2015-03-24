@@ -79,6 +79,7 @@ vet fix:
 
 test test.v:
 	test "$@" = "test.v" && args="-test.v" || args=""; \
+		test -n "$(WITH_RACE)" && args="$$args -race" || true; \
 		env GOPATH=$(BUILDDIR) go test $$args $(TESTS:%=${K8SM_GO_PACKAGE}/%)
 
 install: all
