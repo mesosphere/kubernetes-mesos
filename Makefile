@@ -22,6 +22,7 @@ LIB_DIRS := $(shell cd $(current_dir) && find ./pkg -type f -name '*.go'|sort|wh
 
 FRAMEWORK_LIB	:= ${LIB_DIRS:%=${K8SM_GO_PACKAGE}/%}
 TESTS		?= $(LIB_DIRS)
+TESTS_VV        = $(shell for pkg in $(TESTS); do ls $$pkg/*.go | while read -r f; do basename "$$f"|egrep -v -e '_test.go$$'|grep -v -e '^doc\.go'|sed -e 's/\.go$$/=2/g'; done; done | xargs echo -n | tr ' ' ',')
 
 GIT_VERSION_FILE := $(current_dir)/.kube-version
 
@@ -38,7 +39,7 @@ TAGS		?=
 
 BUILDDIR	?= $(current_dir)/_build
 
-.PHONY: all error require-godep require-vendor install info bootstrap format test patch version test.v clean lint vet fix prepare
+.PHONY: all error require-godep require-vendor install info bootstrap format test patch version test.v test.vv clean lint vet fix prepare
 
 # FRAMEWORK_FLAGS := -v -x -tags '$(TAGS)'
 FRAMEWORK_FLAGS := -tags '$(TAGS)'
@@ -81,6 +82,10 @@ test test.v:
 	test "$@" = "test.v" && args="-test.v" || args=""; \
 		test -n "$(WITH_RACE)" && args="$$args -race" || true; \
 		env GOPATH=$(BUILDDIR) go test $$args $(TESTS:%=${K8SM_GO_PACKAGE}/%)
+
+test.vv:
+	test -n "$(WITH_RACE)" && args="$$args -race" || args=""; \
+		env GOPATH=$(BUILDDIR) go test -test.v $$args $(TESTS:%=${K8SM_GO_PACKAGE}/%) -logtostderr=true -vmodule=$(TESTS_VV)
 
 install: all
 	mkdir -p $(DESTDIR)
