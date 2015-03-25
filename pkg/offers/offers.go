@@ -25,7 +25,9 @@ type Filter func(*mesos.Offer) bool
 
 type Registry interface {
 	// Initialize the instance, spawning necessary housekeeping go routines.
-	Init()
+	Init(<-chan struct{})
+
+	// Add offers to this registry, rejecting those that are deemed incompatible.
 	Add([]*mesos.Offer)
 
 	// Listen for arriving offers that are acceptable to the filter, sending
@@ -36,8 +38,10 @@ type Registry interface {
 	// invoked when offers are rescinded or expired
 	Delete(string, metrics.OfferDeclinedReason)
 
+	// when true, returns the offer that's registered for the given ID
 	Get(offerId string) (Perishable, bool)
 
+	// iterate through non-expired offers in this registry
 	Walk(Walker) error
 
 	// invalidate one or all (when offerId="") offers; offers are not declined,
@@ -445,9 +449,9 @@ func (s *offerStorage) notifyListeners(ids func() (util.StringSet, uint64)) {
 	}
 }
 
-func (s *offerStorage) Init() {
+func (s *offerStorage) Init(done <-chan struct{}) {
 	// zero delay, reap offers as soon as they expire
-	go util.Forever(s.ageOffers, 0)
+	go util.Until(s.ageOffers, 0, done)
 
 	// cached offer ids for the purposes of listener notification
 	idCache := &stringsCache{
@@ -463,7 +467,7 @@ func (s *offerStorage) Init() {
 		ttl: offerIdCacheTTL,
 	}
 
-	go util.Forever(func() { s.notifyListeners(idCache.Strings) }, notifyListenersDelay)
+	go util.Until(func() { s.notifyListeners(idCache.Strings) }, notifyListenersDelay, done)
 }
 
 type stringsCache struct {

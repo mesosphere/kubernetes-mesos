@@ -393,8 +393,8 @@ func (q *queuer) reoffer(pod *Pod) {
 
 // spawns a go-routine to watch for unscheduled pods and queue them up
 // for scheduling. returns immediately.
-func (q *queuer) Run() {
-	go util.Forever(func() {
+func (q *queuer) Run(done <-chan struct{}) {
+	go util.Until(func() {
 		log.Info("Watching for newly created pods")
 		q.lock.Lock()
 		defer q.lock.Unlock()
@@ -438,7 +438,7 @@ func (q *queuer) Run() {
 				}
 			}
 		}
-	}, 1*time.Second)
+	}, 1*time.Second, done)
 }
 
 // implementation of scheduling plugin's NextPod func; see k8s plugin/pkg/scheduler
@@ -558,8 +558,8 @@ type deleter struct {
 
 // currently monitors for "pod deleted" events, upon which handle()
 // is invoked.
-func (k *deleter) Run(updates <-chan queue.Entry) {
-	go util.Forever(func() {
+func (k *deleter) Run(updates <-chan queue.Entry, done <-chan struct{}) {
+	go util.Until(func() {
 		for {
 			entry := <-updates
 			pod := entry.Value().(*Pod)
@@ -571,7 +571,7 @@ func (k *deleter) Run(updates <-chan queue.Entry) {
 				k.qr.updatesAvailable()
 			}
 		}
-	}, 1*time.Second)
+	}, 1*time.Second, done)
 }
 
 func (k *deleter) deleteOne(pod *Pod) error {
@@ -627,7 +627,7 @@ func (k *deleter) deleteOne(pod *Pod) error {
 }
 
 // Create creates a scheduler plugin and all supporting background functions.
-func (k *KubernetesScheduler) NewPluginConfig() *PluginConfig {
+func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}) *PluginConfig {
 
 	// Watch and queue pods that need scheduling.
 	updates := make(chan queue.Entry, defaultUpdatesBacklog)
@@ -657,9 +657,9 @@ func (k *KubernetesScheduler) NewPluginConfig() *PluginConfig {
 	go func() {
 		select {
 		case <-startLatch:
-			reflector.Run()
-			podDeleter.Run(updates)
-			q.Run()
+			reflector.Run() // TODO(jdef) should listen for termination
+			podDeleter.Run(updates, terminate)
+			q.Run(terminate)
 		}
 	}()
 	q.installDebugHandlers()

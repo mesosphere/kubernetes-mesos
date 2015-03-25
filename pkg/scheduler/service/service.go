@@ -506,6 +506,7 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 	})
 
 	schedulerProcess := ha.New(mesosPodScheduler)
+
 	masterUri := kmcloud.MasterURI()
 	info, cred, err := s.buildFrameworkInfo()
 	if err != nil {
@@ -527,9 +528,9 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 		},
 	}
 
-	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig())
+	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(schedulerProcess.Done()))
 	return schedulerProcess, dconfig, kpl, etcdClient, func() (err error) {
-		if err = mesosPodScheduler.Init(kpl); err != nil {
+		if err = mesosPodScheduler.Init(schedulerProcess.Master(), kpl); err != nil {
 			err = fmt.Errorf("failed to initialize pod scheduler: %v", err)
 		}
 		return

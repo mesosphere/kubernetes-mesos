@@ -1,6 +1,7 @@
 package ha
 
 import (
+	"fmt"
 	"sync/atomic"
 
 	log "github.com/golang/glog"
@@ -32,8 +33,29 @@ func (stage *stageType) get() stageType {
 	return stageType(atomic.LoadInt32((*int32)(stage)))
 }
 
+// execute some action in the deferred context of the process, but only if we
+// match the stage of the process at the time the action is executed.
+func (stage stageType) Do(p *SchedulerProcess, a proc.Action) error {
+	return p.Do(proc.Action(func() {
+		err := stage.When(p, a)
+		if err != nil {
+			log.Errorln(err.Error())
+		}
+	}))
+}
+
+// execute some action only if we match the stage of the scheduler process
+func (stage stageType) When(p *SchedulerProcess, a proc.Action) (err error) {
+	if stage != (&p.stage).get() {
+		err = fmt.Errorf("failed to execute deferred action, expected lifecycle stage %v instead of %v", stage, p.stage)
+	} else {
+		a()
+	}
+	return
+}
+
 type SchedulerProcess struct {
-	proc.Process
+	proc.ProcessInit
 	bindings.Scheduler
 	stage    stageType
 	elected  chan struct{} // upon close we've been elected
@@ -42,42 +64,32 @@ type SchedulerProcess struct {
 
 func New(sched bindings.Scheduler) *SchedulerProcess {
 	p := &SchedulerProcess{
-		Process:   proc.New(),
-		Scheduler: sched,
-		stage:     initStage,
-		elected:   make(chan struct{}),
-		failover:  make(chan struct{}),
+		ProcessInit: proc.New(),
+		Scheduler:   sched,
+		stage:       initStage,
+		elected:     make(chan struct{}),
+		failover:    make(chan struct{}),
 	}
 	return p
-}
-
-func (stage stageType) DoLater(p *SchedulerProcess, a proc.Action) {
-	p.DoLater(proc.Action(func() {
-		if stage != (&p.stage).get() {
-			log.Errorf("failed to execute deferred action, expected lifecycle stage %v instead of %v", stage, p.stage)
-			return
-		}
-		a()
-	}))
 }
 
 func (self *SchedulerProcess) Begin() {
 	if (&self.stage).transition(initStage, standbyStage) {
 		log.Infoln("scheduler process entered standby stage")
-		self.Process.Begin()
+		self.ProcessInit.Begin()
 	} else {
 		log.Errorf("failed to transition from init to standby stage")
 	}
 }
 
 func (self *SchedulerProcess) End() {
-	defer self.Process.End()
+	defer self.ProcessInit.End()
 	(&self.stage).set(finStage)
 	log.Infoln("scheduler process entered fin stage")
 }
 
 func (self *SchedulerProcess) Elect(newDriver DriverFactory) {
-	standbyStage.DoLater(self, proc.Action(func() {
+	err := standbyStage.Do(self, proc.Action(func() {
 		if !(&self.stage).transition(standbyStage, masterStage) {
 			log.Errorf("failed to transition from standby to master stage, aborting")
 			self.End()
@@ -102,13 +114,17 @@ func (self *SchedulerProcess) Elect(newDriver DriverFactory) {
 			}()
 			return
 		}
+		defer self.End()
 		if err != nil {
 			log.Errorf("failed to start scheduler driver: %v", err)
 		} else {
 			log.Errorf("expected RUNNING status, not %v", stat)
 		}
-		self.End()
 	}))
+	if err != nil {
+		defer self.End()
+		log.Errorf("failed to handle election event, aborting: %v", err)
+	}
 }
 
 func (self *SchedulerProcess) Elected() <-chan struct{} {
@@ -119,62 +135,69 @@ func (self *SchedulerProcess) Failover() <-chan struct{} {
 	return self.failover
 }
 
+// returns a Process instance that will only execute a proc.Action if the scheduler is the elected master
+func (self *SchedulerProcess) Master() proc.Process {
+	return proc.DoWith(self, proc.DoerFunc(func(a proc.Action) error {
+		return masterStage.When(self, a)
+	}))
+}
+
 func (self *SchedulerProcess) Registered(drv bindings.SchedulerDriver, fid *mesos.FrameworkID, mi *mesos.MasterInfo) {
-	masterStage.DoLater(self, proc.Action(func() {
+	self.Master().Do(proc.Action(func() {
 		self.Scheduler.Registered(drv, fid, mi)
 	}))
 }
 
 func (self *SchedulerProcess) Reregistered(drv bindings.SchedulerDriver, mi *mesos.MasterInfo) {
-	masterStage.DoLater(self, proc.Action(func() {
+	self.Master().Do(proc.Action(func() {
 		self.Scheduler.Reregistered(drv, mi)
 	}))
 }
 
 func (self *SchedulerProcess) Disconnected(drv bindings.SchedulerDriver) {
-	masterStage.DoLater(self, proc.Action(func() {
+	self.Master().Do(proc.Action(func() {
 		self.Scheduler.Disconnected(drv)
 	}))
 }
 
 func (self *SchedulerProcess) ResourceOffers(drv bindings.SchedulerDriver, off []*mesos.Offer) {
-	masterStage.DoLater(self, proc.Action(func() {
+	self.Master().Do(proc.Action(func() {
 		self.Scheduler.ResourceOffers(drv, off)
 	}))
 }
 
 func (self *SchedulerProcess) OfferRescinded(drv bindings.SchedulerDriver, oid *mesos.OfferID) {
-	masterStage.DoLater(self, proc.Action(func() {
+	self.Master().Do(proc.Action(func() {
 		self.Scheduler.OfferRescinded(drv, oid)
 	}))
 }
 
 func (self *SchedulerProcess) StatusUpdate(drv bindings.SchedulerDriver, ts *mesos.TaskStatus) {
-	masterStage.DoLater(self, proc.Action(func() {
+	self.Master().Do(proc.Action(func() {
 		self.Scheduler.StatusUpdate(drv, ts)
 	}))
 }
 
 func (self *SchedulerProcess) FrameworkMessage(drv bindings.SchedulerDriver, eid *mesos.ExecutorID, sid *mesos.SlaveID, m string) {
-	masterStage.DoLater(self, proc.Action(func() {
+	self.Master().Do(proc.Action(func() {
 		self.Scheduler.FrameworkMessage(drv, eid, sid, m)
 	}))
 }
 
 func (self *SchedulerProcess) SlaveLost(drv bindings.SchedulerDriver, sid *mesos.SlaveID) {
-	masterStage.DoLater(self, proc.Action(func() {
+	self.Master().Do(proc.Action(func() {
 		self.Scheduler.SlaveLost(drv, sid)
 	}))
 }
 
 func (self *SchedulerProcess) ExecutorLost(drv bindings.SchedulerDriver, eid *mesos.ExecutorID, sid *mesos.SlaveID, x int) {
-	masterStage.DoLater(self, proc.Action(func() {
+	self.Master().Do(proc.Action(func() {
 		self.Scheduler.ExecutorLost(drv, eid, sid, x)
 	}))
 }
 
 func (self *SchedulerProcess) Error(drv bindings.SchedulerDriver, msg string) {
-	masterStage.DoLater(self, proc.Action(func() {
+	self.Master().Do(proc.Action(func() {
 		self.Scheduler.Error(drv, msg)
 	}))
 }

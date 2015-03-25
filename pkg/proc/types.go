@@ -2,33 +2,39 @@ package proc
 
 type Action func()
 
-type Lifecycle interface {
-	// begin the lifecycle
-	Begin()
-
-	// end (terminate) the lifecycle
+type Context interface {
+	// end (terminate) the process
 	End()
 
-	// return a signal chan that will close upon the termination of this lifecycle
+	// return a signal chan that will close upon the termination of this process
 	Done() <-chan struct{}
 }
 
 type Doer interface {
-	// execute some action in the context of the current lifecycle. actions
+	// execute some action in the context of the current process. actions
 	// executed via this func are to be executed in a concurrency-safe manner:
-	// no two actions should execute at the same time. invocations of this func
-	// will block until the given action is executed. invocations of this func
-	// may take higher priority than invocations of DoLater.
-	Do(Action)
+	// no two actions should execute at the same time.
+	//
+	// errors are generated if the action cannot be executed (not by the execution
+	// of the action) and may be tested with, for example, IsActionNotAllowedError.
+	Do(Action) error
+}
 
-	// execute some action in the context of the current lifecycle. actions
-	// executed via this func are to be executed in a concurrency-safe manner:
-	// no two actions should execute at the same time. invocations of this func
-	// should never block.
-	DoLater(Action)
+// adapter func for Doer interface
+type DoerFunc func(Action) error
+
+func (f DoerFunc) Do(a Action) error {
+	return f(a)
 }
 
 type Process interface {
-	Lifecycle
+	Context
 	Doer
+}
+
+type ProcessInit interface {
+	Process
+
+	// begin process accounting and spawn background routines
+	Begin()
 }

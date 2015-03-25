@@ -11,7 +11,7 @@ type procImpl struct {
 	termOnce  sync.Once
 }
 
-func New() Process {
+func New() ProcessInit {
 	return &procImpl{
 		backlog:   make(chan Action, 1024), // TODO(jdef) extract backlog
 		exec:      make(chan Action),       // intentionally unbuffered
@@ -58,7 +58,17 @@ func (self *procImpl) Begin() {
 	}()
 }
 
-func (self *procImpl) Do(a Action) {
+// execute some action in the context of the current lifecycle. actions
+// executed via this func are to be executed in a concurrency-safe manner:
+// no two actions should execute at the same time. invocations of this func
+// will block until the given action is executed. invocations of this func
+// may take higher priority than invocations of DoLater.
+//
+// returns errProcessTerminated if the process already ended, or is terminated
+// during the exection of the action. if the process terminates at the same
+// time as the action completes it is still possible for the action to have
+// completed and still receive errProcessTerminated.
+func (self *procImpl) DoNow(a Action) error {
 	ch := make(chan struct{})
 	wrapped := Action(func() {
 		defer close(ch)
@@ -67,26 +77,38 @@ func (self *procImpl) Do(a Action) {
 
 	select {
 	case <-self.terminate:
-		return
+		return errProcessTerminated
 	// wait for action to begin executing
 	case self.exec <- wrapped:
 	}
 
 	select {
 	case <-self.terminate:
-		return
+		return errProcessTerminated
 	// wait for completion of action
 	case <-ch:
 	}
+	return nil
 }
 
-func (self *procImpl) DoLater(a Action) {
+// execute some action in the context of the current lifecycle. actions
+// executed via this func are to be executed in a concurrency-safe manner:
+// no two actions should execute at the same time. invocations of this func
+// should never block.
+// returns errProcessTerminated if the process already ended.
+func (self *procImpl) DoLater(a Action) (err error) {
 	select {
 	case <-self.terminate:
-		return
+		err = errProcessTerminated
 	case self.backlog <- a:
-		// noop
 	}
+	return
+}
+
+// implementation of Doer interface, schedules some action to be executed in
+// a deferred excution context via DoLater.
+func (self *procImpl) Do(a Action) error {
+	return self.DoLater(a)
 }
 
 func (self *procImpl) End() {
@@ -104,4 +126,36 @@ func (self *procImpl) End() {
 		for _ = range self.backlog {
 		}
 	})
+}
+
+type processAdapter struct {
+	parent   Process
+	delegate Doer
+}
+
+func (p *processAdapter) Do(a Action) error {
+	ch := make(chan error, 1)
+	err := p.parent.Do(func() {
+		ch <- p.delegate.Do(a)
+	})
+	if err != nil {
+		return err
+	}
+	return <-ch
+}
+
+func (p *processAdapter) End() {
+	p.parent.End()
+}
+
+func (p *processAdapter) Done() <-chan struct{} {
+	return p.parent.Done()
+}
+
+// returns a process that, within its execution context, delegates to the specified Doer
+func DoWith(other Process, d Doer) Process {
+	return &processAdapter{
+		parent:   other,
+		delegate: d,
+	}
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/messages"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 	offerMetrics "github.com/mesosphere/kubernetes-mesos/pkg/offers/metrics"
+	"github.com/mesosphere/kubernetes-mesos/pkg/proc"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
@@ -31,11 +32,14 @@ import (
 )
 
 const (
-	defaultOfferTTL                   = 5    // seconds that an offer is viable, prior to being expired
-	defaultOfferLingerTTL             = 120  // seconds that an expired offer lingers in history
-	defaultListenerDelay              = 1    // number of seconds between offer listener notifications
-	defaultUpdatesBacklog             = 2048 // size of the pod updates channel
-	defaultFrameworkIdRefreshInterval = 30   // every X number of seconds we update the frameworkId stored in etcd
+	defaultOfferTTL                    = 5                // seconds that an offer is viable, prior to being expired
+	defaultOfferLingerTTL              = 120              // seconds that an expired offer lingers in history
+	defaultListenerDelay               = 1                // number of seconds between offer listener notifications
+	defaultUpdatesBacklog              = 2048             // size of the pod updates channel
+	defaultFrameworkIdRefreshInterval  = 30               // every X number of seconds we update the frameworkId stored in etcd
+	initialImplicitReconciliationDelay = 15 * time.Second // wait this amount of time after initial registration before attempting implicit reconciliation
+	explicitReconciliationMaxBackoff   = 2 * time.Minute  // interval in between internal task status checks/updates
+	explicitReconciliationAbortTimeout = 30 * time.Second // waiting period after attempting to cancel an ongoing reconciliation
 )
 
 type Slave struct {
@@ -70,7 +74,7 @@ type KubernetesScheduler struct {
 	// In particular, changes to podtask.T objects are currently guarded by this lock.
 	*sync.RWMutex
 
-	// Config related
+	// Config related, write-once
 
 	executor          *mesos.ExecutorInfo
 	executorGroup     uint64
@@ -87,15 +91,21 @@ type KubernetesScheduler struct {
 	masterInfo     *mesos.MasterInfo
 	registered     bool
 	onRegistration sync.Once
+	offers         offers.Registry
 
-	offers       offers.Registry
+	// unsafe state, needs to be guarded
+
 	slaves       map[string]*Slave // SlaveID => slave.
 	slaveIDs     map[string]string // Slave's hostname => slaveID
 	taskRegistry podtask.Registry
 
-	plugin            PluginInterface
-	reconciler        *Reconciler
-	reconcileCooldown time.Duration
+	// via deferred init
+
+	plugin             PluginInterface
+	reconciler         *Reconciler
+	reconcileCooldown  time.Duration
+	asRegisteredMaster proc.Doer
+	terminate          <-chan struct{} // signal chan, closes when we should kill background tasks
 }
 
 type Config struct {
@@ -133,14 +143,23 @@ func New(config Config) *KubernetesScheduler {
 				return true
 			},
 			DeclineOffer: func(id string) error {
-				//TODO(jdef) only decline offers if we're connected/registered
-				offerId := mutil.NewOfferID(id)
-				filters := &mesos.Filters{}
-				_, err := k.driver.DeclineOffer(offerId, filters)
-				return err
+				ch := make(chan error, 1)
+				err := k.asRegisteredMaster.Do(func() {
+					var err error
+					defer func() { ch <- err }()
+
+					offerId := mutil.NewOfferID(id)
+					filters := &mesos.Filters{}
+					_, err = k.driver.DeclineOffer(offerId, filters)
+				})
+				if err != nil {
+					return err
+				}
+				return <-ch
 			},
+			// remember expired offers so that we can tell if a previously scheduler offer relies on one
+			LingerTTL:     defaultOfferLingerTTL * time.Second,
 			TTL:           defaultOfferTTL * time.Second,
-			LingerTTL:     defaultOfferLingerTTL * time.Second, // remember expired offers so that we can tell if a previously scheduler offer relies on one
 			ListenerDelay: defaultListenerDelay * time.Second,
 		}),
 		slaves:            make(map[string]*Slave),
@@ -151,9 +170,17 @@ func New(config Config) *KubernetesScheduler {
 	return k
 }
 
-func (k *KubernetesScheduler) Init(pl PluginInterface) error {
+func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterface) error {
+	//TODO(jdef) watch electedMaster.Done() to figure out when background jobs should be shut down
+	k.asRegisteredMaster = proc.DoerFunc(func(a proc.Action) error {
+		if !k.registered {
+			return fmt.Errorf("failed to execute registered action, scheduler is disconnected")
+		}
+		return electedMaster.Do(a)
+	})
+	k.terminate = electedMaster.Done()
 	k.plugin = pl
-	k.offers.Init()
+	k.offers.Init(k.terminate)
 	k.InstallDebugHandlers()
 	return k.recoverTasks()
 }
@@ -234,20 +261,19 @@ func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDri
 		if k.failoverTimeout < defaultFrameworkIdRefreshInterval {
 			refreshInterval = time.Duration(math.Max(1, k.failoverTimeout/2)) * time.Second
 		}
-		go util.Forever(k.storeFrameworkId, refreshInterval)
+		go util.Until(k.storeFrameworkId, refreshInterval, k.terminate)
 	}
 
 	r1 := k.makeTaskRegistryReconciler()
 	r2 := k.makePodRegistryReconciler()
 
-	k.reconciler = newReconciler(k.makeCompositeReconciler(r1, r2), k.reconcileCooldown)
+	k.reconciler = newReconciler(k.asRegisteredMaster, k.makeCompositeReconciler(r1, r2), k.reconcileCooldown)
 	go k.reconciler.Run(driver)
 
 	if k.reconcileInterval > 0 {
 		ri := time.Duration(k.reconcileInterval) * time.Second
-		//TODO(jdef) extract constant
-		time.AfterFunc(15*time.Second, func() { go util.Forever(k.reconciler.RequestImplicit, ri) })
-		log.Infof("will perform implicit task reconciliation at interval: %v", ri)
+		time.AfterFunc(initialImplicitReconciliationDelay, func() { go util.Until(k.reconciler.RequestImplicit, ri, k.terminate) })
+		log.Infof("will perform implicit task reconciliation at interval: %v after %v", ri, initialImplicitReconciliationDelay)
 	}
 }
 
@@ -596,13 +622,12 @@ func (k *KubernetesScheduler) explicitlyReconcileTasks(driver bindings.Scheduler
 	}
 
 	start := time.Now()
-	const maxBackoff = 120 * time.Second // TODO(jdef) extract constant
 	first := true
 	for backoff := 1 * time.Second; first || remaining.Len() > 0; backoff = backoff * 2 {
 		first = false
 		// nothing to do here other than wait for status updates..
-		if backoff > maxBackoff {
-			backoff = maxBackoff
+		if backoff > explicitReconciliationMaxBackoff {
+			backoff = explicitReconciliationMaxBackoff
 		}
 		select {
 		case <-cancel:
@@ -631,6 +656,7 @@ var (
 type ReconcilerAction func(driver bindings.SchedulerDriver, cancel <-chan struct{}) error
 
 type Reconciler struct {
+	proc.Doer
 	Action   ReconcilerAction
 	explicit chan struct{} // send an empty struct to trigger explicit reconciliation
 	implicit chan struct{} // send an empty struct to trigger implicit reconciliation
@@ -638,12 +664,23 @@ type Reconciler struct {
 	cooldown time.Duration
 }
 
-func newReconciler(action ReconcilerAction, cooldown time.Duration) *Reconciler {
+func newReconciler(doer proc.Doer, action ReconcilerAction, cooldown time.Duration) *Reconciler {
 	return &Reconciler{
-		Action:   action,
+		Doer:     doer,
 		explicit: make(chan struct{}, 1),
 		implicit: make(chan struct{}, 1),
 		cooldown: cooldown,
+		Action: func(driver bindings.SchedulerDriver, cancel <-chan struct{}) error {
+			// perform the action in the doer execution context
+			ch := make(chan error, 1)
+			err := doer.Do(func() {
+				ch <- action(driver, cancel)
+			})
+			if err != nil {
+				return err
+			}
+			return <-ch
+		},
 	}
 }
 
@@ -665,7 +702,6 @@ func (r *Reconciler) RequestImplicit() {
 // if reconciliation is requested while another is in progress, the in-progress operation will be
 // cancelled before the new reconciliation operation begins.
 func (r *Reconciler) Run(driver bindings.SchedulerDriver) {
-	//TODO(jdef) only reconcile if we're connected/registered
 	var cancel, finished chan struct{}
 requestLoop:
 	for {
@@ -687,10 +723,15 @@ requestLoop:
 						continue requestLoop
 					}
 				}
-				log.Infoln("implicit reconcile tasks")
-				metrics.ReconciliationExecuted.WithLabelValues("implicit").Inc()
-				if _, err := driver.ReconcileTasks([]*mesos.TaskStatus{}); err != nil {
-					log.Errorf("failed trying to execute implicit reconciliation: %v", err)
+				err := r.Do(func() {
+					log.Infoln("implicit reconcile tasks")
+					metrics.ReconciliationExecuted.WithLabelValues("implicit").Inc()
+					if _, err := driver.ReconcileTasks([]*mesos.TaskStatus{}); err != nil {
+						log.Errorf("failed to request implicit reconciliation from mesos: %v", err)
+					}
+				})
+				if err != nil {
+					log.Warningf("failed to run implicit reconciliation: %v", err)
 				}
 				goto slowdown
 			}
@@ -710,8 +751,7 @@ requestLoop:
 			case <-r.done:
 				return
 			case <-finished: // noop, expected
-			//TODO(jdef) extract constant
-			case <-time.After(30 * time.Second): // very unexpected
+			case <-time.After(explicitReconciliationAbortTimeout): // very unexpected
 				log.Error("reconciler action failed to stop upon cancellation")
 			}
 		}
