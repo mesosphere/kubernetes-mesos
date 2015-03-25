@@ -186,6 +186,14 @@ func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterfac
 }
 
 func (k *KubernetesScheduler) InstallDebugHandlers() {
+	http.HandleFunc("/debug/actions/requestExplicit", func(w http.ResponseWriter, r *http.Request) {
+		k.reconciler.RequestExplicit()
+		w.WriteHeader(http.StatusNoContent)
+	})
+	http.HandleFunc("/debug/actions/requestImplicit", func(w http.ResponseWriter, r *http.Request) {
+		k.reconciler.RequestImplicit()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	http.HandleFunc("/debug/actions/kamikaze", func(w http.ResponseWriter, r *http.Request) {
 		ids := func() (ids []string) {
 			k.Lock()
@@ -370,43 +378,56 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 			log.Errorf("Ignore status %+v because the slave does not exist", taskStatus)
 			return
 		}
-	case mesos.TaskState_TASK_KILLED:
-		k.taskRegistry.UpdateStatus(taskStatus)
 	case mesos.TaskState_TASK_FAILED:
 		if task, _ := k.taskRegistry.UpdateStatus(taskStatus); task != nil {
 			if task.Has(podtask.Launched) && messages.CreateBindingFailure == taskStatus.GetMessage() {
 				go k.plugin.reconcilePod(*task.Pod)
+				return
 			}
+		} else {
+			// unknown task failed, not much we can do about it
+			return
 		}
-	case mesos.TaskState_TASK_LOST:
-		task, state := k.taskRegistry.UpdateStatus(taskStatus)
+		// last-ditch effort to reconcile our records
+		fallthrough
+	case mesos.TaskState_TASK_LOST, mesos.TaskState_TASK_KILLED:
+		k.reconcileTerminalTask(driver, taskStatus)
+	}
+}
 
-		if state == podtask.StateRunning && taskStatus.ExecutorId != nil && taskStatus.SlaveId != nil {
-			//TODO(jdef) this may not be meaningful once we have proper checkpointing and master detection
-			//If we're reconciling and receive this then the executor may be
-			//running a task that we need it to kill. It's possible that the framework
-			//is unrecognized by the master at this point, so KillTask is not guaranteed
-			//to do anything. The underlying driver transport may be able to send a
-			//FrameworkMessage directly to the slave to terminate the task.
-			log.V(2).Info("forwarding TASK_LOST message to executor %v on slave %v", taskStatus.ExecutorId, taskStatus.SlaveId)
-			data := fmt.Sprintf("task-lost:%s", task.ID) //TODO(jdef) use a real message type
-			if _, err := driver.SendFrameworkMessage(taskStatus.ExecutorId, taskStatus.SlaveId, data); err != nil {
-				log.Error(err.Error())
-			}
-		} else if (state == podtask.StateRunning || (state == podtask.StatePending && task.Pod != nil)) &&
-			taskStatus.GetReason() == mesos.TaskStatus_REASON_RECONCILIATION &&
-			taskStatus.GetSource() == mesos.TaskStatus_SOURCE_MASTER && taskStatus.SlaveId != nil {
+func (k *KubernetesScheduler) reconcileTerminalTask(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
+	task, state := k.taskRegistry.UpdateStatus(taskStatus)
 
-			// pod has task metadata that refers to a task that Mesos no longer knows about. Our only recourse
-			// is to destroy the pod and hope that there's a replication controller backing it up.
-			namespace, name := task.Pod.Namespace, task.Pod.Name
-			log.Warningf("deleting rogue pod %v/%v for lost task %v", namespace, name, task.ID)
-			if err := k.client.Pods(namespace).Delete(name); err != nil {
-				log.Errorf("failed to delete pod %v/%v for lost task %v: %v", namespace, name, task.ID, err)
-			}
-		} else if taskStatus.GetReason() == mesos.TaskStatus_REASON_EXECUTOR_TERMINATED {
-			// attempt to prevent dangling pods in the pod and task registries
-			k.reconciler.RequestExplicit()
+	if (state == podtask.StateRunning || (state == podtask.StatePending && task.Pod != nil)) && taskStatus.SlaveId != nil &&
+		((taskStatus.GetSource() == mesos.TaskStatus_SOURCE_MASTER && taskStatus.GetReason() == mesos.TaskStatus_REASON_RECONCILIATION) ||
+			(taskStatus.GetSource() == mesos.TaskStatus_SOURCE_SLAVE && taskStatus.GetReason() == mesos.TaskStatus_REASON_EXECUTOR_TERMINATED) ||
+			(taskStatus.GetSource() == mesos.TaskStatus_SOURCE_SLAVE && taskStatus.GetReason() == mesos.TaskStatus_REASON_EXECUTOR_UNREGISTERED)) {
+		//--
+		// pod-task has metadata that refers to:
+		// (1) a task that Mesos no longer knows about, or else
+		// (2) a pod that the Kubelet will never report as "failed"
+		// For now, destroy the pod and hope that there's a replication controller backing it up.
+		// TODO(jdef) for case #2 don't delete the pod, just update it's status to Failed
+		namespace, name := task.Pod.Namespace, task.Pod.Name
+		log.Warningf("deleting rogue pod %v/%v for lost task %v", namespace, name, task.ID)
+		if err := k.client.Pods(namespace).Delete(name); err != nil && !errors.IsNotFound(err) {
+			log.Errorf("failed to delete pod %v/%v for terminal task %v: %v", namespace, name, task.ID, err)
+		}
+	} else if taskStatus.GetReason() == mesos.TaskStatus_REASON_EXECUTOR_TERMINATED || taskStatus.GetReason() == mesos.TaskStatus_REASON_EXECUTOR_UNREGISTERED {
+		// attempt to prevent dangling pods in the pod and task registries
+		log.V(1).Infof("request explicit reconciliation to clean up for task %v after executor reported (terminated/unregistered)", taskStatus.TaskId.GetValue())
+		k.reconciler.RequestExplicit()
+	} else if taskStatus.GetState() == mesos.TaskState_TASK_LOST && state == podtask.StateRunning && taskStatus.ExecutorId != nil && taskStatus.SlaveId != nil {
+		//TODO(jdef) this may not be meaningful once we have proper checkpointing and master detection
+		//If we're reconciling and receive this then the executor may be
+		//running a task that we need it to kill. It's possible that the framework
+		//is unrecognized by the master at this point, so KillTask is not guaranteed
+		//to do anything. The underlying driver transport may be able to send a
+		//FrameworkMessage directly to the slave to terminate the task.
+		log.V(2).Info("forwarding TASK_LOST message to executor %v on slave %v", taskStatus.ExecutorId, taskStatus.SlaveId)
+		data := fmt.Sprintf("task-lost:%s", task.ID) //TODO(jdef) use a real message type
+		if _, err := driver.SendFrameworkMessage(taskStatus.ExecutorId, taskStatus.SlaveId, data); err != nil {
+			log.Error(err.Error())
 		}
 	}
 }
