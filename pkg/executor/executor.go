@@ -247,53 +247,36 @@ func (k *KubernetesExecutor) LaunchTask(driver bindings.ExecutorDriver, taskInfo
 	go k.launchTask(driver, taskId, &pod)
 }
 
+// TODO(jdef) add metrics for this?
 type suicideTimer struct {
 	timer *time.Timer
-
-	// aggressively attempt to cancel an action executed on expiration of the timer
-	cancelFunc func()
 }
 
 func (w *suicideTimer) Next(d time.Duration, driver bindings.ExecutorDriver, f jumper) suicideWatcher {
-	abort := make(chan struct{})
-	var cancelOnce sync.Once
 	return &suicideTimer{
 		timer: time.AfterFunc(d, func() {
 			log.Warningf("Suicide timeout (%v) expired", d)
-			f(driver, abort)
+			f(driver, nil)
 		}),
-		cancelFunc: func() {
-			cancelOnce.Do(func() {
-				log.Infoln("cancelling suicide attempt") //TODO(jdef) debug
-				close(abort)
-			})
-		},
 	}
 }
 
 func (w *suicideTimer) Stop() (result bool) {
 	if w != nil && w.timer != nil {
 		log.Infoln("stopping suicide watch") //TODO(jdef) debug
-		// always try to abort a possibly scheduled suicide
-		defer w.cancelFunc()
 		result = w.timer.Stop()
 	}
 	return
 }
 
-func (w *suicideTimer) Reset(d time.Duration) (result bool) {
+// return true if the timer was successfully reset
+func (w *suicideTimer) Reset(d time.Duration) bool {
 	if w != nil && w.timer != nil {
 		log.Infoln("resetting suicide watch") //TODO(jdef) debug
-		if result = w.timer.Reset(d); !result {
-			// timer has either expired or has been stoppped.
-			// we don't really know which so assume that it
-			// expired and attempt to abort.
-			w.cancelFunc()
-		} else {
-			log.Infoln("reset suicide watch") //TODO(jdef) debug
-		}
+		w.timer.Reset(d)
+		return true
 	}
-	return
+	return false
 }
 
 // determine whether we need to start a suicide countdown. if so, then start
@@ -317,14 +300,13 @@ func (k *KubernetesExecutor) resetSuicideWatch(driver bindings.ExecutorDriver) <
 				return
 			}
 			if k.suicideWatch.Reset(k.suicideTimeout) {
-				// timer still active, reset was successful
+				// valid timer, reset was successful
 				return
 			}
-			// else, timer has expired or been stopped
 		}
 
 		//TODO(jdef) reduce verbosity here once we're convinced that suicide watch is working properly
-		log.Infof("resetting suicide watch for %v", k.suicideTimeout)
+		log.Infof("resetting suicide watch timer for %v", k.suicideTimeout)
 
 		k.suicideWatch = k.suicideWatch.Next(k.suicideTimeout, driver, jumper(k.attemptSuicide))
 	}()

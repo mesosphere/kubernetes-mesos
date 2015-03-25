@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,7 +14,7 @@ type suicideTracker struct {
 	stops  uint32
 	resets uint32
 	timers uint32
-	jumps  uint32
+	jumps  *uint32
 }
 
 func (t *suicideTracker) Reset(d time.Duration) bool {
@@ -38,10 +39,12 @@ func (t *suicideTracker) Next(d time.Duration, driver bindings.ExecutorDriver, f
 	return tracker
 }
 
-func (t *suicideTracker) makeJumper(f jumper) jumper {
+func (t *suicideTracker) makeJumper(_ jumper) jumper {
 	return jumper(func(driver bindings.ExecutorDriver, cancel <-chan struct{}) {
-		t.jumps++
-		f(driver, cancel)
+		glog.Warningln("jumping?!")
+		if t.jumps != nil {
+			atomic.AddUint32(t.jumps, 1)
+		}
 	})
 }
 
@@ -76,21 +79,26 @@ func TestSuicide_WithTasks(t *testing.T) {
 	k := New(Config{
 		SuicideTimeout: 50 * time.Millisecond,
 	})
-	tracker := &suicideTracker{suicideWatcher: k.suicideWatch}
+
+	jumps := uint32(0)
+	tracker := &suicideTracker{suicideWatcher: k.suicideWatch, jumps: &jumps}
 	k.suicideWatch = tracker
 
 	k.tasks["foo"] = &kuberTask{} // prevent suicide attempts from succeeding
 
+	// call reset with a nil timer
+	glog.Infoln("resetting suicide watch with 1 task")
 	select {
 	case <-k.resetSuicideWatch(nil):
+		tracker = k.suicideWatch.(*suicideTracker)
 		if tracker.stops != 1 {
 			t.Fatalf("expected suicide attempt to Stop() since there are registered tasks")
 		}
 		if tracker.resets != 0 {
-			t.Fatalf("expected no resets since suicideWatchTimeout was never set")
+			t.Fatalf("expected no resets since")
 		}
 		if tracker.timers != 0 {
-			t.Fatalf("expected no timers since suicideWatchTimeout was never set")
+			t.Fatalf("expected no timers since")
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatalf("initial suicide watch setup failed")
@@ -98,8 +106,10 @@ func TestSuicide_WithTasks(t *testing.T) {
 
 	delete(k.tasks, "foo") // zero remaining tasks
 	k.suicideTimeout = 1500 * time.Millisecond
+	suicideStart := time.Now()
 
 	// reset the suicide watch, which should actually start a timer now
+	glog.Infoln("resetting suicide watch with 0 tasks")
 	select {
 	case <-k.resetSuicideWatch(nil):
 		tracker = k.suicideWatch.(*suicideTracker)
@@ -107,10 +117,10 @@ func TestSuicide_WithTasks(t *testing.T) {
 			t.Fatalf("did not expect suicide attempt to Stop() since there are no registered tasks")
 		}
 		if tracker.resets != 1 {
-			t.Fatalf("expected 1 resets instead of %d since suicideWatchTimeout was never set", tracker.resets)
+			t.Fatalf("expected 1 resets instead of %d", tracker.resets)
 		}
 		if tracker.timers != 1 {
-			t.Fatalf("expected 1 timers instead of %d since suicideWatchTimeout was never set", tracker.timers)
+			t.Fatalf("expected 1 timers instead of %d", tracker.timers)
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatalf("2nd suicide watch setup failed")
@@ -121,54 +131,51 @@ func TestSuicide_WithTasks(t *testing.T) {
 	k.lock.Unlock()
 
 	// reset the suicide watch, which should stop the existing timer
+	glog.Infoln("resetting suicide watch with 1 task")
+	select {
+	case <-k.resetSuicideWatch(nil):
+		tracker = k.suicideWatch.(*suicideTracker)
+		if tracker.stops != 2 {
+			t.Fatalf("expected 2 stops instead of %d since there are registered tasks", tracker.stops)
+		}
+		if tracker.resets != 1 {
+			t.Fatalf("expected 1 resets instead of %d", tracker.resets)
+		}
+		if tracker.timers != 1 {
+			t.Fatalf("expected 1 timers instead of %d", tracker.timers)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatalf("3rd suicide watch setup failed")
+	}
+
+	k.lock.Lock()
+	delete(k.tasks, "foo") // allow suicide attempts to schedule
+	k.lock.Unlock()
+
+	// reset the suicide watch, which should reset a stopped timer
+	glog.Infoln("resetting suicide watch with 0 tasks")
 	select {
 	case <-k.resetSuicideWatch(nil):
 		tracker = k.suicideWatch.(*suicideTracker)
 		if tracker.stops != 2 {
 			t.Fatalf("expected 2 stops instead of %d since there are no registered tasks", tracker.stops)
 		}
-		if tracker.resets != 1 {
-			t.Fatalf("expected 1 resets instead of %d since suicideWatchTimeout was never set", tracker.resets)
+		if tracker.resets != 2 {
+			t.Fatalf("expected 2 resets instead of %d", tracker.resets)
 		}
 		if tracker.timers != 1 {
-			t.Fatalf("expected 1 timers instead of %d since suicideWatchTimeout was never set", tracker.timers)
+			t.Fatalf("expected 1 timers instead of %d", tracker.timers)
 		}
 	case <-time.After(1 * time.Second):
-		t.Fatalf("3rd suicide watch setup failed")
+		t.Fatalf("4th suicide watch setup failed")
+	}
+
+	sinceWatch := time.Since(suicideStart)
+	time.Sleep(3*time.Second - sinceWatch) // give the first timer to misfire (it shouldn't since Stop() was called)
+
+	if j := atomic.LoadUint32(&jumps); j != 1 {
+		t.Fatalf("expected 1 jumps instead of %d since stop was called", j)
+	} else {
+		glog.Infoln("jumps verified") // glog so we get a timestamp
 	}
 }
-
-/*
-	const WORKERS = 1000
-	var wg sync.WaitGroup
-	wg.Add(WORKERS)
-
-	start := time.Now()
-	for i := 0; i < WORKERS; i++ {
-		ch := k.resetSuicideWatch(nil)
-		worker := i
-		go func() {
-			select {
-			case <-ch:
-				//t.Logf("COMPLETED worker %d", worker)
-				wg.Done()
-			case <-time.After(3 * time.Second):
-				t.Errorf("timeout waiting for worker %d", worker)
-			}
-		}()
-	}
-
-	ch := make(chan struct{})
-	go func() {
-		defer close(ch)
-		wg.Wait()
-	}()
-
-	select {
-	case <-ch:
-		t.Logf("completed with %d workers in %v", WORKERS, time.Since(start))
-	case <-time.After(3 * time.Second):
-		t.Fatalf("timeout waiting for resets of suicide watch")
-	}
-}
-*/
