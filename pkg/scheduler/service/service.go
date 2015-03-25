@@ -102,6 +102,11 @@ type SchedulerServer struct {
 	HA                     bool
 	HADomain               string
 	KMPath                 string
+	ClusterDNS             util.IP
+	ClusterDomain          string
+	RootDirectory          string
+	DockerEndpoint         string
+	PodInfraContainerImage string
 
 	executable string // path to the binary running this service
 	client     *client.Client
@@ -124,7 +129,8 @@ func NewSchedulerServer() *SchedulerServer {
 		HA:                     false,
 		// TODO(jdef) hard dependency on schedcfg.DefaultInfoName, also assumes
 		// that mesos-dns has a k8s plugin that registers services there.
-		// HADomain: "services.kubernetes.mesos",
+		// ClusterDomain: lower(schedcfg.DefaultInfoName)+".mesos" -- probably "kubernetes.mesos"
+		// HADomain: {service-namespace}.ClusterDomain -- based on kube2sky naming rules
 	}
 	// cache this for later use. also useful in case the original binary gets deleted, e.g.
 	// during upgrades, development deployments, etc.
@@ -183,6 +189,11 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&s.HA, "ha", s.HA, "Run the scheduler in high availability mode with leader election. All peers should be configured exactly the same.")
 	fs.StringVar(&s.FrameworkName, "framework_name", s.FrameworkName, "The framework name to register with Mesos.")
 	fs.StringVar(&s.HADomain, "ha_domain", s.HADomain, "Domain of the HA scheduler service, only used in HA mode. If specified may be used to construct artifact download URIs.")
+	fs.StringVar(&s.ClusterDomain, "cluster_domain", s.ClusterDomain, "Domain for this cluster.  If set, kubelet will configure all containers to search this domain in addition to the host's search domains")
+	fs.Var(&s.ClusterDNS, "cluster_dns", "IP address for a cluster DNS server.  If set, kubelet will configure all containers to use this for DNS resolution in addition to the host's DNS servers")
+	fs.StringVar(&s.RootDirectory, "root_dir", s.RootDirectory, "Directory path for managing kubelet files (volume mounts,etc). Defaults to executor sandbox.")
+	fs.StringVar(&s.DockerEndpoint, "docker_endpoint", s.DockerEndpoint, "If non-empty, kubelet will use this for the docker endpoint to communicate with.")
+	fs.StringVar(&s.PodInfraContainerImage, "pod_infra_container_image", s.PodInfraContainerImage, "The image whose network/ipc namespaces containers in each pod will use.")
 }
 
 func (s *SchedulerServer) AddStandaloneFlags(fs *pflag.FlagSet) {
@@ -293,15 +304,32 @@ func (s *SchedulerServer) prepareExecutorInfo(hks *hyperkube.Server) *mesos.Exec
 		etcdServerArguments := strings.Join(s.EtcdServerList, ",")
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--etcd_servers=%s", etcdServerArguments))
 	} else {
+		//TODO(jdef) should probably support non-local files, e.g. hdfs:///some/config/file
 		uri, basename := s.serveFrameworkArtifact(s.EtcdConfigFile)
 		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri)})
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--etcd_config=./%s", basename))
 	}
 
 	if s.AuthPath != "" {
+		//TODO(jdef) should probably support non-local files, e.g. hdfs:///some/config/file
 		uri, basename := s.serveFrameworkArtifact(s.AuthPath)
 		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri)})
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--auth_path=%s", basename))
+	}
+	if s.ClusterDNS != nil {
+		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--cluster_dns=%v", s.ClusterDNS))
+	}
+	if s.ClusterDomain != "" {
+		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--cluster_domain=%s", s.ClusterDomain))
+	}
+	if s.RootDirectory != "" {
+		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--root_dir=%s", s.RootDirectory))
+	}
+	if s.DockerEndpoint != "" {
+		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--docker_endpoint=%s", s.DockerEndpoint))
+	}
+	if s.PodInfraContainerImage != "" {
+		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--pod_infra_container_image=%s", s.PodInfraContainerImage))
 	}
 
 	log.V(1).Infof("prepared executor command %q with args '%+v'", ci.GetValue(), ci.Arguments)
