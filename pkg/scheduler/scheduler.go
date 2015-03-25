@@ -692,10 +692,15 @@ func newReconciler(doer proc.Doer, action ReconcilerAction, cooldown time.Durati
 		implicit: make(chan struct{}, 1),
 		cooldown: cooldown,
 		Action: func(driver bindings.SchedulerDriver, cancel <-chan struct{}) error {
-			// perform the action in the doer execution context
+			// trigged the reconciler action in the doer's execution context,
+			// but it could take a while and the scheduler needs to be able to
+			// process updates, the callbacks for which ALSO execute in the SAME
+			// deferred execution context -- so the action MUST be executed async.
 			ch := make(chan error, 1)
 			err := doer.Do(func() {
-				ch <- action(driver, cancel)
+				// only triggers the action if we're the currently elected,
+				// registered master and runs the action async.
+				go func() { ch <- action(driver, cancel) }()
 			})
 			if err != nil {
 				return err
