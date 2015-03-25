@@ -37,11 +37,6 @@ func (m *SchedulerServer) serviceWriterLoop(stop <-chan struct{}) {
 		// Update service & endpoint records.
 		// TODO: when it becomes possible to change this stuff,
 		// stop polling and start watching.
-		/*
-			if err := m.createSchedulerNamespaceIfNeeded(api.NamespaceDefault); err != nil {
-				glog.Errorf("Can't create scheduler namespace: %v", err)
-			}
-		*/
 		if err := m.createSchedulerServiceIfNeeded(SCHEDULER_SERVICE_NAME, ports.SchedulerPort); err != nil {
 			glog.Errorf("Can't create scheduler service: %v", err)
 		}
@@ -57,27 +52,6 @@ func (m *SchedulerServer) serviceWriterLoop(stop <-chan struct{}) {
 		}
 	}
 }
-
-/*
-// createSchedulerNamespaceIfNeeded will create the namespace that contains the scheduler services if it doesn't already exist
-func (m *SchedulerServer) createSchedulerNamespaceIfNeeded(ns string) error {
-	if _, err := m.client.Namespaces().Get(ns); err == nil {
-		// the namespace already exists
-		return nil
-	}
-	namespace := &api.Namespace{
-		ObjectMeta: api.ObjectMeta{
-			Name:      ns,
-			Namespace: "",
-		},
-	}
-	_, err := m.client.Namespaces().Create(namespace)
-	if err != nil && errors.IsAlreadyExists(err) {
-		err = nil
-	}
-	return err
-}
-*/
 
 // createSchedulerServiceIfNeeded will create the specified service if it
 // doesn't already exist.
