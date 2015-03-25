@@ -379,10 +379,10 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 
 	go s.serviceWriterLoop(schedulerProcess.Done())
 
-	go util.Forever(func() {
+	go util.Until(func() {
 		log.V(1).Info("Starting HTTP interface")
 		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), nil))
-	}, 5*time.Second) // TODO(jdef) extract constant
+	}, 5*time.Second, schedulerProcess.Done()) // TODO(jdef) extract constant
 
 	var driver bindings.SchedulerDriver
 	driverFactory := ha.DriverFactory(func() (drv bindings.SchedulerDriver, err error) {
@@ -581,7 +581,7 @@ func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks *hyperku
 		Setpgid: true, // disown the spawned scheduler
 	}
 
-	// TODO(jdef) pass in a pipe FD so that we can block, waiting for the child proc to be read
+	// TODO(jdef) pass in a pipe FD so that we can block, waiting for the child proc to be ready
 	//cmd.ExtraFiles = []*os.File{}
 
 	exitcode := 0
