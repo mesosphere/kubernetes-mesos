@@ -70,6 +70,15 @@ type kuberTask struct {
 	podName       string
 }
 
+// func that attempts suicide
+type jumper func(bindings.ExecutorDriver, <-chan struct{})
+
+type suicideWatcher interface {
+	Next(time.Duration, bindings.ExecutorDriver, jumper) suicideWatcher
+	Reset(time.Duration) bool
+	Stop() bool
+}
+
 // KubernetesExecutor is an mesos executor that runs pods
 // in a minion machine.
 type KubernetesExecutor struct {
@@ -85,7 +94,7 @@ type KubernetesExecutor struct {
 	done            chan struct{} // signals shutdown
 	outgoing        chan func() (mesos.Status, error)
 	dockerClient    dockertools.DockerInterface
-	suicideWatch    *time.Timer
+	suicideWatch    suicideWatcher
 	suicideTimeout  time.Duration
 	kubeletFinished <-chan struct{} // signals that kubelet Run() died
 }
@@ -107,16 +116,6 @@ func (k *KubernetesExecutor) isConnected() bool {
 
 // New creates a new kubernetes executor.
 func New(config Config) *KubernetesExecutor {
-	//TODO(jdef) do something real with these events..
-	events := config.Watch.ResultChan()
-	if events != nil {
-		go func() {
-			for e := range events {
-				// e ~= watch.Event { ADDED, *api.Event }
-				log.V(1).Info(e)
-			}
-		}()
-	}
 	k := &KubernetesExecutor{
 		kl:              config.Kubelet,
 		updateChan:      config.Updates,
@@ -125,20 +124,33 @@ func New(config Config) *KubernetesExecutor {
 		pods:            make(map[string]*api.BoundPod),
 		sourcename:      config.SourceName,
 		client:          config.APIClient,
-		events:          events,
 		done:            make(chan struct{}),
 		outgoing:        make(chan func() (mesos.Status, error), 1024),
 		dockerClient:    config.Docker,
 		suicideTimeout:  config.SuicideTimeout,
 		kubeletFinished: config.KubeletFinished,
+		suicideWatch:    &suicideTimer{},
 	}
-	go k.sendLoop()
+	//TODO(jdef) do something real with these events..
+	if config.Watch != nil {
+		events := config.Watch.ResultChan()
+		if events != nil {
+			go func() {
+				for e := range events {
+					// e ~= watch.Event { ADDED, *api.Event }
+					log.V(1).Info(e)
+				}
+			}()
+			k.events = events
+		}
+	}
 	return k
 }
 
 func (k *KubernetesExecutor) Init(driver bindings.ExecutorDriver) {
 	k.killKubeletContainers()
 	k.resetSuicideWatch(driver)
+	go k.sendLoop()
 	//TODO(jdef) monitor kubeletFinished and shutdown if it happens
 }
 
@@ -235,40 +247,104 @@ func (k *KubernetesExecutor) LaunchTask(driver bindings.ExecutorDriver, taskInfo
 	go k.launchTask(driver, taskId, &pod)
 }
 
+type suicideTimer struct {
+	timer *time.Timer
+
+	// aggressively attempt to cancel an action executed on expiration of the timer
+	cancelFunc func()
+}
+
+func (w *suicideTimer) Next(d time.Duration, driver bindings.ExecutorDriver, f jumper) suicideWatcher {
+	abort := make(chan struct{})
+	var cancelOnce sync.Once
+	return &suicideTimer{
+		timer: time.AfterFunc(d, func() {
+			log.Warningf("Suicide timeout (%v) expired", d)
+			f(driver, abort)
+		}),
+		cancelFunc: func() {
+			cancelOnce.Do(func() {
+				log.Infoln("cancelling suicide attempt") //TODO(jdef) debug
+				close(abort)
+			})
+		},
+	}
+}
+
+func (w *suicideTimer) Stop() (result bool) {
+	if w != nil && w.timer != nil {
+		log.Infoln("stopping suicide watch") //TODO(jdef) debug
+		// always try to abort a possibly scheduled suicide
+		defer w.cancelFunc()
+		result = w.timer.Stop()
+	}
+	return
+}
+
+func (w *suicideTimer) Reset(d time.Duration) (result bool) {
+	if w != nil && w.timer != nil {
+		log.Infoln("resetting suicide watch") //TODO(jdef) debug
+		if result = w.timer.Reset(d); !result {
+			// timer has either expired or has been stoppped.
+			// we don't really know which so assume that it
+			// expired and attempt to abort.
+			w.cancelFunc()
+		} else {
+			log.Infoln("reset suicide watch") //TODO(jdef) debug
+		}
+	}
+	return
+}
+
 // determine whether we need to start a suicide countdown. if so, then start
 // a timer that, upon expiration, causes this executor to commit suicide.
-func (k *KubernetesExecutor) resetSuicideWatch(driver bindings.ExecutorDriver) {
+// this implementation runs asynchronously. callers that wish to wait for the
+// reset to complete may wait for the returned signal chan to close.
+func (k *KubernetesExecutor) resetSuicideWatch(driver bindings.ExecutorDriver) <-chan struct{} {
+	ch := make(chan struct{})
 	go func() {
+		defer close(ch)
 		k.lock.Lock()
 		defer k.lock.Unlock()
 
 		if k.suicideTimeout < 1 {
 			return
 		}
+
 		if k.suicideWatch != nil {
 			if len(k.tasks) > 0 {
 				k.suicideWatch.Stop()
 				return
 			}
 			if k.suicideWatch.Reset(k.suicideTimeout) {
+				// timer still active, reset was successful
 				return
 			}
+			// else, timer has expired or been stopped
 		}
+
 		//TODO(jdef) reduce verbosity here once we're convinced that suicide watch is working properly
-		log.Info("resetting suicide watch for %s", k.suicideTimeout)
-		k.suicideWatch = time.AfterFunc(k.suicideTimeout, func() {
-			log.Warningf("Suicide timeout (%s) expired", k.suicideTimeout)
-			k.attemptSuicide(driver)
-		})
+		log.Infof("resetting suicide watch for %v", k.suicideTimeout)
+
+		k.suicideWatch = k.suicideWatch.Next(k.suicideTimeout, driver, jumper(k.attemptSuicide))
 	}()
+	return ch
 }
 
-// assumes that caller is holding state lock
-func (k *KubernetesExecutor) attemptSuicide(driver bindings.ExecutorDriver) {
+func (k *KubernetesExecutor) attemptSuicide(driver bindings.ExecutorDriver, abort <-chan struct{}) {
 	k.lock.Lock()
 	defer k.lock.Unlock()
 
-	//fail-safe
+	// this attempt may have been queued and since been aborted
+	select {
+	case <-abort:
+		//TODO(jdef) reduce verbosity once suicide watch is working properly
+		log.Infof("aborting suicide attempt since watch was cancelled")
+		return
+	default: // continue
+	}
+
+	// fail-safe, will abort kamikaze attempts if there are tasks
 	if len(k.tasks) > 0 {
 		ids := []string{}
 		for taskid := range k.tasks {
@@ -525,13 +601,7 @@ func (k *KubernetesExecutor) KillTask(driver bindings.ExecutorDriver, taskId *me
 
 	k.lock.Lock()
 	defer k.lock.Unlock()
-	k.killPodForTask(driver, taskId.GetValue(), messages.TaskKilled)
-}
-
-// Kills the pod associated with the given task. Assumes that the caller is locking around
-// pod and task storage.
-func (k *KubernetesExecutor) killPodForTask(driver bindings.ExecutorDriver, tid, reason string) {
-	k.removePodTask(driver, tid, reason, mesos.TaskState_TASK_KILLED)
+	k.removePodTask(driver, taskId.GetValue(), messages.TaskKilled, mesos.TaskState_TASK_KILLED)
 }
 
 // Reports a lost task to the slave and updates internal task and pod tracking state.
@@ -540,7 +610,8 @@ func (k *KubernetesExecutor) reportLostTask(driver bindings.ExecutorDriver, tid,
 	k.removePodTask(driver, tid, reason, mesos.TaskState_TASK_LOST)
 }
 
-// returns a chan that closes when the pod is no longer running in Docker.
+// deletes the pod and task associated with the task identified by tid and sends a task
+// status update to mesos. also attempts to reset the suicide watch.
 // Assumes that the caller is locking around pod and task state.
 func (k *KubernetesExecutor) removePodTask(driver bindings.ExecutorDriver, tid, reason string, state mesos.TaskState) {
 	task, ok := k.tasks[tid]
@@ -593,7 +664,7 @@ func (k *KubernetesExecutor) FrameworkMessage(driver bindings.ExecutorDriver, me
 
 	switch message {
 	case messages.Kamikaze:
-		k.attemptSuicide(driver)
+		k.attemptSuicide(driver, nil)
 	}
 }
 
@@ -633,6 +704,8 @@ func (k *KubernetesExecutor) doShutdown(driver bindings.ExecutorDriver) {
 	select {
 	// Kubelet.Run() may still be running... wait for it to finish
 	case <-k.kubeletFinished:
+
+	//TODO(jdef) attempt to wait for events to propagate to API server?
 
 	// TODO(jdef) extract constant, should be smaller than whatever the
 	// slave graceful shutdown timeout period is.
