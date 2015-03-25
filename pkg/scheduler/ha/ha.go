@@ -65,7 +65,6 @@ func (self *SchedulerProcess) Begin() {
 	if (&self.stage).transition(initStage, standbyStage) {
 		log.Infoln("scheduler process entered standby stage")
 		self.Process.Begin()
-		//TODO(jdef) start election listener
 	} else {
 		log.Errorf("failed to transition from init to standby stage")
 	}
