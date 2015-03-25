@@ -2,6 +2,13 @@ package proc
 
 import (
 	"sync"
+	"time"
+
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+)
+
+const (
+	actionHandlerCrashDelay = 100 * time.Millisecond
 )
 
 type procImpl struct {
@@ -24,7 +31,8 @@ func (self *procImpl) Done() <-chan struct{} {
 }
 
 func (self *procImpl) Begin() {
-	go func() {
+	// execute actions on the exec chan
+	go util.Until(func() {
 		for {
 			select {
 			case <-self.terminate:
@@ -36,10 +44,10 @@ func (self *procImpl) Begin() {
 				action()
 			}
 		}
-	}()
+	}, actionHandlerCrashDelay, self.terminate)
 
 	// propagate actions from the backlog
-	go func() {
+	go util.Until(func() {
 		for {
 			select {
 			case <-self.terminate:
@@ -55,7 +63,7 @@ func (self *procImpl) Begin() {
 				}
 			}
 		}
-	}()
+	}, actionHandlerCrashDelay, self.terminate)
 }
 
 // execute some action in the context of the current lifecycle. actions
@@ -134,6 +142,9 @@ type processAdapter struct {
 }
 
 func (p *processAdapter) Do(a Action) error {
+	if p == nil || p.parent == nil || p.delegate == nil {
+		return errIllegalState
+	}
 	ch := make(chan error, 1)
 	err := p.parent.Do(func() {
 		ch <- p.delegate.Do(a)
@@ -145,14 +156,23 @@ func (p *processAdapter) Do(a Action) error {
 }
 
 func (p *processAdapter) End() {
-	p.parent.End()
+	if p != nil && p.parent != nil {
+		p.parent.End()
+	}
 }
 
 func (p *processAdapter) Done() <-chan struct{} {
-	return p.parent.Done()
+	if p != nil && p.parent != nil {
+		return p.parent.Done()
+	}
+	return nil
 }
 
-// returns a process that, within its execution context, delegates to the specified Doer
+// returns a process that, within its execution context, delegates to the specified Doer.
+// if the given Doer instance is nil, a valid Process is still returned though calls to its
+// Do() implementation will always return errIllegalState.
+// if the given Process instance is nil then in addition to the behavior in the prior sentence,
+// calls to End() and Done() are effectively noops.
 func DoWith(other Process, d Doer) Process {
 	return &processAdapter{
 		parent:   other,

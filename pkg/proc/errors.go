@@ -7,16 +7,17 @@ import (
 var (
 	errActionNotAllowed  = errors.New("action is not permitted to run")
 	errProcessTerminated = errors.New("cannot execute action because process has terminated")
+	errIllegalState      = errors.New("illegal state, cannot execute action")
 )
 
-func NewActionNotAllowedError() error {
-	return errActionNotAllowed
-}
-
-func IsActionNotAllowedError(err error) bool {
+func IsActionNotAllowed(err error) bool {
 	return err == errActionNotAllowed
 }
 
-func IsProcessTerminatedError(err error) bool {
+func IsProcessTerminated(err error) bool {
 	return err == errProcessTerminated
+}
+
+func IsIllegalState(err error) bool {
+	return err == errIllegalState
 }

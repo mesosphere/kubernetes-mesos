@@ -3,7 +3,7 @@ package proc
 type Action func()
 
 type Context interface {
-	// end (terminate) the process
+	// end (terminate) the execution context
 	End()
 
 	// return a signal chan that will close upon the termination of this process
@@ -24,7 +24,10 @@ type Doer interface {
 type DoerFunc func(Action) error
 
 func (f DoerFunc) Do(a Action) error {
-	return f(a)
+	if f != nil {
+		return f(a)
+	}
+	return errIllegalState
 }
 
 type Process interface {
