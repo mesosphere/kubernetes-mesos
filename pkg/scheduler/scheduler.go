@@ -275,7 +275,7 @@ func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDri
 	r1 := k.makeTaskRegistryReconciler()
 	r2 := k.makePodRegistryReconciler()
 
-	k.reconciler = newReconciler(k.asRegisteredMaster, k.makeCompositeReconciler(r1, r2), k.reconcileCooldown)
+	k.reconciler = newReconciler(k.asRegisteredMaster, k.makeCompositeReconciler(r1, r2), k.reconcileCooldown, k.terminate)
 	go k.reconciler.Run(driver)
 
 	if k.reconcileInterval > 0 {
@@ -679,18 +679,19 @@ type ReconcilerAction func(driver bindings.SchedulerDriver, cancel <-chan struct
 type Reconciler struct {
 	proc.Doer
 	Action   ReconcilerAction
-	explicit chan struct{} // send an empty struct to trigger explicit reconciliation
-	implicit chan struct{} // send an empty struct to trigger implicit reconciliation
-	done     chan struct{} // close this when you want the reconciler to exit
+	explicit chan struct{}   // send an empty struct to trigger explicit reconciliation
+	implicit chan struct{}   // send an empty struct to trigger implicit reconciliation
+	done     <-chan struct{} // close this when you want the reconciler to exit
 	cooldown time.Duration
 }
 
-func newReconciler(doer proc.Doer, action ReconcilerAction, cooldown time.Duration) *Reconciler {
+func newReconciler(doer proc.Doer, action ReconcilerAction, cooldown time.Duration, done <-chan struct{}) *Reconciler {
 	return &Reconciler{
 		Doer:     doer,
 		explicit: make(chan struct{}, 1),
 		implicit: make(chan struct{}, 1),
 		cooldown: cooldown,
+		done:     done,
 		Action: func(driver bindings.SchedulerDriver, cancel <-chan struct{}) error {
 			// trigged the reconciler action in the doer's execution context,
 			// but it could take a while and the scheduler needs to be able to
@@ -731,6 +732,11 @@ func (r *Reconciler) Run(driver bindings.SchedulerDriver) {
 	var cancel, finished chan struct{}
 requestLoop:
 	for {
+		select {
+		case <-r.done:
+			return
+		default: // proceed
+		}
 		select {
 		case <-r.implicit:
 			metrics.ReconciliationRequested.WithLabelValues("implicit").Inc()
