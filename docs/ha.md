@@ -23,8 +23,8 @@ YMMV.
 
 Scheduler failover may be triggered by either the following events:
 
-- loss of leadership when running in HA mode (`--ha`)
-- the leading scheduler process receives a USR1 signal
+- loss of leadership when running in HA mode (`--ha`).
+- the leading scheduler process receives a USR1 signal.
 
 It is currently possible signal failover to a single, non-HA scheduler process.
 In this case, if there are problems launching a replacement scheduler process then the cluster may be without a scheduler until another is manually started.
@@ -33,10 +33,10 @@ In this case, if there are problems launching a replacement scheduler process th
 
 ##### Command Line Arguments
 
-- `--ha` is required to enable scheduler HA and multi-scheduler leader election
-- `--km_path` or else (`--executor_path` and `--proxy_path`) should reference non-local-file URI's and must be identicial across schedulers
+- `--ha` is required to enable scheduler HA and multi-scheduler leader election.
+- `--km_path` or else (`--executor_path` and `--proxy_path`) should reference non-local-file URI's and must be identicial across schedulers.
 
-If you are testing, for example, using the Mesos on GCE tooling provided by Mesosphere then you can rely on HDFS:
+If you are testing, for example, using the Mesos on GCE tooling provided by Mesosphere then you can rely on HDFS for such URI's:
 
 ```shell
 $ hdfs dfs -put -f bin/km hdfs:///km
@@ -48,7 +48,7 @@ $ ./bin/km scheduler ... --mesos_master=zk://zk1:2181,zk2:2181/mesos --ha --km_p
 - a Mesos master will not recognize differently configured executors as being compatible, and so...
 - a scheduler will refuse to accept any offer for slave resources if there are incompatible executors running on the slave.
 
-Compatibility is largely determined by comparing executor configuration hashes:
+Within the scheduler, compatibility is largely determined by comparing executor configuration hashes:
   a hash is calculated from a subset of the executor-related command line parameters provided to the scheduler process.
 The command line parameters that affect the hash calculation are listed below.
 
