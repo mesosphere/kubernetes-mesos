@@ -680,11 +680,10 @@ func (k *KubernetesExecutor) doShutdown(driver bindings.ExecutorDriver) {
 	// if needed, so don't take extra time to do that here.
 	k.tasks = map[string]*kuberTask{}
 
-	// clear the pod configuration cleanly: tell k8s "there are no pods"
-	// and let it clean things up (pods, volumes, etc).
-
 	select {
-	// Kubelet.Run() may still be running... wait for it to finish
+	// the main Run() func may still be running... wait for it to finish: it will
+	// clear the pod configuration cleanly, telling k8s "there are no pods" and
+	// clean up resources (pods, volumes, etc).
 	case <-k.kubeletFinished:
 
 	//TODO(jdef) attempt to wait for events to propagate to API server?

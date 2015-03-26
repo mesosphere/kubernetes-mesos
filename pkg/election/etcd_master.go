@@ -31,8 +31,8 @@ import (
 type Master string
 
 // IsAnAPIObject is used solely so we can work with the watch package.
-// TODO: Either fix watch so this isn't necessary, or make this a real API Object.
-// TODO: when it becomes clear how this package will be used, move these declarations to
+// TODO(k8s): Either fix watch so this isn't necessary, or make this a real API Object.
+// TODO(k8s): when it becomes clear how this package will be used, move these declarations to
 // to the proper place.
 func (Master) IsAnAPIObject() {}
 
@@ -169,7 +169,7 @@ func (e *etcdMasterElector) master(path, id string, ttl uint64, masters chan<- s
 			lastMaster = master
 			masters <- master
 		}
-		// TODO: Add Watch here, skip the polling for faster reactions
+		// TODO(k8s): Add Watch here, skip the polling for faster reactions
 		// If done is closed, break out.
 		select {
 		case <-done:

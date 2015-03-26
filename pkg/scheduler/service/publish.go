@@ -35,7 +35,7 @@ const (
 func (m *SchedulerServer) serviceWriterLoop(stop <-chan struct{}) {
 	for {
 		// Update service & endpoint records.
-		// TODO: when it becomes possible to change this stuff,
+		// TODO(k8s): when it becomes possible to change this stuff,
 		// stop polling and start watching.
 		if err := m.createSchedulerServiceIfNeeded(SCHEDULER_SERVICE_NAME, ports.SchedulerPort); err != nil {
 			glog.Errorf("Can't create scheduler service: %v", err)
