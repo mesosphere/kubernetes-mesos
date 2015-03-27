@@ -40,6 +40,8 @@ const (
 	initialImplicitReconciliationDelay = 15 * time.Second // wait this amount of time after initial registration before attempting implicit reconciliation
 	explicitReconciliationMaxBackoff   = 2 * time.Minute  // interval in between internal task status checks/updates
 	explicitReconciliationAbortTimeout = 30 * time.Second // waiting period after attempting to cancel an ongoing reconciliation
+	defaultInitialPodBackoff           = 1 * time.Second
+	defaultMaxPodBackoff               = 60 * time.Second
 )
 
 type Slave struct {

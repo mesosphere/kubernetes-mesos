@@ -21,6 +21,7 @@ import (
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	mutil "github.com/mesos/mesos-go/mesosutil"
+	"github.com/mesosphere/kubernetes-mesos/pkg/backoff"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 	annotation "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
@@ -488,7 +489,7 @@ func (q *queuer) yield() *api.Pod {
 
 type errorHandler struct {
 	api     SchedulerInterface
-	backoff *podBackoff
+	backoff *backoff.Backoff
 	qr      *queuer
 }
 
@@ -511,7 +512,7 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 		return
 	}
 
-	k.backoff.gc()
+	k.backoff.GC()
 	k.api.RLocker().Lock()
 	defer k.api.RLocker().Unlock()
 
@@ -543,7 +544,7 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 				}
 			}))
 		}
-		delay := k.backoff.getBackoff(podKey)
+		delay := k.backoff.Get(podKey)
 		log.V(3).Infof("requeuing pod %v with delay %v", podKey, delay)
 		k.qr.requeue(&Pod{Pod: pod, delay: &delay, notify: breakoutEarly})
 	default:
@@ -644,14 +645,9 @@ func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}) *Plugin
 		qr:  q,
 	}
 	eh := &errorHandler{
-		api: kapi,
-		backoff: &podBackoff{
-			perPodBackoff:   map[string]*backoffEntry{},
-			clock:           realClock{},
-			defaultDuration: 1 * time.Second,
-			maxDuration:     60 * time.Second,
-		},
-		qr: q,
+		api:     kapi,
+		backoff: backoff.New(defaultInitialPodBackoff, defaultMaxPodBackoff),
+		qr:      q,
 	}
 	startLatch := make(chan struct{})
 	go func() {
