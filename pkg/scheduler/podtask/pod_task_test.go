@@ -67,7 +67,7 @@ func TestNoPortsInPodOrOffer(t *testing.T) {
 func TestDefaultHostPortMatching(t *testing.T) {
 	t.Parallel()
 	task, _ := fakePodTask("foo")
-	pod := &task.pod
+	pod := &task.Pod
 
 	offer := &mesos.Offer{
 		Resources: []*mesos.Resource{
@@ -107,7 +107,7 @@ func TestDefaultHostPortMatching(t *testing.T) {
 func TestAcceptOfferPorts(t *testing.T) {
 	t.Parallel()
 	task, _ := fakePodTask("foo")
-	pod := &task.pod
+	pod := &task.Pod
 
 	offer := &mesos.Offer{
 		Resources: []*mesos.Resource{
