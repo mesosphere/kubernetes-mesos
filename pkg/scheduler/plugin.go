@@ -137,20 +137,14 @@ func (b *binder) Bind(binding *api.Binding) error {
 	b.api.Lock()
 	defer b.api.Unlock()
 
-	taskId, exists := b.api.tasks().ForPod(podKey)
-	if !exists {
-		log.Infof("Could not resolve pod %s to task id", podKey)
-		return noSuchPodErr
-	}
-
-	switch task, state := b.api.tasks().Get(taskId); state {
+	switch task, state := b.api.tasks().ForPod(podKey); state {
 	case podtask.StatePending:
 		return b.bind(ctx, binding, task)
 	default:
 		// in this case it's likely that the pod has been deleted between Schedule
 		// and Bind calls
 		log.Infof("No pending task for pod %s", podKey)
-		return noSuchPodErr
+		return noSuchPodErr //TODO(jdef) this error is somewhat misleading since the task could be running?!
 	}
 }
 
@@ -288,7 +282,8 @@ func (k *kubeScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (st
 	k.api.Lock()
 	defer k.api.Unlock()
 
-	if taskID, ok := k.api.tasks().ForPod(podKey); !ok {
+	switch task, state := k.api.tasks().ForPod(podKey); state {
+	case podtask.StateUnknown:
 		// There's a bit of a potential race here, a pod could have been yielded() and
 		// then before we get *here* it could be deleted.
 		// We use meta to index the pod in the store since that's what k8s reflector does.
@@ -303,28 +298,26 @@ func (k *kubeScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (st
 			return "", noSuchPodErr
 		}
 		return k.doSchedule(k.api.tasks().Register(k.api.createPodTask(ctx, &pod)))
-	} else {
-		//TODO(jdef) it's possible that the pod state has diverged from what
-		//we knew previously, we should probably update the task.Pod state here
-		//before proceeding with scheduling
 
-		switch task, state := k.api.tasks().Get(taskID); state {
-		case podtask.StatePending:
-			if pod.UID != task.Pod.UID {
-				// we're dealing with a brand new pod spec here, so the old one must have been
-				// deleted -- and so our task store is out of sync w/ respect to reality
-				//TODO(jdef) reconcile task
-				return "", fmt.Errorf("task %v spec is out of sync with pod %v spec, aborting schedule", taskID, pod.Name)
-			} else if task.Has(podtask.Launched) {
-				// task has been marked as "launched" but the pod binding creation may have failed in k8s,
-				// but we're going to let someone else handle it, probably the mesos task error handler
-				return "", fmt.Errorf("task %s has already been launched, aborting schedule", taskID)
-			} else {
-				return k.doSchedule(task, nil)
-			}
-		default:
-			return "", fmt.Errorf("task %s is not pending, nothing to schedule", taskID)
+	//TODO(jdef) it's possible that the pod state has diverged from what
+	//we knew previously, we should probably update the task.Pod state here
+	//before proceeding with scheduling
+	case podtask.StatePending:
+		if pod.UID != task.Pod.UID {
+			// we're dealing with a brand new pod spec here, so the old one must have been
+			// deleted -- and so our task store is out of sync w/ respect to reality
+			//TODO(jdef) reconcile task
+			return "", fmt.Errorf("task %v spec is out of sync with pod %v spec, aborting schedule", task.ID, pod.Name)
+		} else if task.Has(podtask.Launched) {
+			// task has been marked as "launched" but the pod binding creation may have failed in k8s,
+			// but we're going to let someone else handle it, probably the mesos task error handler
+			return "", fmt.Errorf("task %s has already been launched, aborting schedule", task.ID)
+		} else {
+			return k.doSchedule(task, nil)
 		}
+
+	default:
+		return "", fmt.Errorf("task %s is not pending, nothing to schedule", task.ID)
 	}
 }
 
@@ -548,14 +541,12 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 	k.api.Lock()
 	defer k.api.Unlock()
 
-	taskId, exists := k.api.tasks().ForPod(podKey)
-	if !exists {
+	switch task, state := k.api.tasks().ForPod(podKey); state {
+	case podtask.StateUnknown:
 		// if we don't have a mapping here any more then someone deleted the pod
 		log.V(2).Infof("Could not resolve pod to task, aborting pod reschdule: %s", podKey)
 		return
-	}
 
-	switch task, state := k.api.tasks().Get(taskId); state {
 	case podtask.StatePending:
 		if task.Has(podtask.Launched) {
 			log.V(2).Infof("Skipping re-scheduling for already-launched pod %v", podKey)
@@ -567,7 +558,7 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 			breakoutEarly = queue.BreakChan(k.api.offers().Listen(podKey, func(offer *mesos.Offer) bool {
 				k.api.Lock()
 				defer k.api.Unlock()
-				switch task, state := k.api.tasks().Get(taskId); state {
+				switch task, state := k.api.tasks().Get(task.ID); state {
 				case podtask.StatePending:
 					return !task.Has(podtask.Launched) && task.AcceptOffer(offer)
 				default:
@@ -579,6 +570,7 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 		delay := k.backoff.Get(podKey)
 		log.V(3).Infof("requeuing pod %v with delay %v", podKey, delay)
 		k.qr.requeue(&Pod{Pod: pod, delay: &delay, notify: breakoutEarly})
+
 	default:
 		log.V(2).Infof("Task is no longer pending, aborting reschedule for pod %v", podKey)
 	}
@@ -629,15 +621,13 @@ func (k *deleter) deleteOne(pod *Pod) error {
 	// will abort Bind()ing
 	k.qr.dequeue(pod.GetUID())
 
-	taskId, exists := k.api.tasks().ForPod(podKey)
-	if !exists {
+	switch task, state := k.api.tasks().ForPod(podKey); state {
+	case podtask.StateUnknown:
 		log.V(2).Infof("Could not resolve pod '%s' to task id", podKey)
 		return noSuchPodErr
-	}
 
 	// determine if the task has already been launched to mesos, if not then
 	// cleanup is easier (unregister) since there's no state to sync
-	switch task, state := k.api.tasks().Get(taskId); state {
 	case podtask.StatePending:
 		if !task.Has(podtask.Launched) {
 			// we've been invoked in between Schedule() and Bind()
@@ -654,15 +644,17 @@ func (k *deleter) deleteOne(pod *Pod) error {
 			return nil
 		}
 		fallthrough
+
 	case podtask.StateRunning:
 		// signal to watchers that the related pod is going down
 		task.Set(podtask.Deleted)
 		if _, err := k.api.tasks().Update(task); err != nil {
 			log.Errorf("failed to update task w/ Deleted status: %v", err)
 		}
-		return k.api.killTask(taskId)
+		return k.api.killTask(task.ID)
+
 	default:
-		log.Infof("cannot kill pod '%s': task not found %v", podKey, taskId)
+		log.Infof("cannot kill pod '%s': non-terminal task not found %v", podKey, task.ID)
 		return noSuchTaskErr
 	}
 }
@@ -804,7 +796,7 @@ func (s *schedulingPlugin) reconcilePod(oldPod api.Pod) {
 			s.api.Lock()
 			defer s.api.Unlock()
 
-			if _, exists := s.api.tasks().ForPod(podKey); exists {
+			if _, state := s.api.tasks().ForPod(podKey); state != podtask.StateUnknown {
 				//TODO(jdef) reconcile the task
 				log.Errorf("task already registered for pod %v", pod.Name)
 				return

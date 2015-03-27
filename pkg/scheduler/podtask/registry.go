@@ -30,7 +30,7 @@ type Registry interface {
 	Unregister(*T)
 	Update(task *T) (*T, error)
 	Get(taskId string) (task *T, currentState StateType)
-	ForPod(podID string) (taskID string, ok bool)
+	ForPod(podID string) (task *T, currentState StateType)
 	UpdateStatus(status *mesos.TaskStatus) (*T, StateType)
 	// return a list of task ID's that match the given filter, or all task ID's if filter == nil
 	List(func(*T) bool) []*T
@@ -62,12 +62,14 @@ func (k *inMemoryRegistry) List(accepts func(t *T) bool) (tasks []*T) {
 	return
 }
 
-func (k *inMemoryRegistry) ForPod(podID string) (taskID string, ok bool) {
+func (k *inMemoryRegistry) ForPod(podID string) (task *T, currentState StateType) {
 	k.rw.RLock()
 	defer k.rw.RUnlock()
-	// assume caller is holding scheduler lock
-	taskID, ok = k.podToTask[podID]
-	return
+	tid, ok := k.podToTask[podID]
+	if !ok {
+		return nil, StateUnknown
+	}
+	return k._get(tid)
 }
 
 // registers a pod task unless the spec'd error is not nil
