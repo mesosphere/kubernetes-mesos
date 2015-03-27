@@ -387,13 +387,12 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 
 	var driver bindings.SchedulerDriver
 	driverFactory := ha.DriverFactory(func() (drv bindings.SchedulerDriver, err error) {
-		if err = deferredInit(); err == nil {
-			// defer obtaining framework ID to prevent multiple schedulers
-			// from overwriting each other's framework IDs
-			if dconfig.Framework.Id, err = s.fetchFrameworkID(etcdClient); err == nil {
-				drv, err = bindings.NewMesosSchedulerDriver(*dconfig)
-				driver = drv
-			}
+		// defer obtaining framework ID to prevent multiple schedulers
+		// from overwriting each other's framework IDs
+		if dconfig.Framework.Id, err = s.fetchFrameworkID(etcdClient); err == nil {
+			drv, err = bindings.NewMesosSchedulerDriver(*dconfig)
+			driver = drv
+			err = deferredInit(drv)
 		}
 		return
 	})
@@ -454,7 +453,7 @@ func validateLeadershipTransition(desired, current string) {
 	}
 }
 
-func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess, *bindings.DriverConfig, scheduler.PluginInterface, tools.EtcdClient, func() error, uint64) {
+func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess, *bindings.DriverConfig, scheduler.PluginInterface, tools.EtcdClient, func(bindings.SchedulerDriver) error, uint64) {
 
 	s.FrameworkName = strings.TrimSpace(s.FrameworkName)
 	if s.FrameworkName == "" {
@@ -530,8 +529,8 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 	}
 
 	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(schedulerProcess.Done()))
-	return schedulerProcess, dconfig, kpl, etcdClient, func() (err error) {
-		if err = mesosPodScheduler.Init(schedulerProcess.Master(), kpl); err != nil {
+	return schedulerProcess, dconfig, kpl, etcdClient, func(d bindings.SchedulerDriver) (err error) {
+		if err = mesosPodScheduler.Init(d, schedulerProcess.Master(), kpl); err != nil {
 			err = fmt.Errorf("failed to initialize pod scheduler: %v", err)
 		}
 		return

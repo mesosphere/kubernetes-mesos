@@ -42,6 +42,7 @@ const (
 	explicitReconciliationAbortTimeout = 30 * time.Second // waiting period after attempting to cancel an ongoing reconciliation
 	defaultInitialPodBackoff           = 1 * time.Second
 	defaultMaxPodBackoff               = 60 * time.Second
+	defaultHttpHandlerTimeout          = 10 * time.Second
 )
 
 type Slave struct {
@@ -168,11 +169,18 @@ func New(config Config) *KubernetesScheduler {
 		slaveIDs:          make(map[string]string),
 		taskRegistry:      podtask.NewInMemoryRegistry(),
 		reconcileCooldown: config.ReconcileCooldown,
+		asRegisteredMaster: proc.DoerFunc(func(proc.Action) error {
+			return fmt.Errorf("cannot execute action with unregistered scheduler")
+		}),
 	}
 	return k
 }
 
-func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterface) error {
+func (k *KubernetesScheduler) Init(driver bindings.SchedulerDriver, electedMaster proc.Process, pl PluginInterface) error {
+	k.Lock()
+	defer k.Unlock()
+
+	k.driver = driver
 	//TODO(jdef) watch electedMaster.Done() to figure out when background jobs should be shut down
 	k.asRegisteredMaster = proc.DoerFunc(func(a proc.Action) error {
 		if !k.registered {
@@ -187,51 +195,78 @@ func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterfac
 	return k.recoverTasks()
 }
 
+func (k *KubernetesScheduler) asMaster() proc.Doer {
+	k.RLock()
+	defer k.RUnlock()
+	return k.asRegisteredMaster
+}
+
 func (k *KubernetesScheduler) InstallDebugHandlers() {
-	http.HandleFunc("/debug/actions/requestExplicit", func(w http.ResponseWriter, r *http.Request) {
-		k.reconciler.RequestExplicit()
-		w.WriteHeader(http.StatusNoContent)
-	})
-	http.HandleFunc("/debug/actions/requestImplicit", func(w http.ResponseWriter, r *http.Request) {
-		k.reconciler.RequestImplicit()
-		w.WriteHeader(http.StatusNoContent)
-	})
+	requestReconciliation := func(uri string, requestAction func()) {
+		http.HandleFunc(uri, func(w http.ResponseWriter, r *http.Request) {
+			ch := make(chan struct{})
+			err := k.asMaster().Do(func() {
+				defer close(ch)
+				requestAction()
+				w.WriteHeader(http.StatusNoContent)
+			})
+			if err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			select {
+			case <-time.After(defaultHttpHandlerTimeout):
+				log.Warningf("timed out waiting for reconciliation request to be accepted")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			case <-ch: // noop
+			}
+		})
+	}
+
+	requestReconciliation("/debug/actions/requestExplicit", k.reconciler.RequestExplicit)
+	requestReconciliation("/debug/actions/requestImplicit", k.reconciler.RequestImplicit)
+
 	http.HandleFunc("/debug/actions/kamikaze", func(w http.ResponseWriter, r *http.Request) {
-		ids := func() (ids []string) {
+		ids := make(chan []string, 1)
+		err := k.asMaster().Do(func() {
 			k.Lock()
 			defer k.Unlock()
-			if !k.registered {
-				log.Errorf("cannot execute kamikaze request, scheduler is disconnected")
-				w.WriteHeader(http.StatusServiceUnavailable)
-			} else {
-				ids = []string{}
-				for slaveId, _ := range k.slaves {
-					ids = append(ids, slaveId)
+			slaves := []string{}
+			for slaveId, _ := range k.slaves {
+				slaves = append(slaves, slaveId)
+			}
+			ids <- slaves
+		})
+		if err != nil {
+			log.Errorf("cannot execute kamikaze request: %v", err)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		select {
+		case <-time.After(defaultHttpHandlerTimeout):
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		case slaves := <-ids:
+			for _, slaveId := range slaves {
+				_, err := k.driver.SendFrameworkMessage(
+					k.executor.ExecutorId,
+					mutil.NewSlaveID(slaveId),
+					messages.Kamikaze)
+				if err != nil {
+					log.Warningf("failed to send kamikaze message to slave %s: %v", slaveId, err)
+				} else {
+					io.WriteString(w, fmt.Sprintf("kamikaze slave %s\n", slaveId))
 				}
 			}
-			return
-		}()
-		for _, slaveId := range ids {
-			_, err := k.driver.SendFrameworkMessage(
-				k.executor.ExecutorId,
-				mutil.NewSlaveID(slaveId),
-				messages.Kamikaze)
-			if err != nil {
-				log.Warningf("failed to send kamikaze message to slave %s: %v", slaveId, err)
-			} else {
-				io.WriteString(w, fmt.Sprintf("kamikaze slave %s\n", slaveId))
-			}
+			io.WriteString(w, "OK")
 		}
-		io.WriteString(w, "OK")
 	})
 }
 
 // Registered is called when the scheduler registered with the master successfully.
 func (k *KubernetesScheduler) Registered(drv bindings.SchedulerDriver, fid *mesos.FrameworkID, mi *mesos.MasterInfo) {
 	log.Infof("Scheduler registered with the master: %v with frameworkId: %v\n", mi, fid)
-
-	k.Lock()
-	defer k.Unlock()
 
 	k.frameworkId = fid
 	k.masterInfo = mi
@@ -253,9 +288,6 @@ func (k *KubernetesScheduler) storeFrameworkId() {
 func (k *KubernetesScheduler) Reregistered(drv bindings.SchedulerDriver, mi *mesos.MasterInfo) {
 	log.Infof("Scheduler reregistered with the master: %v\n", mi)
 
-	k.Lock()
-	defer k.Unlock()
-
 	k.masterInfo = mi
 	k.registered = true
 
@@ -265,7 +297,6 @@ func (k *KubernetesScheduler) Reregistered(drv bindings.SchedulerDriver, mi *mes
 
 // perform one-time initialization actions upon the first registration event received from Mesos.
 func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDriver) {
-	k.driver = driver
 	if k.failoverTimeout > 0 {
 		refreshInterval := defaultFrameworkIdRefreshInterval * time.Second
 		if k.failoverTimeout < defaultFrameworkIdRefreshInterval {
@@ -291,8 +322,6 @@ func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDri
 func (k *KubernetesScheduler) Disconnected(driver bindings.SchedulerDriver) {
 	log.Infof("Master disconnected!\n")
 
-	k.Lock()
-	defer k.Unlock()
 	k.registered = false
 
 	// discard all cached offers to avoid unnecessary TASK_LOST updates
@@ -357,12 +386,14 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 	taskState := taskStatus.GetState()
 	metrics.StatusUpdates.WithLabelValues(source, reason, taskState.String()).Inc()
 
-	//TODO(jdef) we're going to make changes to podtask.T objects in here and since the current TaskRegistry
-	//implementation is in-memory, and hands us pointers to shared objects, we need a critical section for this.
-	k.Lock()
-	defer k.Unlock()
-
-	log.Infof("Received status update %v\n", taskStatus)
+	log.Infof(
+		"task status update %q from %q for task %q on slave %q executor %q for reason %q",
+		taskState.String(),
+		source,
+		taskStatus.TaskId.GetValue(),
+		taskStatus.SlaveId.GetValue(),
+		taskStatus.ExecutorId.GetValue(),
+		reason)
 
 	switch taskState {
 	case mesos.TaskState_TASK_RUNNING, mesos.TaskState_TASK_FINISHED, mesos.TaskState_TASK_STARTING, mesos.TaskState_TASK_STAGING:
@@ -372,9 +403,15 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 				//I don't want to reincarnate then..  TASK_LOST is a special case because
 				//the master is stateless and there are scenarios where I may get TASK_LOST
 				//followed by TASK_RUNNING.
+				//TODO(jdef) consider running this asynchronously since there are API server
+				//calls that may be made
 				k.reconcileNonTerminalTask(driver, taskStatus)
 			} // else, we don't really care about FINISHED tasks that aren't registered
-		} else if _, knownSlave := k.slaves[taskStatus.GetSlaveId().GetValue()]; !knownSlave {
+			return
+		}
+		k.RLock()
+		defer k.RUnlock()
+		if _, knownSlave := k.slaves[taskStatus.GetSlaveId().GetValue()]; !knownSlave {
 			// a registered task has an update reported by a slave that we don't recognize.
 			// this should never happen! So we don't reconcile it.
 			log.Errorf("Ignore status %+v because the slave does not exist", taskStatus)
@@ -383,7 +420,7 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 	case mesos.TaskState_TASK_FAILED:
 		if task, _ := k.taskRegistry.UpdateStatus(taskStatus); task != nil {
 			if task.Has(podtask.Launched) && messages.CreateBindingFailure == taskStatus.GetMessage() {
-				go k.plugin.reconcilePod(task.Pod())
+				go k.plugin.reconcilePod(task.Pod)
 				return
 			}
 		} else {
@@ -410,7 +447,7 @@ func (k *KubernetesScheduler) reconcileTerminalTask(driver bindings.SchedulerDri
 		// (2) a pod that the Kubelet will never report as "failed"
 		// For now, destroy the pod and hope that there's a replication controller backing it up.
 		// TODO(jdef) for case #2 don't delete the pod, just update it's status to Failed
-		pod := task.Pod()
+		pod := &task.Pod
 		log.Warningf("deleting rogue pod %v/%v for lost task %v", pod.Namespace, pod.Name, task.ID)
 		if err := k.client.Pods(pod.Namespace).Delete(pod.Name); err != nil && !errors.IsNotFound(err) {
 			log.Errorf("failed to delete pod %v/%v for terminal task %v: %v", pod.Namespace, pod.Name, task.ID, err)
@@ -466,8 +503,14 @@ func (k *KubernetesScheduler) reconcileNonTerminalTask(driver bindings.Scheduler
 	} else if pod, err := k.client.Pods(namespace).Get(name); err == nil {
 		if t, ok, err := podtask.RecoverFrom(*pod); ok {
 			log.Infof("recovered task %v from metadata in pod %v/%v", taskId, namespace, name)
-			k.taskRegistry.Register(t, nil)
-			k.taskRegistry.UpdateStatus(taskStatus)
+			_, err := k.taskRegistry.Register(t, nil)
+			if err != nil {
+				// someone beat us to it?!
+				log.Warningf("failed to register recovered task: %v", err)
+				return
+			} else {
+				k.taskRegistry.UpdateStatus(taskStatus)
+			}
 			return
 		} else if err != nil {
 			//should kill the pod and the task
@@ -528,8 +571,7 @@ func (k *KubernetesScheduler) SlaveLost(driver bindings.SchedulerDriver, slaveId
 }
 
 // ExecutorLost is called when some executor is lost.
-func (k *KubernetesScheduler) ExecutorLost(driver bindings.SchedulerDriver,
-	executorId *mesos.ExecutorID, slaveId *mesos.SlaveID, status int) {
+func (k *KubernetesScheduler) ExecutorLost(driver bindings.SchedulerDriver, executorId *mesos.ExecutorID, slaveId *mesos.SlaveID, status int) {
 	log.Infof("Executor %v of slave %v is lost, status: %v\n", executorId, slaveId, status)
 	// TODO(yifan): Restart any unfinished tasks of the executor.
 }
@@ -577,10 +619,9 @@ func (k *KubernetesScheduler) makeTaskRegistryReconciler() ReconcilerAction {
 		func() {
 			k.Lock()
 			defer k.Unlock()
-			for _, taskId := range k.taskRegistry.List(explicitTaskFilter) {
-				t, _ := k.taskRegistry.Get(taskId)
-				if t != nil && t.Spec.SlaveID != "" {
-					taskToSlave[taskId] = t.Spec.SlaveID
+			for _, t := range k.taskRegistry.List(explicitTaskFilter) {
+				if t.Spec.SlaveID != "" {
+					taskToSlave[t.ID] = t.Spec.SlaveID
 				}
 			}
 		}()
@@ -656,17 +697,13 @@ func (k *KubernetesScheduler) explicitlyReconcileTasks(driver bindings.Scheduler
 		case <-cancel:
 			return reconciliationCancelledErr
 		case <-time.After(backoff):
-			func() {
-				k.RLock()
-				defer k.RUnlock()
-				for taskId := range remaining {
-					if task, _ := k.taskRegistry.Get(taskId); task != nil && explicitTaskFilter(task) && task.UpdatedTime.Before(start) {
-						// keep this task in remaining list
-						continue
-					}
-					remaining.Delete(taskId)
+			for taskId := range remaining {
+				if task, _ := k.taskRegistry.Get(taskId); task != nil && explicitTaskFilter(task) && task.UpdatedTime.Before(start) {
+					// keep this task in remaining list
+					continue
 				}
-			}()
+				remaining.Delete(taskId)
+			}
 		}
 	}
 	return nil

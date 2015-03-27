@@ -28,11 +28,12 @@ const (
 type Registry interface {
 	Register(*T, error) (*T, error)
 	Unregister(*T)
+	Update(task *T) (*T, error)
 	Get(taskId string) (task *T, currentState StateType)
-	TaskForPod(podID string) (taskID string, ok bool)
+	ForPod(podID string) (taskID string, ok bool)
 	UpdateStatus(status *mesos.TaskStatus) (*T, StateType)
 	// return a list of task ID's that match the given filter, or all task ID's if filter == nil
-	List(func(*T) bool) []string
+	List(func(*T) bool) []*T
 }
 
 type inMemoryRegistry struct {
@@ -50,18 +51,18 @@ func NewInMemoryRegistry() Registry {
 	}
 }
 
-func (k *inMemoryRegistry) List(accepts func(t *T) bool) (taskids []string) {
+func (k *inMemoryRegistry) List(accepts func(t *T) bool) (tasks []*T) {
 	k.rw.RLock()
 	defer k.rw.RUnlock()
-	for id, task := range k.taskRegistry {
+	for _, task := range k.taskRegistry {
 		if accepts == nil || accepts(task) {
-			taskids = append(taskids, id)
+			tasks = append(tasks, task.Clone())
 		}
 	}
 	return
 }
 
-func (k *inMemoryRegistry) TaskForPod(podID string) (taskID string, ok bool) {
+func (k *inMemoryRegistry) ForPod(podID string) (taskID string, ok bool) {
 	k.rw.RLock()
 	defer k.rw.RUnlock()
 	// assume caller is holding scheduler lock
@@ -74,10 +75,43 @@ func (k *inMemoryRegistry) Register(task *T, err error) (*T, error) {
 	if err == nil {
 		k.rw.Lock()
 		defer k.rw.Unlock()
+		if _, found := k.podToTask[task.podKey]; found {
+			return nil, fmt.Errorf("task already registered for pod key %q", task.podKey)
+		}
+		if _, found := k.taskRegistry[task.ID]; found {
+			return nil, fmt.Errorf("task already registered for id %q", task.ID)
+		}
 		k.podToTask[task.podKey] = task.ID
-		k.taskRegistry[task.ID] = task
+		k.taskRegistry[task.ID] = task.Clone()
 	}
 	return task, err
+}
+
+// updates internal task state. updates are limited to Spec, Flags, and Offer for
+// StatePending tasks, and are limited to Flag updates (additive only) for StateRunning tasks.
+func (k *inMemoryRegistry) Update(task *T) (*T, error) {
+	if task == nil {
+		return nil, nil
+	}
+	k.rw.Lock()
+	defer k.rw.Unlock()
+	switch internal, state := k._get(task.ID); state {
+	case StateUnknown:
+		return nil, fmt.Errorf("no such task: %v", task.ID)
+	case StatePending:
+		internal.Offer = task.Offer
+		internal.Spec = task.Spec
+		(&task.Spec).copyTo(&internal.Spec)
+		internal.Flags = map[FlagType]struct{}{}
+		fallthrough
+	case StateRunning:
+		for k, v := range task.Flags {
+			internal.Flags[k] = v
+		}
+		return internal.Clone(), nil
+	default:
+		return nil, fmt.Errorf("may not update task %v in state %v", task.ID, state)
+	}
 }
 
 func (k *inMemoryRegistry) Unregister(task *T) {
@@ -90,7 +124,8 @@ func (k *inMemoryRegistry) Unregister(task *T) {
 func (k *inMemoryRegistry) Get(taskId string) (*T, StateType) {
 	k.rw.RLock()
 	defer k.rw.RUnlock()
-	return k._get(taskId)
+	t, state := k._get(taskId)
+	return t.Clone(), state
 }
 
 // assume that the caller has already locked around access to task state

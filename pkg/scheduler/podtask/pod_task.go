@@ -40,14 +40,14 @@ const (
 // A struct that describes a pod task.
 type T struct {
 	ID          string
+	Pod         api.Pod
 	Spec        Spec
-	Offer       offers.Perishable // immutable
+	Offer       offers.Perishable // thread-safe
 	State       StateType
 	Flags       map[FlagType]struct{}
 	CreateTime  time.Time
 	UpdatedTime time.Time // time of the most recent StatusUpdate we've seen from the mesos master
 
-	pod        api.Pod
 	podStatus  api.PodStatus
 	executor   *mesos.ExecutorInfo // readonly
 	podKey     string
@@ -65,13 +65,40 @@ type Spec struct {
 	Data    []byte
 }
 
-func (t *T) HasAcceptedOffer() bool {
-	return t.Spec.SlaveID != ""
+// mostly-clone this pod task. the clone will actually share the some fields:
+//   - executor    // OK because it's read only
+//   - Offer       // OK because it's guarantees safe concurrent access
+func (t *T) Clone() *T {
+	if t == nil {
+		return nil
+	}
+
+	// shallow-copy
+	clone := *t
+
+	// deep copy
+	(&t.Spec).copyTo(&clone.Spec)
+	clone.Flags = map[FlagType]struct{}{}
+	for k := range t.Flags {
+		clone.Flags[k] = struct{}{}
+	}
+	return &clone
 }
 
-//TODO(jdef) get rid of this once registry returns task clones
-func (t *T) Pod() api.Pod {
-	return t.pod
+func (old *Spec) copyTo(new *Spec) {
+	if len(old.PortMap) > 0 {
+		new.PortMap = append(([]HostPortMapping)(nil), old.PortMap...)
+	}
+	if len(old.Ports) > 0 {
+		new.Ports = append(([]uint64)(nil), old.Ports...)
+	}
+	if len(old.Data) > 0 {
+		new.Data = append(([]byte)(nil), old.Data...)
+	}
+}
+
+func (t *T) HasAcceptedOffer() bool {
+	return t.Spec.SlaveID != ""
 }
 
 func (t *T) GetOfferId() string {
@@ -107,7 +134,7 @@ func (t *T) FillFromDetails(details *mesos.Offer) error {
 		panic("offer details are nil")
 	}
 
-	log.V(3).Infof("Recording offer(s) %v against pod %v", details.Id, t.pod.Name)
+	log.V(3).Infof("Recording offer(s) %v against pod %v", details.Id, t.Pod.Name)
 
 	t.Spec = Spec{
 		SlaveID: details.GetSlaveId().GetValue(),
@@ -132,7 +159,7 @@ func (t *T) FillFromDetails(details *mesos.Offer) error {
 // Clear offer-related details from the task, should be called if/when an offer
 // has already been assigned to a task but for some reason is no longer valid.
 func (t *T) Reset() {
-	log.V(3).Infof("Clearing offer(s) from pod %v", t.pod.Name)
+	log.V(3).Infof("Clearing offer(s) from pod %v", t.Pod.Name)
 	t.Offer = nil
 	t.Spec = Spec{}
 }
@@ -179,14 +206,6 @@ func (t *T) Has(f FlagType) (exists bool) {
 	return
 }
 
-// create a duplicate task, one that refers to the same pod specification and
-// executor as the current task. all other state is reset to "factory settings"
-// (as if returned from New())
-func (t *T) dup() (*T, error) {
-	ctx := api.WithNamespace(api.NewDefaultContext(), t.pod.Namespace)
-	return New(ctx, "", t.pod, t.executor)
-}
-
 func New(ctx api.Context, id string, pod api.Pod, executor *mesos.ExecutorInfo) (*T, error) {
 	if executor == nil {
 		return nil, fmt.Errorf("illegal argument: executor was nil")
@@ -200,7 +219,7 @@ func New(ctx api.Context, id string, pod api.Pod, executor *mesos.ExecutorInfo) 
 	}
 	task := &T{
 		ID:       id,
-		pod:      pod,
+		Pod:      pod,
 		State:    StatePending,
 		podKey:   key,
 		mapper:   defaultHostPortMapping,
@@ -256,7 +275,7 @@ func RecoverFrom(pod api.Pod) (*T, bool, error) {
 
 	now := time.Now()
 	t := &T{
-		pod:        pod,
+		Pod:        pod,
 		CreateTime: now,
 		podKey:     key,
 		State:      StatePending, // possibly running? mesos will tell us during reconciliation
@@ -333,7 +352,7 @@ func (err *DuplicateHostPortError) Error() string {
 func defaultHostPortMapping(t *T, offer *mesos.Offer) ([]HostPortMapping, error) {
 	requiredPorts := make(map[uint64]HostPortMapping)
 	mapping := []HostPortMapping{}
-	for i, container := range t.pod.Spec.Containers {
+	for i, container := range t.Pod.Spec.Containers {
 		// strip all port==0 from this array; k8s already knows what to do with zero-
 		// ports (it does not create 'port bindings' on the minion-host); we need to
 		// remove the wildcards from this array since they don't consume host resources
@@ -370,7 +389,7 @@ func defaultHostPortMapping(t *T, offer *mesos.Offer) ([]HostPortMapping, error)
 	unsatisfiedPorts := len(requiredPorts)
 	if unsatisfiedPorts > 0 {
 		err := &PortAllocationError{
-			PodId: t.pod.Name,
+			PodId: t.Pod.Name,
 		}
 		for p, _ := range requiredPorts {
 			err.Ports = append(err.Ports, p)

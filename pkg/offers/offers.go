@@ -85,6 +85,9 @@ type offerSpec struct {
 	hostname string
 }
 
+// offers that may perish (all of them?) implement this interface.
+// callers may expect to access these funcs concurrently so implementations
+// must provide their own form of synchronization around mutable state.
 type Perishable interface {
 	// returns true if this offer has expired
 	HasExpired() bool
