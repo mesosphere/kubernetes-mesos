@@ -12,11 +12,15 @@ limitations under the License.
 */
 
 // copied from k8s: plugin/pkg/scheduler/factory/factory.go
-package scheduler
+package backoff
 
-import "sync"
-import "time"
-import log "github.com/golang/glog"
+import (
+	"math/rand"
+	"sync"
+	"time"
+
+	log "github.com/golang/glog"
+)
 
 type clock interface {
 	Now() time.Time
@@ -33,48 +37,58 @@ type backoffEntry struct {
 	lastUpdate time.Time
 }
 
-type podBackoff struct {
-	perPodBackoff   map[string]*backoffEntry
+type Backoff struct {
+	perItemBackoff  map[string]*backoffEntry
 	lock            sync.Mutex
 	clock           clock
 	defaultDuration time.Duration
 	maxDuration     time.Duration
 }
 
-func (p *podBackoff) getEntry(podID string) *backoffEntry {
+func New(initial, max time.Duration) *Backoff {
+	return &Backoff{
+		perItemBackoff:  map[string]*backoffEntry{},
+		clock:           realClock{},
+		defaultDuration: initial,
+		maxDuration:     max,
+	}
+}
+
+func (p *Backoff) getEntry(id string) *backoffEntry {
 	p.lock.Lock()
 	defer p.lock.Unlock()
-	entry, ok := p.perPodBackoff[podID]
+	entry, ok := p.perItemBackoff[id]
 	if !ok {
 		entry = &backoffEntry{backoff: p.defaultDuration}
-		p.perPodBackoff[podID] = entry
+		p.perItemBackoff[id] = entry
 	}
 	entry.lastUpdate = p.clock.Now()
 	return entry
 }
 
-// TODO(jdef): allow for pluggable backoff sequences, strategies here. For
-// example we may want to use a fibonacci backoff sequence for certain cluster
-// sizes. Or, perhaps we'll allow per-pod backoff factors at some point (ala
-// marathon).
-func (p *podBackoff) getBackoff(podID string) time.Duration {
-	entry := p.getEntry(podID)
+func (p *Backoff) Get(id string) time.Duration {
+	entry := p.getEntry(id)
 	duration := entry.backoff
 	entry.backoff *= 2
 	if entry.backoff > p.maxDuration {
 		entry.backoff = p.maxDuration
 	}
-	log.V(3).Infof("Backing off %s for pod %s", duration.String(), podID)
+	//TODO(jdef) parameterize use of jitter?
+	// add jitter, get better backoff distribution
+	duration = time.Duration(rand.Int63n(int64(duration)))
+	log.V(3).Infof("Backing off %v for pod %s", duration, id)
 	return duration
 }
 
-func (p *podBackoff) gc() {
+// Garbage collect records that have aged past maxDuration. Backoff users are expected
+// to invoke this periodically.
+func (p *Backoff) GC() {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 	now := p.clock.Now()
-	for podID, entry := range p.perPodBackoff {
+	for id, entry := range p.perItemBackoff {
 		if now.Sub(entry.lastUpdate) > p.maxDuration {
-			delete(p.perPodBackoff, podID)
+			delete(p.perItemBackoff, id)
 		}
 	}
 }

@@ -12,4 +12,5 @@ const (
 	TaskKilled               = "task-killed"
 	UnmarshalTaskDataFailure = "unmarshal-task-data-failure"
 	TaskLostAck              = "task-lost-ack" // executor acknowledgement of forwarded TASK_LOST framework message
+	Kamikaze                 = "kamikaze"
 )

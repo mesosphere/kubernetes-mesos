@@ -4,7 +4,7 @@ test -x "$KUBECFG" || {
     echo "error: missing kubectl executable at $KUBECFG" >&2
     exit 1
 }
-watch "$KUBECFG"' get pods | (
+watch -n 10 "$KUBECFG"' get pods | (
     read l1
     read l2
     echo "$l1"

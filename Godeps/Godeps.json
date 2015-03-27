@@ -463,7 +463,7 @@
 		},
 		{
 			"ImportPath": "github.com/kardianos/osext",
-			"Rev": "ccfcd0245381f0c94c68f50626665eed3c6b726a"
+			"Rev": "efacde03154693404c65e7aa7d461ac9014acd0c"
 		},
 		{
 			"ImportPath": "github.com/matttproud/golang_protobuf_extensions/ext",

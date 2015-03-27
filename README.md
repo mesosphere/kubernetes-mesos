@@ -42,9 +42,6 @@ Before building anything please review all of the instructions, including any en
 Kubernetes-Mesos is built using a Makefile to automate the process of patching the vanilla Kubernetes code.
 At this time it is **highly recommended** to use the Makefile instead of building components manually using `go build`.
 ```shell
-$ cd $GOPATH # If you don't have one, create directory and set GOPATH accordingly.
-
-$ mkdir -p src/github.com/mesosphere/kubernetes-mesos
 $ git clone https://github.com/mesosphere/kubernetes-mesos.git k8sm
 $ cd k8sm
 $ make                             # compile the binaries

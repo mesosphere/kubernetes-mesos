@@ -9,7 +9,7 @@ import (
 
 func main() {
 	s := service.NewKubeletExecutorServer()
-	s.AddFlags(pflag.CommandLine)
+	s.AddStandaloneFlags(pflag.CommandLine)
 
 	util.InitFlags()
 	util.InitLogs()

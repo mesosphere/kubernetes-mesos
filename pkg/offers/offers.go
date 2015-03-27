@@ -25,7 +25,9 @@ type Filter func(*mesos.Offer) bool
 
 type Registry interface {
 	// Initialize the instance, spawning necessary housekeeping go routines.
-	Init()
+	Init(<-chan struct{})
+
+	// Add offers to this registry, rejecting those that are deemed incompatible.
 	Add([]*mesos.Offer)
 
 	// Listen for arriving offers that are acceptable to the filter, sending
@@ -34,10 +36,12 @@ type Registry interface {
 	Listen(id string, f Filter) <-chan struct{}
 
 	// invoked when offers are rescinded or expired
-	Delete(string)
+	Delete(string, metrics.OfferDeclinedReason)
 
+	// when true, returns the offer that's registered for the given ID
 	Get(offerId string) (Perishable, bool)
 
+	// iterate through non-expired offers in this registry
 	Walk(Walker) error
 
 	// invalidate one or all (when offerId="") offers; offers are not declined,
@@ -50,10 +54,11 @@ type Registry interface {
 type Walker func(offer Perishable) (stop bool, err error)
 
 type RegistryConfig struct {
-	DeclineOffer  func(offerId string) error
-	TTL           time.Duration // determines a perishable offer's expiration deadline: now+ttl
-	LingerTTL     time.Duration // if zero, offers will not linger in the FIFO past their expiration deadline
-	ListenerDelay time.Duration // specifies the sleep time between offer listener notifications
+	DeclineOffer  func(offerId string) error // tell Mesos that we're declining the offer
+	Compat        func(*mesos.Offer) bool    // returns true if offer is compatible; incompatible offers are declined
+	TTL           time.Duration              // determines a perishable offer's expiration deadline: now+ttl
+	LingerTTL     time.Duration              // if zero, offers will not linger in the FIFO past their expiration deadline
+	ListenerDelay time.Duration              // specifies the sleep time between offer listener notifications
 }
 
 type offerStorage struct {
@@ -156,7 +161,7 @@ func (to *liveOffer) Release() {
 }
 
 func (to *liveOffer) age(s *offerStorage) {
-	s.Delete(to.Id())
+	s.Delete(to.Id(), metrics.OfferExpired)
 }
 
 func (to *liveOffer) Id() string {
@@ -192,9 +197,24 @@ func CreateRegistry(c RegistryConfig) Registry {
 	}
 }
 
+func (s *offerStorage) declineOffer(offerId, hostname string, reason metrics.OfferDeclinedReason) {
+	if err := s.DeclineOffer(offerId); err != nil {
+		log.Warningf("Failed to decline offer %v: %v", offerId, err)
+	} else {
+		metrics.OffersDeclined.WithLabelValues(hostname, string(reason)).Inc()
+	}
+}
+
 func (s *offerStorage) Add(offers []*mesos.Offer) {
 	now := time.Now()
 	for _, offer := range offers {
+		if !s.Compat(offer) {
+			//TODO(jdef) would be nice to batch these up
+			offerId := offer.Id.GetValue()
+			log.V(3).Infof("Declining incompatible offer %v", offerId)
+			s.declineOffer(offerId, offer.GetHostname(), metrics.OfferCompat)
+			return
+		}
 		timed := &liveOffer{
 			Offer:      offer,
 			expiration: now.Add(s.TTL),
@@ -208,7 +228,7 @@ func (s *offerStorage) Add(offers []*mesos.Offer) {
 }
 
 // delete an offer from storage, implicitly expires the offer
-func (s *offerStorage) Delete(offerId string) {
+func (s *offerStorage) Delete(offerId string, reason metrics.OfferDeclinedReason) {
 	if offer, ok := s.Get(offerId); ok {
 		log.V(3).Infof("Deleting offer %v", offerId)
 		// attempt to block others from consuming the offer. if it's already been
@@ -218,11 +238,7 @@ func (s *offerStorage) Delete(offerId string) {
 		if offer.Details() != nil {
 			if notYetClaimed {
 				log.V(3).Infof("Declining offer %v", offerId)
-				if err := s.DeclineOffer(offerId); err != nil {
-					log.Warningf("Failed to decline offer %v: %v", offerId, err)
-				} else {
-					metrics.OffersDeclined.WithLabelValues(offer.Host()).Inc()
-				}
+				s.declineOffer(offerId, offer.Host(), reason)
 			} else {
 				// some pod has acquired this and may attempt to launch a task with it
 				// failed schedule/launch attempts are requried to Release() any claims on the offer
@@ -241,11 +257,8 @@ func (s *offerStorage) Delete(offerId string) {
 					if offer.Acquire() {
 						// previously claimed offer was released, perhaps due to a launch
 						// failure, so we should attempt to decline
-						if err := s.DeclineOffer(offerId); err != nil {
-							log.Warningf("Failed to decline (previously claimed) offer %v: %v", offerId, err)
-						} else {
-							metrics.OffersDeclined.WithLabelValues(offer.Host()).Inc()
-						}
+						log.V(3).Infof("attempting to decline (previously claimed) offer %v", offerId)
+						s.declineOffer(offerId, offer.Host(), reason)
 					}
 				})
 			}
@@ -436,9 +449,9 @@ func (s *offerStorage) notifyListeners(ids func() (util.StringSet, uint64)) {
 	}
 }
 
-func (s *offerStorage) Init() {
+func (s *offerStorage) Init(done <-chan struct{}) {
 	// zero delay, reap offers as soon as they expire
-	go util.Forever(s.ageOffers, 0)
+	go util.Until(s.ageOffers, 0, done)
 
 	// cached offer ids for the purposes of listener notification
 	idCache := &stringsCache{
@@ -454,7 +467,7 @@ func (s *offerStorage) Init() {
 		ttl: offerIdCacheTTL,
 	}
 
-	go util.Forever(func() { s.notifyListeners(idCache.Strings) }, notifyListenersDelay)
+	go util.Until(func() { s.notifyListeners(idCache.Strings) }, notifyListenersDelay, done)
 }
 
 type stringsCache struct {

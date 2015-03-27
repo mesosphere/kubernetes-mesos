@@ -21,6 +21,9 @@ FRAMEWORK_CMD	:= ${CMD_DIRS:%=${K8SM_GO_PACKAGE}/%}
 LIB_DIRS := $(shell cd $(current_dir) && find ./pkg -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|sort|uniq|cut -f1 -d/ --complement)
 
 FRAMEWORK_LIB	:= ${LIB_DIRS:%=${K8SM_GO_PACKAGE}/%}
+TESTS_LOGV	?= 2
+TESTS		?= $(LIB_DIRS)
+TESTS_VV        = $(shell for pkg in $(TESTS); do ls $$pkg/*.go | while read -r f; do basename "$$f"|egrep -v -e '_test.go$$'|grep -v -e '^doc\.go'|sed -e 's/\.go$$/=$(TESTS_LOGV)/g'; done; done | xargs echo -n | tr ' ' ',')
 
 GIT_VERSION_FILE := $(current_dir)/.kube-version
 
@@ -37,7 +40,7 @@ TAGS		?=
 
 BUILDDIR	?= $(current_dir)/_build
 
-.PHONY: all error require-godep require-vendor install info bootstrap format test patch version test.v clean vet fix prepare
+.PHONY: all error require-godep require-vendor install info bootstrap format test patch version test.v test.vv clean lint vet fix prepare
 
 # FRAMEWORK_FLAGS := -v -x -tags '$(TAGS)'
 FRAMEWORK_FLAGS := -tags '$(TAGS)'
@@ -70,12 +73,20 @@ clean:
 format:
 	env GOPATH=$(BUILDDIR) go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
 
+lint:
+	for pkg in $(FRAMEWORK_CMD) $(FRAMEWORK_LIB); do env GOPATH=$(BUILDDIR) go$@ $$pkg; done
+
 vet fix:
 	env GOPATH=$(BUILDDIR) go $@ $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
 
 test test.v:
 	test "$@" = "test.v" && args="-test.v" || args=""; \
-		env GOPATH=$(BUILDDIR) go test $$args $(FRAMEWORK_LIB)
+		test -n "$(WITH_RACE)" && args="$$args -race" || true; \
+		env GOPATH=$(BUILDDIR) go test $$args $(TESTS:%=${K8SM_GO_PACKAGE}/%)
+
+test.vv:
+	test -n "$(WITH_RACE)" && args="$$args -race" || args=""; \
+		env GOPATH=$(BUILDDIR) go test -test.v $$args $(TESTS:%=${K8SM_GO_PACKAGE}/%) -logtostderr=true -vmodule=$(TESTS_VV)
 
 install: all
 	mkdir -p $(DESTDIR)
