@@ -36,7 +36,7 @@ In this case, if there are problems launching a replacement scheduler process th
 - `--ha` is required to enable scheduler HA and multi-scheduler leader election.
 - `--km_path` or else (`--executor_path` and `--proxy_path`) should reference non-local-file URI's and must be identicial across schedulers.
 
-If you are testing, for example, using the Mesos on GCE tooling provided by Mesosphere then you can rely on HDFS for such URI's:
+If you have HDFS installed on your slaves then you can specify HDFS URI locations for the binaries:
 
 ```shell
 $ hdfs dfs -put -f bin/km hdfs:///km
