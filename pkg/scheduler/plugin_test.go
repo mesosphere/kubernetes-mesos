@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	mesos "github.com/mesos/mesos-go/mesosproto"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"github.com/stretchr/testify/assert"
@@ -39,7 +40,10 @@ func TestDeleteOne_PendingPod(t *testing.T) {
 			UID:       "foo0",
 			Namespace: api.NamespaceDefault,
 		}}}
-	task := &podtask.T{ID: "bar", Pod: pod.Pod}
+	task, err := podtask.New(api.NewDefaultContext(), "bar", *pod.Pod, &mesos.ExecutorInfo{})
+	if err != nil {
+		t.Fatalf("failed to create task: %v", err)
+	}
 
 	// set expectations
 	obj.On("taskForPod", podKey).Return(task.ID, true)
@@ -58,7 +62,7 @@ func TestDeleteOne_PendingPod(t *testing.T) {
 		api: obj,
 		qr:  qr,
 	}
-	err := d.deleteOne(pod)
+	err = d.deleteOne(pod)
 	assert.Nil(err)
 	_, found = qr.podQueue.Get("foo0")
 	assert.False(found)
@@ -77,7 +81,10 @@ func TestDeleteOne_Running(t *testing.T) {
 			UID:       "foo0",
 			Namespace: api.NamespaceDefault,
 		}}}
-	task := &podtask.T{ID: "bar", Pod: pod.Pod, Flags: make(map[podtask.FlagType]struct{})}
+	task, err := podtask.New(api.NewDefaultContext(), "bar", *pod.Pod, &mesos.ExecutorInfo{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	task.Set(podtask.Launched)
 
 	// set expectations
@@ -97,7 +104,7 @@ func TestDeleteOne_Running(t *testing.T) {
 		api: obj,
 		qr:  qr,
 	}
-	err := d.deleteOne(pod)
+	err = d.deleteOne(pod)
 	assert.Nil(err)
 	_, found = qr.podQueue.Get("foo0")
 	assert.False(found)

@@ -25,12 +25,8 @@ func InstallDebugHandlers(l sync.Locker, reg Registry) {
 				l.Lock()
 				defer l.Unlock()
 
-				podName := ""
-				podNamespace := ""
-				if task.Pod != nil {
-					podName = task.Pod.Name
-					podNamespace = task.Pod.Namespace
-				}
+				podName := task.pod.Name
+				podNamespace := task.pod.Namespace
 				offerId := ""
 				if task.Offer != nil {
 					offerId = task.Offer.Id()

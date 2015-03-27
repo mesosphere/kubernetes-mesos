@@ -189,8 +189,8 @@ func fillRunningPodInfo(task *T, taskStatus *mesos.TaskStatus) {
 	if result, err := ParsePodStatusResult(taskStatus); err != nil {
 		log.Errorf("invalid TaskStatus.Data for task '%v': %v", task.ID, err)
 	} else {
-		task.Pod.Status = result.Status
-		log.Infof("received pod status for task %v: %+v", task.ID, task.Pod.Status)
+		task.podStatus = result.Status
+		log.Infof("received pod status for task %v: %+v", task.ID, result.Status)
 	}
 }
 

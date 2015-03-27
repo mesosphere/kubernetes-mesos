@@ -18,9 +18,14 @@ func FCFSScheduleFunc(r offers.Registry, unused SlaveIndex, task *podtask.T) (of
 			return task.Offer, nil
 		}
 		task.Offer.Release()
-		task.ClearTaskInfo()
+		task.Reset()
 	}
 
+	// avoid this lookup unless we're logging it
+	podName := func() string {
+		pod := task.Pod()
+		return fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)
+	}
 	var acceptedOffer offers.Perishable
 	err := r.Walk(func(p offers.Perishable) (bool, error) {
 		offer := p.Details()
@@ -30,7 +35,7 @@ func FCFSScheduleFunc(r offers.Registry, unused SlaveIndex, task *podtask.T) (of
 		if task.AcceptOffer(offer) {
 			if p.Acquire() {
 				acceptedOffer = p
-				log.V(3).Infof("Pod %v accepted offer %v", task.Pod.Name, offer.Id.GetValue())
+				log.V(3).Infof("Pod %s accepted offer %v", podName(), offer.Id.GetValue())
 				return true, nil // stop, we found an offer
 			}
 		}
@@ -43,9 +48,9 @@ func FCFSScheduleFunc(r offers.Registry, unused SlaveIndex, task *podtask.T) (of
 		return acceptedOffer, nil
 	}
 	if err != nil {
-		log.V(2).Infof("failed to find a fit for pod: %v, err = %v", task.Pod.Name, err)
+		log.V(2).Infof("failed to find a fit for pod: %s, err = %v", podName(), err)
 		return nil, err
 	}
-	log.V(2).Infof("failed to find a fit for pod: %v", task.Pod.Name)
+	log.V(2).Infof("failed to find a fit for pod: %s", podName())
 	return nil, noSuitableOffersErr
 }

@@ -383,7 +383,7 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 	case mesos.TaskState_TASK_FAILED:
 		if task, _ := k.taskRegistry.UpdateStatus(taskStatus); task != nil {
 			if task.Has(podtask.Launched) && messages.CreateBindingFailure == taskStatus.GetMessage() {
-				go k.plugin.reconcilePod(*task.Pod)
+				go k.plugin.reconcilePod(task.Pod())
 				return
 			}
 		} else {
@@ -400,7 +400,7 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 func (k *KubernetesScheduler) reconcileTerminalTask(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
 	task, state := k.taskRegistry.UpdateStatus(taskStatus)
 
-	if (state == podtask.StateRunning || (state == podtask.StatePending && task.Pod != nil)) && taskStatus.SlaveId != nil &&
+	if (state == podtask.StateRunning || state == podtask.StatePending) && taskStatus.SlaveId != nil &&
 		((taskStatus.GetSource() == mesos.TaskStatus_SOURCE_MASTER && taskStatus.GetReason() == mesos.TaskStatus_REASON_RECONCILIATION) ||
 			(taskStatus.GetSource() == mesos.TaskStatus_SOURCE_SLAVE && taskStatus.GetReason() == mesos.TaskStatus_REASON_EXECUTOR_TERMINATED) ||
 			(taskStatus.GetSource() == mesos.TaskStatus_SOURCE_SLAVE && taskStatus.GetReason() == mesos.TaskStatus_REASON_EXECUTOR_UNREGISTERED)) {
@@ -410,10 +410,10 @@ func (k *KubernetesScheduler) reconcileTerminalTask(driver bindings.SchedulerDri
 		// (2) a pod that the Kubelet will never report as "failed"
 		// For now, destroy the pod and hope that there's a replication controller backing it up.
 		// TODO(jdef) for case #2 don't delete the pod, just update it's status to Failed
-		namespace, name := task.Pod.Namespace, task.Pod.Name
-		log.Warningf("deleting rogue pod %v/%v for lost task %v", namespace, name, task.ID)
-		if err := k.client.Pods(namespace).Delete(name); err != nil && !errors.IsNotFound(err) {
-			log.Errorf("failed to delete pod %v/%v for terminal task %v: %v", namespace, name, task.ID, err)
+		pod := task.Pod()
+		log.Warningf("deleting rogue pod %v/%v for lost task %v", pod.Namespace, pod.Name, task.ID)
+		if err := k.client.Pods(pod.Namespace).Delete(pod.Name); err != nil && !errors.IsNotFound(err) {
+			log.Errorf("failed to delete pod %v/%v for terminal task %v: %v", pod.Namespace, pod.Name, task.ID, err)
 		}
 	} else if taskStatus.GetReason() == mesos.TaskStatus_REASON_EXECUTOR_TERMINATED || taskStatus.GetReason() == mesos.TaskStatus_REASON_EXECUTOR_UNREGISTERED {
 		// attempt to prevent dangling pods in the pod and task registries
@@ -579,8 +579,8 @@ func (k *KubernetesScheduler) makeTaskRegistryReconciler() ReconcilerAction {
 			defer k.Unlock()
 			for _, taskId := range k.taskRegistry.List(explicitTaskFilter) {
 				t, _ := k.taskRegistry.Get(taskId)
-				if t != nil && t.TaskInfo != nil {
-					taskToSlave[taskId] = t.TaskInfo.SlaveId.GetValue()
+				if t != nil && t.Spec.SlaveID != "" {
+					taskToSlave[taskId] = t.Spec.SlaveID
 				}
 			}
 		}()
@@ -832,7 +832,7 @@ func (ks *KubernetesScheduler) recoverTasks() error {
 		ks.Lock()
 		defer ks.Unlock()
 
-		slaveId := t.TaskInfo.SlaveId.GetValue()
+		slaveId := t.Spec.SlaveID
 		slave, exists := ks.slaves[slaveId]
 		if !exists {
 			slave = newSlave(t.Offer.Host())

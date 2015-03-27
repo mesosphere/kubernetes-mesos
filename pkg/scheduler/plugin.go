@@ -70,7 +70,7 @@ func (k *k8smScheduler) taskForPod(podID string) (string, bool) {
 }
 
 func (k *k8smScheduler) createPodTask(ctx api.Context, pod *api.Pod) (*podtask.T, error) {
-	return podtask.New(ctx, pod, k.executor)
+	return podtask.New(ctx, "", *pod, k.executor)
 }
 
 func (k *k8smScheduler) getTask(taskId string) (*podtask.T, podtask.StateType) {
@@ -99,7 +99,7 @@ func (k *k8smScheduler) killTask(taskId string) error {
 
 func (k *k8smScheduler) launchTask(task *podtask.T) error {
 	// assume caller is holding scheduler lock
-	taskList := []*mesos.TaskInfo{task.TaskInfo}
+	taskList := []*mesos.TaskInfo{task.BuildTaskInfo()}
 	offerIds := []*mesos.OfferID{task.Offer.Details().Id}
 	filters := &mesos.Filters{}
 	_, err := k.KubernetesScheduler.driver.LaunchTasks(offerIds, taskList, filters)
@@ -156,7 +156,7 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *podtask.T) (e
 	if offer, ok := b.api.offers().Get(offerId); !ok || offer.HasExpired() {
 		// already rescinded or timed out or otherwise invalidated
 		task.Offer.Release()
-		task.ClearTaskInfo()
+		task.Reset()
 		return fmt.Errorf("failed prior to launchTask due to expired offer for task %v", task.ID)
 	}
 
@@ -164,18 +164,17 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *podtask.T) (e
 		log.V(2).Infof("launching task : %v", task)
 		if err = b.api.launchTask(task); err == nil {
 			b.api.offers().Invalidate(offerId)
-			task.Pod.Status.Host = binding.Host
 			task.Set(podtask.Launched)
 			return
 		}
 	}
 	task.Offer.Release()
-	task.ClearTaskInfo()
+	task.Reset()
 	return fmt.Errorf("Failed to launch task %v: %v", task.ID, err)
 }
 
 func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *podtask.T, offerId string) error {
-	pod, err := b.client.Pods(api.NamespaceValue(ctx)).Get(task.Pod.Name)
+	pod, err := b.client.Pods(api.NamespaceValue(ctx)).Get(task.Pod().Name)
 	if err != nil {
 		return err
 	}
@@ -214,13 +213,13 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *pod
 	//not use the apiserver or etcd channels, we will be in control of all
 	//rectification. And BTW we probably want to store this information, somehow,
 	//in the binding annotations.
-	for _, entry := range task.Ports {
+	for _, entry := range task.Spec.PortMap {
 		port := &(boundPod.Spec.Containers[entry.ContainerIdx].Ports[entry.PortIdx])
 		port.HostPort = int(entry.OfferPort)
 	}
 
 	// the kubelet-executor uses this boundPod to instantiate the pod
-	task.TaskInfo.Data, err = yaml.Marshal(&boundPod)
+	task.Spec.Data, err = yaml.Marshal(&boundPod)
 	if err != nil {
 		log.V(2).Infof("Failed to marshal the updated boundPod")
 		return err
@@ -281,7 +280,7 @@ func (k *kubeScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (st
 
 		switch task, state := k.api.getTask(taskID); state {
 		case podtask.StatePending:
-			if pod.UID != task.Pod.UID {
+			if pod.UID != task.Pod().UID {
 				// we're dealing with a brand new pod spec here, so the old one must have been
 				// deleted -- and so our task store is out of sync w/ respect to reality
 				//TODO(jdef) reconcile task
@@ -317,7 +316,7 @@ func (k *kubeScheduler) doSchedule(task *podtask.T, err error) (string, error) {
 		// not much sense in Release()ing the offer here since its owner died
 		offer.Release()
 		k.api.offers().Invalidate(details.Id.GetValue())
-		task.ClearTaskInfo()
+		task.Reset()
 		return "", fmt.Errorf("Slave disappeared (%v) while scheduling task %v", slaveId, task.ID)
 	} else {
 		if task.Offer != nil && task.Offer != offer {
@@ -611,7 +610,7 @@ func (k *deleter) deleteOne(pod *Pod) error {
 			// we've been invoked in between Schedule() and Bind()
 			if task.HasAcceptedOffer() {
 				task.Offer.Release()
-				task.ClearTaskInfo()
+				task.Reset()
 			}
 			k.api.unregisterPodTask(task)
 			return nil
