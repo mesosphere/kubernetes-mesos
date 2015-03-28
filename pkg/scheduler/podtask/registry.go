@@ -13,27 +13,40 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
 )
 
-/**
-HACK(jdef): we're not using etcd but k8s has implemented namespace support and
-we're going to try to honor that by namespacing pod keys. Hence, the following
-funcs that were stolen from:
-    https://github.com/GoogleCloudPlatform/kubernetes/blob/release-0.5/pkg/registry/etcd/etcd.go
-**/
-
 const (
-	PodPath                  = "/pods"
+	//TODO(jdef) move this somewhere else
+	PodPath = "/pods"
+
+	// length of historical record of finished tasks
 	defaultFinishedTasksSize = 1024
 )
 
+// state store for pod tasks
 type Registry interface {
+	// register the specified task with this registry, as long as the current error
+	// condition is nil. if no errors occur then return a copy of the registered task.
 	Register(*T, error) (*T, error)
+
+	// unregister the specified task from this registry
 	Unregister(*T)
+
+	// update state for the registered task identified by task.ID, returning a copy of
+	// the updated task, if any.
 	Update(task *T) (*T, error)
+
+	// return the task registered for the specified task ID and its current state.
+	// if there is no such task then StateUnknown is returned.
 	Get(taskId string) (task *T, currentState StateType)
+
+	// return the non-terminal task corresponding to the specified pod ID
 	ForPod(podID string) (task *T, currentState StateType)
+
+	// update the task status given the specified mesos task status update, returning a
+	// copy of the updated task (if any) and its state.
 	UpdateStatus(status *mesos.TaskStatus) (*T, StateType)
-	// return a list of task ID's that match the given filter, or all task ID's if filter == nil
-	List(func(*T) bool) []*T
+
+	// return a list of task ID's that match the given filter, or all task ID's if filter == nil.
+	List(filter func(*T) bool) []*T
 }
 
 type inMemoryRegistry struct {
@@ -69,7 +82,8 @@ func (k *inMemoryRegistry) ForPod(podID string) (task *T, currentState StateType
 	if !ok {
 		return nil, StateUnknown
 	}
-	return k._get(tid)
+	t, state := k._get(tid)
+	return t.Clone(), state
 }
 
 // registers a pod task unless the spec'd error is not nil
@@ -84,9 +98,9 @@ func (k *inMemoryRegistry) Register(task *T, err error) (*T, error) {
 			return nil, fmt.Errorf("task already registered for id %q", task.ID)
 		}
 		k.podToTask[task.podKey] = task.ID
-		k.taskRegistry[task.ID] = task.Clone()
+		k.taskRegistry[task.ID] = task
 	}
-	return task, err
+	return task.Clone(), err
 }
 
 // updates internal task state. updates are limited to Spec, Flags, and Offer for
@@ -130,7 +144,9 @@ func (k *inMemoryRegistry) Get(taskId string) (*T, StateType) {
 	return t.Clone(), state
 }
 
-// assume that the caller has already locked around access to task state
+// assume that the caller has already locked around access to task state.
+// the caller is also responsible for cloning the task object before it leaves
+// the context of this registry.
 func (k *inMemoryRegistry) _get(taskId string) (*T, StateType) {
 	if task, found := k.taskRegistry[taskId]; found {
 		return task, task.State
@@ -163,7 +179,7 @@ func (k *inMemoryRegistry) UpdateStatus(status *mesos.TaskStatus) (*T, StateType
 	default:
 		log.Warning("unhandled task status update: %+v", status)
 	}
-	return task, state
+	return task.Clone(), state
 }
 
 func (k *inMemoryRegistry) handleTaskStaging(task *T, state StateType, status *mesos.TaskStatus) {
@@ -175,8 +191,7 @@ func (k *inMemoryRegistry) handleTaskStaging(task *T, state StateType, status *m
 
 func (k *inMemoryRegistry) handleTaskStarting(task *T, state StateType, status *mesos.TaskStatus) {
 	// we expect to receive this when a launched task is finally "bound"
-	// via the API server. however, there's nothing specific for us to do
-	// here.
+	// via the API server. however, there's nothing specific for us to do here.
 	switch state {
 	case StatePending:
 		task.UpdatedTime = time.Now()
@@ -265,7 +280,6 @@ func (k *inMemoryRegistry) recordFinishedTask(taskId string) *ring.Ring {
 }
 
 func (k *inMemoryRegistry) handleTaskFailed(task *T, state StateType, status *mesos.TaskStatus) {
-	log.Errorf("task failed: %+v", status)
 	switch state {
 	case StatePending:
 		delete(k.taskRegistry, task.ID)
@@ -294,7 +308,6 @@ func (k *inMemoryRegistry) handleTaskKilled(task *T, state StateType, status *me
 }
 
 func (k *inMemoryRegistry) handleTaskLost(task *T, state StateType, status *mesos.TaskStatus) {
-	log.Warningf("task lost: %+v", status)
 	switch state {
 	case StateRunning, StatePending:
 		delete(k.taskRegistry, task.ID)
