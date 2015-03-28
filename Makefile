@@ -39,7 +39,7 @@ DESTDIR		?= /target
 TAGS		?=
 
 BUILDDIR	?= $(current_dir)/_build
-GOPATH		?= $(shell uname | grep -e ^CYGWIN >/dev/null && cygpath --mixed "$(BUILDDIR)" || "$(BUILDDIR)")
+GOPATH		:= $(shell uname | grep -e ^CYGWIN >/dev/null && cygpath --mixed "$(BUILDDIR)" || echo -E "$(BUILDDIR)")
 
 .PHONY: all error require-godep require-vendor install info bootstrap format test patch version test.v test.vv clean lint vet fix prepare
 
