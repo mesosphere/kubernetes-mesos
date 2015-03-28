@@ -10,17 +10,6 @@ import (
 
 // A first-come-first-serve scheduler: acquires the first offer that can support the task
 func FCFSScheduleFunc(r offers.Registry, unused SlaveIndex, task *podtask.T) (offers.Perishable, error) {
-	if task.HasAcceptedOffer() {
-		// verify that the offer is still on the table
-		offerId := task.GetOfferId()
-		if offer, ok := r.Get(offerId); ok && !offer.HasExpired() {
-			// skip tasks that have already have assigned offers
-			return task.Offer, nil
-		}
-		task.Offer.Release()
-		task.Reset()
-	}
-
 	podName := fmt.Sprintf("%s/%s", task.Pod.Namespace, task.Pod.Name)
 	var acceptedOffer offers.Perishable
 	err := r.Walk(func(p offers.Perishable) (bool, error) {

@@ -324,7 +324,21 @@ func (k *kubeScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (st
 // Call ScheduleFunc and subtract some resources, returning the name of the machine the task is scheduled on
 func (k *kubeScheduler) doSchedule(task *podtask.T, err error) (string, error) {
 	var offer offers.Perishable
-	if err == nil {
+	if task.HasAcceptedOffer() {
+		// verify that the offer is still on the table
+		offerId := task.GetOfferId()
+		if offer, ok := k.api.offers().Get(offerId); ok && !offer.HasExpired() {
+			// skip tasks that have already have assigned offers
+			offer = task.Offer
+		} else {
+			task.Offer.Release()
+			task.Reset()
+			if _, err = k.api.tasks().Update(task); err != nil {
+				return "", err
+			}
+		}
+	}
+	if err == nil && offer == nil {
 		offer, err = k.api.algorithm()(k.api.offers(), k.api, task)
 	}
 	if err != nil {
