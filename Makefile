@@ -39,6 +39,7 @@ DESTDIR		?= /target
 TAGS		?=
 
 BUILDDIR	?= $(current_dir)/_build
+GOPATH		?= $(shell uname | grep -e ^CYGWIN >/dev/null && cygpath --mixed "$(BUILDDIR)" || "$(BUILDDIR)")
 
 .PHONY: all error require-godep require-vendor install info bootstrap format test patch version test.v test.vv clean lint vet fix prepare
 
@@ -54,8 +55,8 @@ export KUBE_GO_PACKAGE
 export K8SM_GO_PACKAGE
 
 all: patch version
-	env GOPATH=$(BUILDDIR) go install $(K8S_CMD)
-	env GOPATH=$(BUILDDIR) go install -ldflags "$(shell cat $(GIT_VERSION_FILE))" $(FRAMEWORK_FLAGS) $(FRAMEWORK_CMD)
+	env GOPATH=$(GOPATH) go install $(K8S_CMD)
+	env GOPATH=$(GOPATH) go install -ldflags "$(shell cat $(GIT_VERSION_FILE))" $(FRAMEWORK_FLAGS) $(FRAMEWORK_CMD)
 
 error:
 	echo -E "$@: ${MSG}" >&2
@@ -71,22 +72,22 @@ clean:
 	test -n "$(BUILDDIR)" && rm -rf $(BUILDDIR)/*
 
 format:
-	env GOPATH=$(BUILDDIR) go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
+	env GOPATH=$(GOPATH) go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
 
 lint:
-	for pkg in $(FRAMEWORK_CMD) $(FRAMEWORK_LIB); do env GOPATH=$(BUILDDIR) go$@ $$pkg; done
+	for pkg in $(FRAMEWORK_CMD) $(FRAMEWORK_LIB); do env GOPATH=$(GOPATH) go$@ $$pkg; done
 
 vet fix:
-	env GOPATH=$(BUILDDIR) go $@ $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
+	env GOPATH=$(GOPATH) go $@ $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
 
 test test.v:
 	test "$@" = "test.v" && args="-test.v" || args=""; \
 		test -n "$(WITH_RACE)" && args="$$args -race" || true; \
-		env GOPATH=$(BUILDDIR) go test $$args $(TESTS:%=${K8SM_GO_PACKAGE}/%)
+		env GOPATH=$(GOPATH) go test $$args $(TESTS:%=${K8SM_GO_PACKAGE}/%)
 
 test.vv:
 	test -n "$(WITH_RACE)" && args="$$args -race" || args=""; \
-		env GOPATH=$(BUILDDIR) go test -test.v $$args $(TESTS:%=${K8SM_GO_PACKAGE}/%) -logtostderr=true -vmodule=$(TESTS_VV)
+		env GOPATH=$(GOPATH) go test -test.v $$args $(TESTS:%=${K8SM_GO_PACKAGE}/%) -logtostderr=true -vmodule=$(TESTS_VV)
 
 install: all
 	mkdir -p $(DESTDIR)
@@ -100,6 +101,7 @@ info:
 	@echo FRAMEWORK_LIB=$(FRAMEWORK_LIB)
 	@echo CMD_DIRS=$(CMD_DIRS)
 	@echo FRAMEWORK_CMD=$(FRAMEWORK_CMD)
+	@echo GOPATH=$(GOPATH)
 
 # noop for now; may be needed if vendoring, dep mgmt tooling changes
 bootstrap:
@@ -110,7 +112,7 @@ prepare:
 	(xdir=$$(dirname $(BUILDDIR)/src/$(K8SM_GO_PACKAGE)); mkdir -p $$xdir && cd $$xdir && ln -s $(current_dir) $$(basename $(K8SM_GO_PACKAGE)))
 
 patch: prepare $(PATCH_SCRIPT)
-	env GOPATH=$(BUILDDIR) $(PATCH_SCRIPT)
+	env GOPATH=$(GOPATH) $(PATCH_SCRIPT)
 
 version: $(GIT_VERSION_FILE)
 

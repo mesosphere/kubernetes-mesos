@@ -24,11 +24,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"os/signal"
 	"os/user"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	_ "github.com/mesosphere/kubernetes-mesos/pkg/profile"
@@ -407,8 +405,7 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		schedulerProcess.Elect(driverFactory)
 	}
 
-	failoverSignal := make(chan os.Signal, 1)
-	signal.Notify(failoverSignal, syscall.SIGUSR1)
+	failoverSignal := makeFailoverSigChan()
 
 	select {
 	case <-schedulerProcess.Elected():
@@ -578,9 +575,7 @@ func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks *hyperku
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true, // disown the spawned scheduler
-	}
+	cmd.SysProcAttr = makeDisownedProcAttr()
 
 	// TODO(jdef) pass in a pipe FD so that we can block, waiting for the child proc to be ready
 	//cmd.ExtraFiles = []*os.File{}

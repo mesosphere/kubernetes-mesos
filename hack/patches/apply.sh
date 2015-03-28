@@ -6,7 +6,11 @@ function die() {
 }
 
 test -n "$GOPATH" || die Missing GOPATH
-pkg="${GOPATH%%:*}"
+uname|grep -e ^CYGWIN >/dev/null 2>&1 && {
+	pkg="${GOPATH%%;*}"
+} || {
+	pkg="${GOPATH%%:*}"
+}
 echo GO packages in $pkg will be patched
 
 test -n "$pkg" || die Invalid GOPATH=$GOPATH
