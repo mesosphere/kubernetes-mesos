@@ -9,6 +9,7 @@ _test
 third_party
 bin
 _build
+.vagrant
 
 # Architecture specific extensions/prefixes
 *.[568vq]
