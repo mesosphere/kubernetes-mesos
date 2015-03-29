@@ -413,18 +413,22 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		schedulerProcess.Elect(driverFactory)
 	}
 	runtime.On(schedulerProcess.Elected(), kpl.Run)
-	s.onFailover(schedulerProcess, func() error { return s.failover(driver, hks) })
-	select {}
+	return s.onFailover(schedulerProcess, func() error { return s.failover(driver, hks) })
 }
 
 // watch the scheduler process for events and properly handle failover. never returns.
-func (s *SchedulerServer) onFailover(schedulerProcess *ha.SchedulerProcess, handler func() error) {
+func (s *SchedulerServer) onFailover(schedulerProcess *ha.SchedulerProcess, handler func() error) error {
 
+	// we only want to return the first error (if any), everyone else can block forever
+	errCh := make(chan error, 1)
 	doFailover := func() {
-		if err := handler(); err != nil {
+		// we really don't expect handler to return, if it does something went seriously wrong
+		err := handler()
+		if err != nil {
 			schedulerProcess.End()
-			log.Exitf("failed to failover, scheduler will terminate: %v", err)
+			err = fmt.Errorf("failed to failover, scheduler will terminate: %v", err)
 		}
+		errCh <- err
 	}
 
 	var failoverOnce sync.Once
@@ -434,17 +438,17 @@ func (s *SchedulerServer) onFailover(schedulerProcess *ha.SchedulerProcess, hand
 			failoverOnce.Do(doFailover)
 		default:
 			if s.HA {
-				log.Exit("ha scheduler exiting instead of failing over")
+				errCh <- fmt.Errorf("ha scheduler exiting instead of failing over")
+			} else {
+				log.Infof("exiting scheduler")
+				errCh <- nil
 			}
-			log.Infof("exiting scheduler")
-			os.Exit(0)
 		}
-		log.Infof("already failing over, skipping redundant attempt")
 	})
 	runtime.OnOSSignal(makeFailoverSigChan(), func(_ os.Signal) {
 		failoverOnce.Do(doFailover)
-		log.Infof("already failing over, skipping signal handler")
 	})
+	return <-errCh
 }
 
 func validateLeadershipTransition(desired, current string) {
