@@ -102,8 +102,10 @@ func (self *SchedulerProcess) Elect(newDriver DriverFactory) {
 			self.End()
 			return
 		}
+		log.V(1).Infoln("starting driver...")
 		stat, err := drv.Start()
 		if stat == mesos.Status_DRIVER_RUNNING && err == nil {
+			log.Infoln("driver started successfully and is running")
 			close(self.elected)
 			go func() {
 				defer self.End()

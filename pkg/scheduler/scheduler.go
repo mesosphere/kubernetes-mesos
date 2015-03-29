@@ -176,11 +176,9 @@ func New(config Config) *KubernetesScheduler {
 	return k
 }
 
-func (k *KubernetesScheduler) Init(driver bindings.SchedulerDriver, electedMaster proc.Process, pl PluginInterface) error {
-	k.Lock()
-	defer k.Unlock()
+func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterface) error {
+	log.V(1).Infoln("initializing kubernetes mesos scheduler")
 
-	k.driver = driver
 	//TODO(jdef) watch electedMaster.Done() to figure out when background jobs should be shut down
 	k.asRegisteredMaster = proc.DoerFunc(func(a proc.Action) error {
 		if !k.registered {
@@ -268,6 +266,7 @@ func (k *KubernetesScheduler) InstallDebugHandlers() {
 func (k *KubernetesScheduler) Registered(drv bindings.SchedulerDriver, fid *mesos.FrameworkID, mi *mesos.MasterInfo) {
 	log.Infof("Scheduler registered with the master: %v with frameworkId: %v\n", mi, fid)
 
+	k.driver = drv
 	k.frameworkId = fid
 	k.masterInfo = mi
 	k.registered = true
@@ -288,6 +287,7 @@ func (k *KubernetesScheduler) storeFrameworkId() {
 func (k *KubernetesScheduler) Reregistered(drv bindings.SchedulerDriver, mi *mesos.MasterInfo) {
 	log.Infof("Scheduler reregistered with the master: %v\n", mi)
 
+	k.driver = drv
 	k.masterInfo = mi
 	k.registered = true
 
