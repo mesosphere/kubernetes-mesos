@@ -87,7 +87,7 @@ func TestDeleteOne_Running(t *testing.T) {
 	}
 
 	task.Set(podtask.Launched)
-	_, err = reg.Update(task)
+	err = reg.Update(task)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

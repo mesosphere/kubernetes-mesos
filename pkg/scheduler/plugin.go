@@ -153,7 +153,7 @@ func (b *binder) Bind(binding *api.Binding) error {
 func (b *binder) rollback(task *podtask.T, err error) error {
 	task.Offer.Release()
 	task.Reset()
-	if _, err2 := b.api.tasks().Update(task); err2 != nil {
+	if err2 := b.api.tasks().Update(task); err2 != nil {
 		log.Errorf("failed to update pod task: %v", err2)
 	}
 	return err
@@ -180,7 +180,7 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *podtask.T) (e
 		if err = b.api.launchTask(task); err == nil {
 			b.api.offers().Invalidate(offerId)
 			task.Set(podtask.Launched)
-			if _, err = b.api.tasks().Update(task); err != nil {
+			if err = b.api.tasks().Update(task); err != nil {
 				// this should only happen if the task has been removed or has changed status,
 				// which SHOULD NOT HAPPEN as long as we're synchronizing correctly
 				log.Errorf("failed to update task w/ Launched status: %v", err)
@@ -332,7 +332,7 @@ func (k *kubeScheduler) doSchedule(task *podtask.T, err error) (string, error) {
 		} else {
 			task.Offer.Release()
 			task.Reset()
-			if _, err = k.api.tasks().Update(task); err != nil {
+			if err = k.api.tasks().Update(task); err != nil {
 				return "", err
 			}
 		}
@@ -359,7 +359,7 @@ func (k *kubeScheduler) doSchedule(task *podtask.T, err error) (string, error) {
 		}
 		task.Offer = offer
 		task.FillFromDetails(details)
-		if _, err := k.api.tasks().Update(task); err != nil {
+		if err := k.api.tasks().Update(task); err != nil {
 			offer.Release()
 			return "", err
 		}
@@ -640,7 +640,7 @@ func (k *deleter) deleteOne(pod *Pod) error {
 				task.Reset()
 				task.Set(podtask.Deleted)
 				//TODO(jdef) probably want better handling here
-				if _, err := k.api.tasks().Update(task); err != nil {
+				if err := k.api.tasks().Update(task); err != nil {
 					return err
 				}
 			}
@@ -652,7 +652,7 @@ func (k *deleter) deleteOne(pod *Pod) error {
 	case podtask.StateRunning:
 		// signal to watchers that the related pod is going down
 		task.Set(podtask.Deleted)
-		if _, err := k.api.tasks().Update(task); err != nil {
+		if err := k.api.tasks().Update(task); err != nil {
 			log.Errorf("failed to update task w/ Deleted status: %v", err)
 		}
 		return k.api.killTask(task.ID)

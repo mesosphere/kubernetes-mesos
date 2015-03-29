@@ -32,7 +32,7 @@ type Registry interface {
 
 	// update state for the registered task identified by task.ID, returning a copy of
 	// the updated task, if any.
-	Update(task *T) (*T, error)
+	Update(task *T) error
 
 	// return the task registered for the specified task ID and its current state.
 	// if there is no such task then StateUnknown is returned.
@@ -105,15 +105,15 @@ func (k *inMemoryRegistry) Register(task *T, err error) (*T, error) {
 
 // updates internal task state. updates are limited to Spec, Flags, and Offer for
 // StatePending tasks, and are limited to Flag updates (additive only) for StateRunning tasks.
-func (k *inMemoryRegistry) Update(task *T) (*T, error) {
+func (k *inMemoryRegistry) Update(task *T) error {
 	if task == nil {
-		return nil, nil
+		return nil
 	}
 	k.rw.Lock()
 	defer k.rw.Unlock()
 	switch internal, state := k._get(task.ID); state {
 	case StateUnknown:
-		return nil, fmt.Errorf("no such task: %v", task.ID)
+		return fmt.Errorf("no such task: %v", task.ID)
 	case StatePending:
 		internal.Offer = task.Offer
 		internal.Spec = task.Spec
@@ -124,9 +124,9 @@ func (k *inMemoryRegistry) Update(task *T) (*T, error) {
 		for k, v := range task.Flags {
 			internal.Flags[k] = v
 		}
-		return internal.Clone(), nil
+		return nil
 	default:
-		return nil, fmt.Errorf("may not update task %v in state %v", task.ID, state)
+		return fmt.Errorf("may not update task %v in state %v", task.ID, state)
 	}
 }
 
