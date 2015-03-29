@@ -69,34 +69,27 @@ func (self *procImpl) Begin() {
 // execute some action in the context of the current lifecycle. actions
 // executed via this func are to be executed in a concurrency-safe manner:
 // no two actions should execute at the same time. invocations of this func
-// will block until the given action is executed. invocations of this func
-// may take higher priority than invocations of DoLater.
+// will block until the given action is executed.
 //
 // returns errProcessTerminated if the process already ended, or is terminated
-// during the exection of the action. if the process terminates at the same
-// time as the action completes it is still possible for the action to have
-// completed and still receive errProcessTerminated.
-func (self *procImpl) DoNow(a Action) error {
+// before the reported completion of the executed action. if the process
+// terminates at the same time as the action completes it is still possible for
+// the action to have completed and still receive errProcessTerminated.
+func DoAndWait(p Process, a Action) error {
 	ch := make(chan struct{})
-	wrapped := Action(func() {
+	err := p.Do(func() {
 		defer close(ch)
 		a()
 	})
-
-	select {
-	case <-self.terminate:
-		return errProcessTerminated
-	// wait for action to begin executing
-	case self.exec <- wrapped:
+	if err != nil {
+		return err
 	}
-
 	select {
-	case <-self.terminate:
+	case <-p.Done():
 		return errProcessTerminated
-	// wait for completion of action
 	case <-ch:
+		return nil
 	}
-	return nil
 }
 
 // execute some action in the context of the current lifecycle. actions

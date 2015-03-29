@@ -27,6 +27,7 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/mesosphere/kubernetes-mesos/pkg/profile"
@@ -52,6 +53,7 @@ import (
 	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/election"
 	execcfg "github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
+	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
 	schedcfg "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/ha"
@@ -67,6 +69,7 @@ const (
 	defaultMesosUser         = "root" // should have privs to execute docker and iptables commands
 	defaultReconcileInterval = 300    // 5m default task reconciliation interval
 	defaultReconcileCooldown = 15 * time.Second
+	defaultHttpBindInterval  = 5 * time.Second
 )
 
 type SchedulerServer struct {
@@ -381,7 +384,7 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 	go util.Until(func() {
 		log.V(1).Info("Starting HTTP interface")
 		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), nil))
-	}, 5*time.Second, schedulerProcess.Done()) // TODO(jdef) extract constant
+	}, defaultHttpBindInterval, schedulerProcess.Done())
 
 	var driver bindings.SchedulerDriver
 	driverFactory := ha.DriverFactory(func() (drv bindings.SchedulerDriver, err error) {
@@ -409,37 +412,39 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		log.Infoln("self-electing in non-HA mode")
 		schedulerProcess.Elect(driverFactory)
 	}
+	runtime.On(schedulerProcess.Elected(), kpl.Run)
+	s.onFailover(schedulerProcess, func() error { return s.failover(driver, hks) })
+	select {}
+}
 
-	failoverSignal := makeFailoverSigChan()
+// watch the scheduler process for events and properly handle failover. never returns.
+func (s *SchedulerServer) onFailover(schedulerProcess *ha.SchedulerProcess, handler func() error) {
 
-	select {
-	case <-schedulerProcess.Elected():
-		log.V(1).Info("Spinning up scheduling loop")
-		kpl.Run()
-		select {
-		case <-failoverSignal:
-			log.Infoln("received failover signal")
-			goto doFailover
-		case <-schedulerProcess.Done():
-			select {
-			case <-schedulerProcess.Failover():
-				goto doFailover
-			default:
-				//TODO(jdef) should probably WARN here in HA mode
-				log.Infof("scheduler process exited without failover")
-			}
+	doFailover := func() {
+		if err := handler(); err != nil {
+			schedulerProcess.End()
+			log.Exitf("failed to failover, scheduler will terminate: %v", err)
 		}
-	case <-schedulerProcess.Done():
-		log.Fatalf("scheduler process exited abnormally, before election")
 	}
-	os.Exit(0)
 
-doFailover:
-	if err := s.failover(driver, hks); err != nil {
-		schedulerProcess.End()
-		log.Fatalf("failed to failover, scheduler will terminate: %v", err)
-	}
-	select {} // will never arrive here
+	var failoverOnce sync.Once
+	runtime.On(schedulerProcess.Done(), func() {
+		select {
+		case <-schedulerProcess.Failover():
+			failoverOnce.Do(doFailover)
+		default:
+			if s.HA {
+				log.Exit("ha scheduler exiting instead of failing over")
+			}
+			log.Infof("exiting scheduler")
+			os.Exit(0)
+		}
+		log.Infof("already failing over, skipping redundant attempt")
+	})
+	runtime.OnOSSignal(makeFailoverSigChan(), func(_ os.Signal) {
+		failoverOnce.Do(doFailover)
+		log.Infof("already failing over, skipping signal handler")
+	})
 }
 
 func validateLeadershipTransition(desired, current string) {
@@ -463,6 +468,7 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 	}
 
 	metrics.Register()
+	runtime.Register()
 	http.Handle("/metrics", prometheus.Handler())
 
 	etcdClient := kubelet.EtcdClientOrDie(s.EtcdServerList, s.EtcdConfigFile)
@@ -508,7 +514,6 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 	})
 
 	schedulerProcess := ha.New(mesosPodScheduler)
-
 	masterUri := kmcloud.MasterURI()
 	info, cred, err := s.buildFrameworkInfo()
 	if err != nil {

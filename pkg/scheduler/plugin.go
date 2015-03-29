@@ -13,7 +13,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/envvars"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
+	k8s "github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
@@ -24,6 +24,7 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/backoff"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
+	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 	annotation "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"gopkg.in/v2/yaml"
@@ -442,11 +443,7 @@ func (q *queuer) Run(done <-chan struct{}) {
 			// may proceed even if there have been no recent pod changes
 			p := q.podUpdates.Await(enqueuePopTimeout)
 			if p == nil {
-				signalled := make(chan struct{})
-				go func() {
-					defer close(signalled)
-					q.deltaCond.Wait()
-				}()
+				signalled := runtime.Go(q.deltaCond.Wait)
 				// we've yielded the lock
 				select {
 				case <-time.After(enqueueWaitTimeout):
@@ -490,12 +487,7 @@ func (q *queuer) yield() *api.Pod {
 		// enqueuer Run() routine for very long
 		kpod := q.podQueue.Await(yieldPopTimeout)
 		if kpod == nil {
-			signalled := make(chan struct{})
-			go func() {
-				defer close(signalled)
-				q.unscheduledCond.Wait()
-			}()
-
+			signalled := runtime.Go(q.unscheduledCond.Wait)
 			// lock is yielded at this point and we're going to wait for either
 			// a timeout, or a signal that there's data
 			select {
@@ -701,17 +693,15 @@ func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}) *Plugin
 	serviceWatcher := cache.NewReflector(createServiceLW(k.client), &api.Service{}, serviceSnapshots)
 
 	startLatch := make(chan struct{})
-	go func() {
-		select {
-		case <-startLatch:
-			reflector.Run()      // TODO(jdef) should listen for termination
-			serviceWatcher.Run() //TODO(jdef) should listen for termination
-			podDeleter.Run(updates, terminate)
-			q.Run(terminate)
-		}
-	}()
-	q.installDebugHandlers()
-	podtask.InstallDebugHandlers(k.taskRegistry)
+	runtime.On(startLatch, func() {
+		reflector.Run()      // TODO(jdef) should listen for termination
+		serviceWatcher.Run() //TODO(jdef) should listen for termination
+		podDeleter.Run(updates, terminate)
+		q.Run(terminate)
+
+		q.installDebugHandlers()
+		podtask.InstallDebugHandlers(k.taskRegistry)
+	})
 	return &PluginConfig{
 		Config: &plugin.Config{
 			MinionLister: nil,
@@ -840,7 +830,7 @@ type listWatch struct {
 	resource      string
 }
 
-func (lw *listWatch) List() (runtime.Object, error) {
+func (lw *listWatch) List() (k8s.Object, error) {
 	return lw.client.
 		Get().
 		Resource(lw.resource).
