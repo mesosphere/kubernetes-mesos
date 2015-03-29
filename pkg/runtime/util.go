@@ -32,7 +32,9 @@ func On(sig <-chan struct{}, f func()) Signal {
 	}
 	return Go(func() {
 		<-sig
-		f()
+		if f != nil {
+			f()
+		}
 	})
 }
 
@@ -41,20 +43,22 @@ func OnOSSignal(sig <-chan os.Signal, f func(os.Signal)) Signal {
 		return nil
 	}
 	return Go(func() {
-		if s, ok := <-sig; ok {
+		if s, ok := <-sig; ok && f != nil {
 			f(s)
 		}
 	})
 }
 
 // spawn a goroutine to execute a func, immediately returns a chan that closes
-// upon completion of the func.
+// upon completion of the func. returns a nil signal chan if the given func is nil.
 func Go(f func()) Signal {
 	ch := make(chan struct{})
 	go func() {
 		defer close(ch)
 		defer util.HandleCrash()
-		f()
+		if f != nil {
+			f()
+		}
 	}()
 	return Signal(ch)
 }
