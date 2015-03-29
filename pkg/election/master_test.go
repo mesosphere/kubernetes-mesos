@@ -17,6 +17,7 @@ limitations under the License.
 package election
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -27,6 +28,7 @@ type slowService struct {
 	// We explicitly have no lock to prove that
 	// Start and Stop are not called concurrently.
 	changes chan<- bool
+	wg      sync.WaitGroup
 }
 
 func (s *slowService) Validate(d, c Master) {
@@ -37,6 +39,7 @@ func (s *slowService) Start() {
 	if s.on {
 		s.t.Errorf("started already on service")
 	}
+	defer s.wg.Add(1)
 	time.Sleep(2 * time.Millisecond)
 	s.on = true
 	s.changes <- true
@@ -46,9 +49,11 @@ func (s *slowService) Stop() {
 	if !s.on {
 		s.t.Errorf("stopped already off service")
 	}
+	defer s.wg.Done()
 	time.Sleep(2 * time.Millisecond)
 	s.on = false
 	s.changes <- false
+
 }
 
 func Test(t *testing.T) {
@@ -69,6 +74,17 @@ func Test(t *testing.T) {
 
 	<-done
 	time.Sleep(8 * time.Millisecond)
+	ch := make(chan struct{})
+	go func() {
+		defer close(ch)
+		s.wg.Wait()
+	}()
+	select {
+	case <-time.After(1 * time.Second):
+		t.Fatalf("timed out waiting for slow service to catch up")
+	case <-ch: // expected
+	}
+
 	close(changes)
 
 	changeList := []bool{}
