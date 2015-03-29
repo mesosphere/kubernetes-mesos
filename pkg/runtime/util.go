@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"os"
+	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 )
@@ -61,4 +62,25 @@ func Go(f func()) Signal {
 		}
 	}()
 	return Signal(ch)
+}
+
+func Until(f func(), period time.Duration, stopCh <-chan struct{}) {
+	if f == nil {
+		return
+	}
+	select {
+	case <-stopCh:
+		return
+	default:
+	}
+	for {
+		func() {
+			defer util.HandleCrash()
+			f()
+		}()
+		select {
+		case <-stopCh:
+		case <-time.After(period):
+		}
+	}
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 	offerMetrics "github.com/mesosphere/kubernetes-mesos/pkg/offers/metrics"
 	"github.com/mesosphere/kubernetes-mesos/pkg/proc"
+	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
@@ -302,7 +303,7 @@ func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDri
 		if k.failoverTimeout < defaultFrameworkIdRefreshInterval {
 			refreshInterval = time.Duration(math.Max(1, k.failoverTimeout/2)) * time.Second
 		}
-		go util.Until(k.storeFrameworkId, refreshInterval, k.terminate)
+		go runtime.Until(k.storeFrameworkId, refreshInterval, k.terminate)
 	}
 
 	r1 := k.makeTaskRegistryReconciler()
@@ -313,7 +314,7 @@ func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDri
 
 	if k.reconcileInterval > 0 {
 		ri := time.Duration(k.reconcileInterval) * time.Second
-		time.AfterFunc(initialImplicitReconciliationDelay, func() { go util.Until(k.reconciler.RequestImplicit, ri, k.terminate) })
+		time.AfterFunc(initialImplicitReconciliationDelay, func() { go runtime.Until(k.reconciler.RequestImplicit, ri, k.terminate) })
 		log.Infof("will perform implicit task reconciliation at interval: %v after %v", ri, initialImplicitReconciliationDelay)
 	}
 }

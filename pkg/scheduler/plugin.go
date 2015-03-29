@@ -433,7 +433,7 @@ func (q *queuer) reoffer(pod *Pod) {
 // spawns a go-routine to watch for unscheduled pods and queue them up
 // for scheduling. returns immediately.
 func (q *queuer) Run(done <-chan struct{}) {
-	go util.Until(func() {
+	go runtime.Until(func() {
 		log.Info("Watching for newly created pods")
 		q.lock.Lock()
 		defer q.lock.Unlock()
@@ -588,7 +588,7 @@ type deleter struct {
 // currently monitors for "pod deleted" events, upon which handle()
 // is invoked.
 func (k *deleter) Run(updates <-chan queue.Entry, done <-chan struct{}) {
-	go util.Until(func() {
+	go runtime.Until(func() {
 		for {
 			entry := <-updates
 			pod := entry.Value().(*Pod)

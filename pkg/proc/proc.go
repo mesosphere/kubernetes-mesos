@@ -4,7 +4,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	log "github.com/golang/glog"
+	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 )
 
 const (
@@ -32,7 +33,7 @@ func (self *procImpl) Done() <-chan struct{} {
 
 func (self *procImpl) Begin() {
 	// execute actions on the exec chan
-	go util.Until(func() {
+	go runtime.Until(func() {
 		for {
 			select {
 			case <-self.terminate:
@@ -47,8 +48,9 @@ func (self *procImpl) Begin() {
 	}, actionHandlerCrashDelay, self.terminate)
 
 	// propagate actions from the backlog
-	go util.Until(func() {
-		for {
+	go runtime.Until(func() {
+		done := false
+		for !done {
 			select {
 			case <-self.terminate:
 				return
@@ -56,11 +58,20 @@ func (self *procImpl) Begin() {
 				if !ok {
 					return
 				}
-				select {
-				case <-self.terminate:
-					return
-				case self.exec <- action:
-				}
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							defer self.End()
+							done = true
+							log.Errorf("attempted to write to a closed exec chan: %v", r)
+						}
+					}()
+					select {
+					case <-self.terminate:
+						done = true
+					case self.exec <- action:
+					}
+				}()
 			}
 		}
 	}, actionHandlerCrashDelay, self.terminate)
@@ -98,6 +109,12 @@ func DoAndWait(p Process, a Action) error {
 // should never block.
 // returns errProcessTerminated if the process already ended.
 func (self *procImpl) DoLater(a Action) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			defer self.End()
+			log.Errorf("attempted to write to a closed process backlog: %v", r)
+		}
+	}()
 	select {
 	case <-self.terminate:
 		err = errProcessTerminated
@@ -116,11 +133,8 @@ func (self *procImpl) End() {
 	self.termOnce.Do(func() {
 		close(self.terminate)
 
-		// flush the exec chan
-		select {
-		case <-self.exec:
-			// discard it
-		default:
+		// flush the exec
+		for _ = range self.exec {
 		}
 
 		// flush the backlog
@@ -140,7 +154,16 @@ func (p *processAdapter) Do(a Action) error {
 	}
 	ch := make(chan error, 1)
 	err := p.parent.Do(func() {
-		ch <- p.delegate.Do(a)
+		e := p.delegate.Do(a)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					defer p.End()
+					log.Errorf("failed to propagate delegation error: %v", e)
+				}
+			}()
+			ch <- e
+		}()
 	})
 	if err != nil {
 		return err

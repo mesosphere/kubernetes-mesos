@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/mesosphere/kubernetes-mesos/pkg/profile"
@@ -381,12 +382,12 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 
 	go s.serviceWriterLoop(schedulerProcess.Done())
 
-	go util.Until(func() {
+	go runtime.Until(func() {
 		log.V(1).Info("Starting HTTP interface")
 		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), nil))
 	}, defaultHttpBindInterval, schedulerProcess.Done())
 
-	var driver bindings.SchedulerDriver
+	var driver atomic.Value // bindings.SchedulerDriver
 	driverFactory := ha.DriverFactory(func() (drv bindings.SchedulerDriver, err error) {
 		log.V(1).Infoln("performing deferred initialization")
 		if err = deferredInit(); err == nil {
@@ -396,7 +397,7 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 			if dconfig.Framework.Id, err = s.fetchFrameworkID(etcdClient); err == nil {
 				log.V(1).Infoln("instantiating mesos scheduler driver")
 				drv, err = bindings.NewMesosSchedulerDriver(*dconfig)
-				driver = drv
+				driver.Store(drv)
 			}
 		}
 		return
@@ -413,7 +414,16 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		schedulerProcess.Elect(driverFactory)
 	}
 	runtime.On(schedulerProcess.Elected(), kpl.Run)
-	return s.onFailover(schedulerProcess, func() error { return s.failover(driver, hks) })
+	return s.onFailover(schedulerProcess, func() error {
+		var drv bindings.SchedulerDriver
+		if d := driver.Load(); d != nil {
+			var ok bool
+			if drv, ok = d.(bindings.SchedulerDriver); !ok {
+				log.Warningf("wrong object type, expected bindings.SchedulerDriver not %T", d)
+			}
+		}
+		return s.failover(drv, hks)
+	})
 }
 
 // watch the scheduler process for events and properly handle failover. never returns.
@@ -549,11 +559,13 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 }
 
 func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks *hyperkube.Server) error {
-	stat, err := driver.Stop(true)
-	if stat != mesos.Status_DRIVER_STOPPED {
-		return fmt.Errorf("failed to stop driver for failover, received unexpected status code: %v", stat)
-	} else if err != nil {
-		return err
+	if driver != nil {
+		stat, err := driver.Stop(true)
+		if stat != mesos.Status_DRIVER_STOPPED {
+			return fmt.Errorf("failed to stop driver for failover, received unexpected status code: %v", stat)
+		} else if err != nil {
+			return err
+		}
 	}
 
 	// there's no guarantee that all goroutines are actually programmed intelligently with 'done'
