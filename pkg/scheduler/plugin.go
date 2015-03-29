@@ -104,6 +104,7 @@ type binder struct {
 	services []*api.Service
 }
 
+// callback target of UndeltaStore, updates our copy of the list of running services
 func (b *binder) updateServices(snapshot []interface{}) {
 	b.rw.Lock()
 	defer b.rw.Unlock()
@@ -246,20 +247,17 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *pod
 // getServiceEnvironmentVariables populates a list of environment variables that are use
 // in the container environment to get access to services.
 // HACK(jdef): adapted from https://github.com/GoogleCloudPlatform/kubernetes/blob/release-0.6/pkg/registry/pod/bound_pod_factory.go
-func (b *binder) getServiceEnvironmentVariables(ctx api.Context) (result []api.EnvVar, err error) {
-	ch := make(chan *api.ServiceList, 1)
-	func() {
-		defer close(ch)
+func (b *binder) getServiceEnvironmentVariables(ctx api.Context) ([]api.EnvVar, error) {
+	f := func() *api.ServiceList {
 		services := api.ServiceList{}
 		b.rw.RLock()
 		defer b.rw.RUnlock()
 		for _, s := range b.services {
 			services.Items = append(services.Items, *s)
 		}
-		ch <- &services
-	}()
-	result = envvars.FromServices(<-ch)
-	return
+		return &services
+	}
+	return envvars.FromServices(f()), nil
 }
 
 type kubeScheduler struct {
