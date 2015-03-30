@@ -114,17 +114,17 @@ func DoAndWait(p Process, a Action) error {
 // no two actions should execute at the same time. invocations of this func
 // should never block.
 // returns errProcessTerminated if the process already ended.
-func (self *procImpl) DoLater(a Action) (err error) {
+func (self *procImpl) DoLater(deferredAction Action) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			defer self.End()
 			err = fmt.Errorf("attempted to schedule action on a closed process backlog: %v", r)
 		}
 	}()
-	a = Action(func() {
+	a := Action(func() {
 		self.wg.Add(1)
 		defer self.wg.Done()
-		a()
+		deferredAction()
 	})
 	select {
 	case <-self.terminate:
