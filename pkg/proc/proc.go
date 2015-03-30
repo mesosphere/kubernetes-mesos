@@ -12,7 +12,7 @@ import (
 const (
 	defaultActionHandlerCrashDelay = 100 * time.Millisecond
 	defaultActionQueueDepth        = 1024
-	defaultActionScheduleTimeout   = 2 * time.Minute // how long we should wait before giving up on scheduling an action
+	defaultActionScheduleTimeout   = 2 * time.Minute
 )
 
 type procImpl struct {
@@ -25,9 +25,14 @@ type procImpl struct {
 }
 
 type Config struct {
+	// cooldown period in between deferred action crashes
 	actionHandlerCrashDelay time.Duration
-	actionQueueDepth        uint32
-	actionScheduleTimeout   time.Duration
+
+	// determines the size of the deferred action backlog
+	actionQueueDepth uint32
+
+	// how long we should wait before giving up on scheduling a deferred action
+	actionScheduleTimeout time.Duration
 }
 
 var (
@@ -76,12 +81,15 @@ func (self *procImpl) Begin() {
 					if !ok {
 						return
 					}
+					// rely on Until to handle action panics
 					action()
 				}
 			}
 		}, self.actionHandlerCrashDelay, self.terminate)
 	}).Then(self.wg.Done)
 }
+
+/*TODO(jdef) determine if we really need this
 
 // execute some action in the context of the current lifecycle. actions
 // executed via this func are to be executed in a concurrency-safe manner:
@@ -108,13 +116,14 @@ func DoAndWait(p Process, a Action) error {
 		return nil
 	}
 }
+*/
 
 // execute some action in the context of the current lifecycle. actions
 // executed via this func are to be executed in a concurrency-safe manner:
 // no two actions should execute at the same time. invocations of this func
 // should never block.
 // returns errProcessTerminated if the process already ended.
-func (self *procImpl) DoLater(deferredAction Action) (err error) {
+func (self *procImpl) doLater(deferredAction Action) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			defer self.End()
@@ -138,9 +147,9 @@ func (self *procImpl) DoLater(deferredAction Action) (err error) {
 }
 
 // implementation of Doer interface, schedules some action to be executed in
-// a deferred excution context via DoLater.
+// a deferred excution context via doLater.
 func (self *procImpl) Do(a Action) error {
-	return self.DoLater(a)
+	return self.doLater(a)
 }
 
 func (self *procImpl) flush(ch chan Action) {
