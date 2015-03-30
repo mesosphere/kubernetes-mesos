@@ -1,21 +1,42 @@
 #!/bin/bash
 
 function die() {
-	test "x$1" = "x" || echo -E "$1" >&2
+	test "x$1" = "x" || echo -E "$*" >&2
 	exit 1
 }
 
 test -n "$GOPATH" || die Missing GOPATH
-uname|grep -e ^CYGWIN >/dev/null 2>&1 && {
-	pkg="${GOPATH%%;*}"
-} || {
+export READLINK=readlink
+case $(uname|tr '[:upper:]' '[:lower:]') in
+  darwin*)
+	# homebrew coreutils package provides GNU-compat readlink
 	pkg="${GOPATH%%:*}"
+	READLINK=greadlink
+    ;;
+  cygwin*)
+	pkg="${GOPATH%%;*}"
+    ;;
+  *)
+	pkg="${GOPATH%%:*}"
+    ;;
+esac
+
+test -n "$USR_LOCAL_BASH" || export USR_LOCAL_BASH=/usr/local/bin/bash
+major_version=$(echo $BASH_VERSION | cut -f1 -d. 2>/dev/null)
+test "${major_version}" = "4" || {
+	# work-around for users (homebrew) that may have a newer bash installed
+	echo Detected older major version of bash $major_version checking for a newer version at $USR_LOCAL_BASH
+	test -x $USR_LOCAL_BASH || die No newer of bash found at $USR_LOCAL_BASH
+	major_version=$(exec $USR_LOCAL_BASH -c 'echo $BASH_VERSION'|cut -f1 -d. 2>/dev/null)
+	test "${major_version}" = '4' || die "Bash version at $USR_LOCAL_BASH is too old: major version = "${major_version}
+	exec "$USR_LOCAL_BASH" "$0" "${@}"
 }
+
 echo GO packages in $pkg will be patched
 
 test -n "$pkg" || die Invalid GOPATH=$GOPATH
 home=$(dirname "$0")
-home=$(readlink -f "$home")
+home=$($READLINK -f "$home")
 echo Patch directory $home
 
 # Add new k/v pairs for each project repo that may require patching

@@ -14,11 +14,11 @@ K8S_CMD		:= \
                    ${KUBE_GO_PACKAGE}/cmd/kube-apiserver	\
                    ${KUBE_GO_PACKAGE}/cmd/kube-proxy
 
-CMD_DIRS := $(shell cd $(current_dir) && find ./cmd -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|sort|uniq|cut -f1 -d/ --complement)
+CMD_DIRS := $(shell cd $(current_dir) && find ./cmd -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|sort|uniq|sed -e 's~^[^/]*/~~g')
 
 FRAMEWORK_CMD	:= ${CMD_DIRS:%=${K8SM_GO_PACKAGE}/%}
 
-LIB_DIRS := $(shell cd $(current_dir) && find ./pkg -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|sort|uniq|cut -f1 -d/ --complement)
+LIB_DIRS := $(shell cd $(current_dir) && find ./pkg -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|sort|uniq|sed -e 's~^[^/]*/~~g')
 
 FRAMEWORK_LIB	:= ${LIB_DIRS:%=${K8SM_GO_PACKAGE}/%}
 TESTS_LOGV	?= 2
@@ -28,6 +28,9 @@ TESTS_VV        = $(shell for pkg in $(TESTS); do ls $$pkg/*.go | while read -r 
 GIT_VERSION_FILE := $(current_dir)/.kube-version
 
 SHELL		:= /bin/bash
+
+# applying patches requires bash 4+ so this variable may be specified with a full path to a newer version of the bash
+ALT_BASH_SHELL	?= /usr/local/bin/bash
 
 # a list of upstream projects for which we test the availability of patches
 PATCH_SCRIPT	:= $(current_dir)/hack/patches/apply.sh
@@ -112,7 +115,7 @@ prepare:
 	(xdir=$$(dirname $(BUILDDIR)/src/$(K8SM_GO_PACKAGE)); mkdir -p $$xdir && cd $$xdir && ln -s $(current_dir) $$(basename $(K8SM_GO_PACKAGE)))
 
 patch: prepare $(PATCH_SCRIPT)
-	env GOPATH=$(GOPATH) $(PATCH_SCRIPT)
+	env GOPATH=$(GOPATH) USR_LOCAL_BASH=$(ALT_BASH_SHELL) $(PATCH_SCRIPT)
 
 version: $(GIT_VERSION_FILE)
 
