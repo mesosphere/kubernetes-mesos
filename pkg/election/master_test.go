@@ -17,7 +17,6 @@ limitations under the License.
 package election
 
 import (
-	"sync"
 	"testing"
 	"time"
 )
@@ -28,7 +27,7 @@ type slowService struct {
 	// We explicitly have no lock to prove that
 	// Start and Stop are not called concurrently.
 	changes chan<- bool
-	wg      sync.WaitGroup
+	done    <-chan struct{}
 }
 
 func (s *slowService) Validate(d, c Master) {
@@ -36,33 +35,40 @@ func (s *slowService) Validate(d, c Master) {
 }
 
 func (s *slowService) Start() {
+	select {
+	case <-s.done:
+		return // avoid writing to closed changes chan
+	default:
+	}
 	if s.on {
 		s.t.Errorf("started already on service")
 	}
-	defer s.wg.Add(1)
 	time.Sleep(2 * time.Millisecond)
 	s.on = true
 	s.changes <- true
 }
 
 func (s *slowService) Stop() {
+	select {
+	case <-s.done:
+		return // avoid writing to closed changes chan
+	default:
+	}
 	if !s.on {
 		s.t.Errorf("stopped already off service")
 	}
-	defer s.wg.Done()
 	time.Sleep(2 * time.Millisecond)
 	s.on = false
 	s.changes <- false
-
 }
 
 func Test(t *testing.T) {
 	m := NewFake()
 	changes := make(chan bool, 1500)
-	s := &slowService{t: t, changes: changes}
+	done := make(chan struct{})
+	s := &slowService{t: t, changes: changes, done: done}
 	go Notify(m, "", "me", s)
 
-	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 500; i++ {
 			for _, key := range []string{"me", "notme", "alsonotme"} {
@@ -74,16 +80,6 @@ func Test(t *testing.T) {
 
 	<-done
 	time.Sleep(8 * time.Millisecond)
-	ch := make(chan struct{})
-	go func() {
-		defer close(ch)
-		s.wg.Wait()
-	}()
-	select {
-	case <-time.After(1 * time.Second):
-		t.Fatalf("timed out waiting for slow service to catch up")
-	case <-ch: // expected
-	}
 
 	close(changes)
 
