@@ -64,12 +64,12 @@ func Until(f func(), period time.Duration, stopCh <-chan struct{}) {
 	if f == nil {
 		return
 	}
-	select {
-	case <-stopCh:
-		return
-	default:
-	}
 	for {
+		select {
+		case <-stopCh:
+			return
+		default:
+		}
 		func() {
 			defer util.HandleCrash()
 			f()

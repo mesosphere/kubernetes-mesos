@@ -3,9 +3,10 @@ package proc
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	log "github.com/golang/glog"
 	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 )
 
@@ -22,6 +23,7 @@ type procImpl struct {
 	wg        sync.WaitGroup
 	done      runtime.Signal
 	state     *stateType
+	pid       uint32
 }
 
 type Config struct {
@@ -41,6 +43,7 @@ var (
 		actionQueueDepth:        defaultActionQueueDepth,
 		actionScheduleTimeout:   defaultActionScheduleTimeout,
 	}
+	pid uint32
 )
 
 func New() ProcessInit {
@@ -54,9 +57,9 @@ func newConfigured(config Config) ProcessInit {
 		backlog:   make(chan Action, config.actionQueueDepth),
 		terminate: make(chan struct{}),
 		state:     &state,
+		pid:       atomic.AddUint32(&pid, 1),
 	}
-	// order is important here...
-	pi.wg.Add(1) // corresponds to the jobs started in Begin()
+	pi.wg.Add(1) // symmetrical to wg.Done() in End()
 	pi.done = runtime.Go(pi.wg.Wait)
 	return pi
 }
@@ -67,26 +70,30 @@ func (self *procImpl) Done() <-chan struct{} {
 
 func (self *procImpl) Begin() {
 	if !self.state.transition(stateNew, stateRunning) {
-		util.HandleError(fmt.Errorf("failed to transition from New to Idle state"))
-		return
+		panic(fmt.Errorf("failed to transition from New to Idle state"))
 	}
+	defer log.V(2).Infof("started process %d", self.pid)
+	addMe := true
+	finished := make(chan struct{})
 	// execute actions on the backlog chan
 	runtime.Go(func() {
 		runtime.Until(func() {
-			for {
-				select {
-				case <-self.terminate:
-					return
-				case action, ok := <-self.backlog:
-					if !ok {
-						return
-					}
-					// rely on Until to handle action panics
-					action()
-				}
+			if addMe {
+				addMe = false
+				self.wg.Add(1)
 			}
-		}, self.actionHandlerCrashDelay, self.terminate)
-	}).Then(self.wg.Done)
+			for action := range self.backlog {
+				// rely on Until to handle action panics
+				action()
+			}
+			close(finished)
+		}, self.actionHandlerCrashDelay, finished)
+	}).Then(func() {
+		log.V(2).Infof("finished processing action backlog for process %d", self.pid)
+		if !addMe {
+			self.wg.Done()
+		}
+	})
 }
 
 /*TODO(jdef) determine if we really need this
@@ -128,6 +135,8 @@ func (self *procImpl) doLater(deferredAction Action) (err error) {
 		if r := recover(); r != nil {
 			defer self.End()
 			err = fmt.Errorf("attempted to schedule action on a closed process backlog: %v", r)
+		} else if err != nil {
+			log.V(2).Infof("failed to execute action: %v", err)
 		}
 	}()
 	a := Action(func() {
@@ -152,25 +161,25 @@ func (self *procImpl) Do(a Action) error {
 	return self.doLater(a)
 }
 
-func (self *procImpl) flush(ch chan Action) {
-waitForDone:
-	for {
-		select {
-		case <-self.Done():
-			break waitForDone
-		case <-ch: // discard all
-		}
-	}
-	for range ch {
+func (self *procImpl) flush() {
+	defer func() {
+		log.V(2).Infof("flushed action backlog for process %d", self.pid)
+	}()
+	log.V(2).Infof("flushing action backlog for process %d", self.pid)
+	for range self.backlog {
 		// discard all
 	}
 }
 
 func (self *procImpl) End() {
 	if self.state.transitionTo(stateTerminal, stateTerminal) {
+		log.V(2).Infof("terminating process %d", self.pid)
 		close(self.backlog)
 		close(self.terminate)
-		go self.flush(self.backlog)
+		self.wg.Done()
+		log.V(2).Infof("waiting for deferred actions to complete")
+		<-self.Done()
+		self.flush()
 	}
 }
 
