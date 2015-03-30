@@ -314,7 +314,7 @@ func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDri
 
 	if k.reconcileInterval > 0 {
 		ri := time.Duration(k.reconcileInterval) * time.Second
-		time.AfterFunc(initialImplicitReconciliationDelay, func() { go runtime.Until(k.reconciler.RequestImplicit, ri, k.terminate) })
+		time.AfterFunc(initialImplicitReconciliationDelay, func() { runtime.Until(k.reconciler.RequestImplicit, ri, k.terminate) })
 		log.Infof("will perform implicit task reconciliation at interval: %v after %v", ri, initialImplicitReconciliationDelay)
 	}
 }
