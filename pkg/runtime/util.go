@@ -9,21 +9,15 @@ import (
 
 type Signal <-chan struct{}
 
-/* TODO(jdef) not very useful without execution conditional on errors
 // upon receiving signal sig invoke function f and immediately return a signal
-// that indicates f's completion.
+// that indicates f's completion. used to chain handler funcs, for example:
+//    On(job.Done(), response.Send).Then(wg.Done)
 func (sig Signal) Then(f func()) Signal {
 	if sig == nil {
 		return nil
 	}
-	ch := make(chan struct{})
-	On(sig, func() {
-		defer close(ch)
-		f()
-	})
-	return Signal(ch)
+	return On(sig, f)
 }
-*/
 
 // execute a callback function after the specified signal chan closes.
 // immediately returns a signal that indicates f's completion.
@@ -64,6 +58,8 @@ func Go(f func()) Signal {
 	return Signal(ch)
 }
 
+// periodically execute the given function, stopping once stopCh is closed.
+// this func blocks until stopCh is closed, it's intended to be run as a goroutine.
 func Until(f func(), period time.Duration, stopCh <-chan struct{}) {
 	if f == nil {
 		return

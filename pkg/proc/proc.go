@@ -1,80 +1,86 @@
 package proc
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
-	log "github.com/golang/glog"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 )
 
 const (
-	actionHandlerCrashDelay = 100 * time.Millisecond
+	defaultActionHandlerCrashDelay = 100 * time.Millisecond
+	defaultActionQueueDepth        = 1024
+	defaultActionScheduleTimeout   = 2 * time.Minute // how long we should wait before giving up on scheduling an action
 )
 
 type procImpl struct {
+	Config
 	backlog   chan Action
-	exec      chan Action   // for immediate execution
 	terminate chan struct{} // signaled via close()
-	termOnce  sync.Once
+	wg        sync.WaitGroup
+	done      runtime.Signal
+	state     *stateType
 }
 
-func New() ProcessInit {
-	return &procImpl{
-		backlog:   make(chan Action, 1024), // TODO(jdef) extract backlog
-		exec:      make(chan Action),       // intentionally unbuffered
-		terminate: make(chan struct{}),
+type Config struct {
+	actionHandlerCrashDelay time.Duration
+	actionQueueDepth        uint32
+	actionScheduleTimeout   time.Duration
+}
+
+var (
+	defaultConfig = Config{
+		actionHandlerCrashDelay: defaultActionHandlerCrashDelay,
+		actionQueueDepth:        defaultActionQueueDepth,
+		actionScheduleTimeout:   defaultActionScheduleTimeout,
 	}
+)
+
+func New() ProcessInit {
+	return newConfigured(defaultConfig)
+}
+
+func newConfigured(config Config) ProcessInit {
+	state := stateNew
+	pi := &procImpl{
+		Config:    config,
+		backlog:   make(chan Action, config.actionQueueDepth),
+		terminate: make(chan struct{}),
+		state:     &state,
+	}
+	// order is important here...
+	pi.wg.Add(1) // corresponds to the jobs started in Begin()
+	pi.done = runtime.Go(pi.wg.Wait)
+	return pi
 }
 
 func (self *procImpl) Done() <-chan struct{} {
-	return self.terminate
+	return self.done
 }
 
 func (self *procImpl) Begin() {
-	// execute actions on the exec chan
-	go runtime.Until(func() {
-		for {
-			select {
-			case <-self.terminate:
-				return
-			case action, ok := <-self.exec:
-				if !ok {
+	if !self.state.transition(stateNew, stateRunning) {
+		util.HandleError(fmt.Errorf("failed to transition from New to Idle state"))
+		return
+	}
+	// execute actions on the backlog chan
+	runtime.Go(func() {
+		runtime.Until(func() {
+			for {
+				select {
+				case <-self.terminate:
 					return
-				}
-				action()
-			}
-		}
-	}, actionHandlerCrashDelay, self.terminate)
-
-	// propagate actions from the backlog
-	go runtime.Until(func() {
-		done := false
-		for !done {
-			select {
-			case <-self.terminate:
-				return
-			case action, ok := <-self.backlog:
-				if !ok {
-					return
-				}
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							defer self.End()
-							done = true
-							log.Errorf("attempted to write to a closed exec chan: %v", r)
-						}
-					}()
-					select {
-					case <-self.terminate:
-						done = true
-					case self.exec <- action:
+				case action, ok := <-self.backlog:
+					if !ok {
+						return
 					}
-				}()
+					action()
+				}
 			}
-		}
-	}, actionHandlerCrashDelay, self.terminate)
+		}, self.actionHandlerCrashDelay, self.terminate)
+	}).Then(self.wg.Done)
 }
 
 // execute some action in the context of the current lifecycle. actions
@@ -112,13 +118,21 @@ func (self *procImpl) DoLater(a Action) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			defer self.End()
-			log.Errorf("attempted to write to a closed process backlog: %v", r)
+			err = fmt.Errorf("attempted to schedule action on a closed process backlog: %v", r)
 		}
 	}()
+	a = Action(func() {
+		self.wg.Add(1)
+		defer self.wg.Done()
+		a()
+	})
 	select {
 	case <-self.terminate:
 		err = errProcessTerminated
+	case <-time.After(self.actionScheduleTimeout):
+		return errActionScheduleTimeout
 	case self.backlog <- a:
+		// success! noop
 	}
 	return
 }
@@ -129,18 +143,26 @@ func (self *procImpl) Do(a Action) error {
 	return self.DoLater(a)
 }
 
+func (self *procImpl) flush(ch chan Action) {
+waitForDone:
+	for {
+		select {
+		case <-self.Done():
+			break waitForDone
+		case <-ch: // discard all
+		}
+	}
+	for range ch {
+		// discard all
+	}
+}
+
 func (self *procImpl) End() {
-	self.termOnce.Do(func() {
+	if self.state.transitionTo(stateTerminal, stateTerminal) {
+		close(self.backlog)
 		close(self.terminate)
-
-		// flush the exec
-		for _ = range self.exec {
-		}
-
-		// flush the backlog
-		for _ = range self.backlog {
-		}
-	})
+		go self.flush(self.backlog)
+	}
 }
 
 type processAdapter struct {
@@ -154,21 +176,18 @@ func (p *processAdapter) Do(a Action) error {
 	}
 	ch := make(chan error, 1)
 	err := p.parent.Do(func() {
-		e := p.delegate.Do(a)
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					defer p.End()
-					log.Errorf("failed to propagate delegation error: %v", e)
-				}
-			}()
-			ch <- e
-		}()
+		ch <- p.delegate.Do(a)
 	})
 	if err != nil {
 		return err
 	}
-	return <-ch
+	select {
+	case err := <-ch:
+		return err
+	case <-p.Done():
+		<-ch
+		return errProcessTerminated
+	}
 }
 
 func (p *processAdapter) End() {
