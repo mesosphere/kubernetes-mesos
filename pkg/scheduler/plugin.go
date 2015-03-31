@@ -13,7 +13,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/envvars"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
+	k8s "github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
@@ -24,6 +24,7 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/backoff"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
+	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 	annotation "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"gopkg.in/v2/yaml"
@@ -37,78 +38,91 @@ const (
 )
 
 // scheduler abstraction to allow for easier unit testing
-type SchedulerInterface interface {
-	sync.Locker
-	RLocker() sync.Locker
+type schedulerInterface interface {
+	sync.Locker // synchronize scheduler plugin operations
 	SlaveIndex
-
 	algorithm() PodScheduleFunc
-	createPodTask(api.Context, *api.Pod) (*podtask.T, error)
-	getTask(taskId string) (task *podtask.T, currentState podtask.StateType)
 	offers() offers.Registry
-	registerPodTask(*podtask.T, error) (*podtask.T, error)
-	taskForPod(podID string) (taskID string, ok bool)
-	unregisterPodTask(*podtask.T)
+	tasks() podtask.Registry
+
+	// driver calls
+
 	killTask(taskId string) error
 	launchTask(*podtask.T) error
+
+	// convenience
+
+	createPodTask(api.Context, *api.Pod) (*podtask.T, error)
 }
 
 type k8smScheduler struct {
-	*KubernetesScheduler
+	sync.Mutex
+	internal *KubernetesScheduler
 }
 
 func (k *k8smScheduler) algorithm() PodScheduleFunc {
-	return k.KubernetesScheduler.scheduleFunc
+	return k.internal.scheduleFunc
 }
 
 func (k *k8smScheduler) offers() offers.Registry {
-	return k.KubernetesScheduler.offers
+	return k.internal.offers
 }
 
-func (k *k8smScheduler) taskForPod(podID string) (string, bool) {
-	return k.KubernetesScheduler.taskRegistry.TaskForPod(podID)
+func (k *k8smScheduler) tasks() podtask.Registry {
+	return k.internal.taskRegistry
 }
 
 func (k *k8smScheduler) createPodTask(ctx api.Context, pod *api.Pod) (*podtask.T, error) {
-	return podtask.New(ctx, pod, k.executor)
-}
-
-func (k *k8smScheduler) getTask(taskId string) (*podtask.T, podtask.StateType) {
-	return k.KubernetesScheduler.taskRegistry.Get(taskId)
-}
-
-func (k *k8smScheduler) registerPodTask(task *podtask.T, err error) (*podtask.T, error) {
-	return k.KubernetesScheduler.taskRegistry.Register(task, err)
+	return podtask.New(ctx, "", *pod, k.internal.executor)
 }
 
 func (k *k8smScheduler) slaveFor(id string) (slave *Slave, ok bool) {
-	slave, ok = k.slaves[id]
+	k.internal.RLock()
+	defer k.internal.RUnlock()
+	slave, ok = k.internal.slaves[id]
 	return
 }
 
-func (k *k8smScheduler) unregisterPodTask(task *podtask.T) {
-	k.KubernetesScheduler.taskRegistry.Unregister(task)
-}
-
 func (k *k8smScheduler) killTask(taskId string) error {
-	// assume caller is holding scheduler lock
 	killTaskId := mutil.NewTaskID(taskId)
-	_, err := k.KubernetesScheduler.driver.KillTask(killTaskId)
+	_, err := k.internal.driver.KillTask(killTaskId)
 	return err
 }
 
 func (k *k8smScheduler) launchTask(task *podtask.T) error {
 	// assume caller is holding scheduler lock
-	taskList := []*mesos.TaskInfo{task.TaskInfo}
+	taskList := []*mesos.TaskInfo{task.BuildTaskInfo()}
 	offerIds := []*mesos.OfferID{task.Offer.Details().Id}
 	filters := &mesos.Filters{}
-	_, err := k.KubernetesScheduler.driver.LaunchTasks(offerIds, taskList, filters)
+	_, err := k.internal.driver.LaunchTasks(offerIds, taskList, filters)
 	return err
 }
 
 type binder struct {
-	api    SchedulerInterface
-	client *client.Client
+	api      schedulerInterface
+	client   *client.Client
+	rw       sync.RWMutex
+	services []*api.Service
+}
+
+// callback target of UndeltaStore, updates our copy of the list of running services
+func (b *binder) updateServices(snapshot []interface{}) {
+	b.rw.Lock()
+	defer b.rw.Unlock()
+	sz := len(snapshot)
+	if sz != 0 {
+		var ok bool
+		b.services = make([]*api.Service, sz, sz)
+		for i, v := range snapshot {
+			b.services[i], ok = v.(*api.Service)
+			if !ok {
+				log.Errorf("expected api.Service not %T", v)
+				break
+			}
+		}
+		return
+	}
+	b.services = nil
 }
 
 // implements binding.Registry, launches the pod-associated-task in mesos
@@ -125,21 +139,24 @@ func (b *binder) Bind(binding *api.Binding) error {
 	b.api.Lock()
 	defer b.api.Unlock()
 
-	taskId, exists := b.api.taskForPod(podKey)
-	if !exists {
-		log.Infof("Could not resolve pod %s to task id", podKey)
-		return noSuchPodErr
-	}
-
-	switch task, state := b.api.getTask(taskId); state {
+	switch task, state := b.api.tasks().ForPod(podKey); state {
 	case podtask.StatePending:
 		return b.bind(ctx, binding, task)
 	default:
 		// in this case it's likely that the pod has been deleted between Schedule
 		// and Bind calls
 		log.Infof("No pending task for pod %s", podKey)
-		return noSuchPodErr
+		return noSuchPodErr //TODO(jdef) this error is somewhat misleading since the task could be running?!
 	}
+}
+
+func (b *binder) rollback(task *podtask.T, err error) error {
+	task.Offer.Release()
+	task.Reset()
+	if err2 := b.api.tasks().Update(task); err2 != nil {
+		log.Errorf("failed to update pod task: %v", err2)
+	}
+	return err
 }
 
 // assumes that: caller has acquired scheduler lock and that the task is still pending
@@ -155,23 +172,23 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *podtask.T) (e
 	offerId := task.GetOfferId()
 	if offer, ok := b.api.offers().Get(offerId); !ok || offer.HasExpired() {
 		// already rescinded or timed out or otherwise invalidated
-		task.Offer.Release()
-		task.ClearTaskInfo()
-		return fmt.Errorf("failed prior to launchTask due to expired offer for task %v", task.ID)
+		return b.rollback(task, fmt.Errorf("failed prior to launchTask due to expired offer for task %v", task.ID))
 	}
 
 	if err = b.prepareTaskForLaunch(ctx, binding.Host, task, offerId); err == nil {
-		log.V(2).Infof("launching task : %v", task)
+		log.V(2).Infof("launching task: %v on slave %v for pod %v/%v", task.ID, task.Spec.SlaveID, task.Pod.Namespace, task.Pod.Name)
 		if err = b.api.launchTask(task); err == nil {
 			b.api.offers().Invalidate(offerId)
-			task.Pod.Status.Host = binding.Host
 			task.Set(podtask.Launched)
+			if err = b.api.tasks().Update(task); err != nil {
+				// this should only happen if the task has been removed or has changed status,
+				// which SHOULD NOT HAPPEN as long as we're synchronizing correctly
+				log.Errorf("failed to update task w/ Launched status: %v", err)
+			}
 			return
 		}
 	}
-	task.Offer.Release()
-	task.ClearTaskInfo()
-	return fmt.Errorf("Failed to launch task %v: %v", task.ID, err)
+	return b.rollback(task, fmt.Errorf("Failed to launch task %v: %v", task.ID, err))
 }
 
 func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *podtask.T, offerId string) error {
@@ -214,13 +231,13 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *pod
 	//not use the apiserver or etcd channels, we will be in control of all
 	//rectification. And BTW we probably want to store this information, somehow,
 	//in the binding annotations.
-	for _, entry := range task.Ports {
+	for _, entry := range task.Spec.PortMap {
 		port := &(boundPod.Spec.Containers[entry.ContainerIdx].Ports[entry.PortIdx])
 		port.HostPort = int(entry.OfferPort)
 	}
 
 	// the kubelet-executor uses this boundPod to instantiate the pod
-	task.TaskInfo.Data, err = yaml.Marshal(&boundPod)
+	task.Spec.Data, err = yaml.Marshal(&boundPod)
 	if err != nil {
 		log.V(2).Infof("Failed to marshal the updated boundPod")
 		return err
@@ -231,16 +248,21 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *pod
 // getServiceEnvironmentVariables populates a list of environment variables that are use
 // in the container environment to get access to services.
 // HACK(jdef): adapted from https://github.com/GoogleCloudPlatform/kubernetes/blob/release-0.6/pkg/registry/pod/bound_pod_factory.go
-func (b *binder) getServiceEnvironmentVariables(ctx api.Context) (result []api.EnvVar, err error) {
-	var services *api.ServiceList
-	if services, err = b.client.Services(api.NamespaceValue(ctx)).List(labels.Everything()); err == nil {
-		result = envvars.FromServices(services)
+func (b *binder) getServiceEnvironmentVariables(ctx api.Context) ([]api.EnvVar, error) {
+	f := func() *api.ServiceList {
+		services := api.ServiceList{}
+		b.rw.RLock()
+		defer b.rw.RUnlock()
+		for _, s := range b.services {
+			services.Items = append(services.Items, *s)
+		}
+		return &services
 	}
-	return
+	return envvars.FromServices(f()), nil
 }
 
 type kubeScheduler struct {
-	api        SchedulerInterface
+	api        schedulerInterface
 	podUpdates queue.FIFO
 }
 
@@ -259,7 +281,8 @@ func (k *kubeScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (st
 	k.api.Lock()
 	defer k.api.Unlock()
 
-	if taskID, ok := k.api.taskForPod(podKey); !ok {
+	switch task, state := k.api.tasks().ForPod(podKey); state {
+	case podtask.StateUnknown:
 		// There's a bit of a potential race here, a pod could have been yielded() and
 		// then before we get *here* it could be deleted.
 		// We use meta to index the pod in the store since that's what k8s reflector does.
@@ -273,36 +296,48 @@ func (k *kubeScheduler) Schedule(pod api.Pod, unused algorithm.MinionLister) (st
 			log.Infof("aborting Schedule, pod has been deleted %+v", &pod)
 			return "", noSuchPodErr
 		}
-		return k.doSchedule(k.api.registerPodTask(k.api.createPodTask(ctx, &pod)))
-	} else {
-		//TODO(jdef) it's possible that the pod state has diverged from what
-		//we knew previously, we should probably update the task.Pod state here
-		//before proceeding with scheduling
+		return k.doSchedule(k.api.tasks().Register(k.api.createPodTask(ctx, &pod)))
 
-		switch task, state := k.api.getTask(taskID); state {
-		case podtask.StatePending:
-			if pod.UID != task.Pod.UID {
-				// we're dealing with a brand new pod spec here, so the old one must have been
-				// deleted -- and so our task store is out of sync w/ respect to reality
-				//TODO(jdef) reconcile task
-				return "", fmt.Errorf("task %v spec is out of sync with pod %v spec, aborting schedule", taskID, pod.Name)
-			} else if task.Has(podtask.Launched) {
-				// task has been marked as "launched" but the pod binding creation may have failed in k8s,
-				// but we're going to let someone else handle it, probably the mesos task error handler
-				return "", fmt.Errorf("task %s has already been launched, aborting schedule", taskID)
-			} else {
-				return k.doSchedule(task, nil)
-			}
-		default:
-			return "", fmt.Errorf("task %s is not pending, nothing to schedule", taskID)
+	//TODO(jdef) it's possible that the pod state has diverged from what
+	//we knew previously, we should probably update the task.Pod state here
+	//before proceeding with scheduling
+	case podtask.StatePending:
+		if pod.UID != task.Pod.UID {
+			// we're dealing with a brand new pod spec here, so the old one must have been
+			// deleted -- and so our task store is out of sync w/ respect to reality
+			//TODO(jdef) reconcile task
+			return "", fmt.Errorf("task %v spec is out of sync with pod %v spec, aborting schedule", task.ID, pod.Name)
+		} else if task.Has(podtask.Launched) {
+			// task has been marked as "launched" but the pod binding creation may have failed in k8s,
+			// but we're going to let someone else handle it, probably the mesos task error handler
+			return "", fmt.Errorf("task %s has already been launched, aborting schedule", task.ID)
+		} else {
+			return k.doSchedule(task, nil)
 		}
+
+	default:
+		return "", fmt.Errorf("task %s is not pending, nothing to schedule", task.ID)
 	}
 }
 
 // Call ScheduleFunc and subtract some resources, returning the name of the machine the task is scheduled on
 func (k *kubeScheduler) doSchedule(task *podtask.T, err error) (string, error) {
 	var offer offers.Perishable
-	if err == nil {
+	if task.HasAcceptedOffer() {
+		// verify that the offer is still on the table
+		offerId := task.GetOfferId()
+		if offer, ok := k.api.offers().Get(offerId); ok && !offer.HasExpired() {
+			// skip tasks that have already have assigned offers
+			offer = task.Offer
+		} else {
+			task.Offer.Release()
+			task.Reset()
+			if err = k.api.tasks().Update(task); err != nil {
+				return "", err
+			}
+		}
+	}
+	if err == nil && offer == nil {
 		offer, err = k.api.algorithm()(k.api.offers(), k.api, task)
 	}
 	if err != nil {
@@ -317,7 +352,6 @@ func (k *kubeScheduler) doSchedule(task *podtask.T, err error) (string, error) {
 		// not much sense in Release()ing the offer here since its owner died
 		offer.Release()
 		k.api.offers().Invalidate(details.Id.GetValue())
-		task.ClearTaskInfo()
 		return "", fmt.Errorf("Slave disappeared (%v) while scheduling task %v", slaveId, task.ID)
 	} else {
 		if task.Offer != nil && task.Offer != offer {
@@ -325,6 +359,10 @@ func (k *kubeScheduler) doSchedule(task *podtask.T, err error) (string, error) {
 		}
 		task.Offer = offer
 		task.FillFromDetails(details)
+		if err := k.api.tasks().Update(task); err != nil {
+			offer.Release()
+			return "", err
+		}
 		return slave.HostName, nil
 	}
 }
@@ -395,7 +433,7 @@ func (q *queuer) reoffer(pod *Pod) {
 // spawns a go-routine to watch for unscheduled pods and queue them up
 // for scheduling. returns immediately.
 func (q *queuer) Run(done <-chan struct{}) {
-	go util.Until(func() {
+	go runtime.Until(func() {
 		log.Info("Watching for newly created pods")
 		q.lock.Lock()
 		defer q.lock.Unlock()
@@ -405,11 +443,7 @@ func (q *queuer) Run(done <-chan struct{}) {
 			// may proceed even if there have been no recent pod changes
 			p := q.podUpdates.Await(enqueuePopTimeout)
 			if p == nil {
-				signalled := make(chan struct{})
-				go func() {
-					defer close(signalled)
-					q.deltaCond.Wait()
-				}()
+				signalled := runtime.Go(q.deltaCond.Wait)
 				// we've yielded the lock
 				select {
 				case <-time.After(enqueueWaitTimeout):
@@ -453,12 +487,7 @@ func (q *queuer) yield() *api.Pod {
 		// enqueuer Run() routine for very long
 		kpod := q.podQueue.Await(yieldPopTimeout)
 		if kpod == nil {
-			signalled := make(chan struct{})
-			go func() {
-				defer close(signalled)
-				q.unscheduledCond.Wait()
-			}()
-
+			signalled := runtime.Go(q.unscheduledCond.Wait)
 			// lock is yielded at this point and we're going to wait for either
 			// a timeout, or a signal that there's data
 			select {
@@ -488,7 +517,7 @@ func (q *queuer) yield() *api.Pod {
 }
 
 type errorHandler struct {
-	api     SchedulerInterface
+	api     schedulerInterface
 	backoff *backoff.Backoff
 	qr      *queuer
 }
@@ -513,17 +542,15 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 	}
 
 	k.backoff.GC()
-	k.api.RLocker().Lock()
-	defer k.api.RLocker().Unlock()
+	k.api.Lock()
+	defer k.api.Unlock()
 
-	taskId, exists := k.api.taskForPod(podKey)
-	if !exists {
+	switch task, state := k.api.tasks().ForPod(podKey); state {
+	case podtask.StateUnknown:
 		// if we don't have a mapping here any more then someone deleted the pod
 		log.V(2).Infof("Could not resolve pod to task, aborting pod reschdule: %s", podKey)
 		return
-	}
 
-	switch task, state := k.api.getTask(taskId); state {
 	case podtask.StatePending:
 		if task.Has(podtask.Launched) {
 			log.V(2).Infof("Skipping re-scheduling for already-launched pod %v", podKey)
@@ -533,9 +560,9 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 		if schedulingErr == noSuitableOffersErr {
 			log.V(3).Infof("adding backoff breakout handler for pod %v", podKey)
 			breakoutEarly = queue.BreakChan(k.api.offers().Listen(podKey, func(offer *mesos.Offer) bool {
-				k.api.RLocker().Lock()
-				defer k.api.RLocker().Unlock()
-				switch task, state := k.api.getTask(taskId); state {
+				k.api.Lock()
+				defer k.api.Unlock()
+				switch task, state := k.api.tasks().Get(task.ID); state {
 				case podtask.StatePending:
 					return !task.Has(podtask.Launched) && task.AcceptOffer(offer)
 				default:
@@ -547,20 +574,21 @@ func (k *errorHandler) handleSchedulingError(pod *api.Pod, schedulingErr error) 
 		delay := k.backoff.Get(podKey)
 		log.V(3).Infof("requeuing pod %v with delay %v", podKey, delay)
 		k.qr.requeue(&Pod{Pod: pod, delay: &delay, notify: breakoutEarly})
+
 	default:
 		log.V(2).Infof("Task is no longer pending, aborting reschedule for pod %v", podKey)
 	}
 }
 
 type deleter struct {
-	api SchedulerInterface
+	api schedulerInterface
 	qr  *queuer
 }
 
 // currently monitors for "pod deleted" events, upon which handle()
 // is invoked.
 func (k *deleter) Run(updates <-chan queue.Entry, done <-chan struct{}) {
-	go util.Until(func() {
+	go runtime.Until(func() {
 		for {
 			entry := <-updates
 			pod := entry.Value().(*Pod)
@@ -597,32 +625,40 @@ func (k *deleter) deleteOne(pod *Pod) error {
 	// will abort Bind()ing
 	k.qr.dequeue(pod.GetUID())
 
-	taskId, exists := k.api.taskForPod(podKey)
-	if !exists {
+	switch task, state := k.api.tasks().ForPod(podKey); state {
+	case podtask.StateUnknown:
 		log.V(2).Infof("Could not resolve pod '%s' to task id", podKey)
 		return noSuchPodErr
-	}
 
 	// determine if the task has already been launched to mesos, if not then
 	// cleanup is easier (unregister) since there's no state to sync
-	switch task, state := k.api.getTask(taskId); state {
 	case podtask.StatePending:
 		if !task.Has(podtask.Launched) {
 			// we've been invoked in between Schedule() and Bind()
 			if task.HasAcceptedOffer() {
 				task.Offer.Release()
-				task.ClearTaskInfo()
+				task.Reset()
+				task.Set(podtask.Deleted)
+				//TODO(jdef) probably want better handling here
+				if err := k.api.tasks().Update(task); err != nil {
+					return err
+				}
 			}
-			k.api.unregisterPodTask(task)
+			k.api.tasks().Unregister(task)
 			return nil
 		}
 		fallthrough
+
 	case podtask.StateRunning:
 		// signal to watchers that the related pod is going down
 		task.Set(podtask.Deleted)
-		return k.api.killTask(taskId)
+		if err := k.api.tasks().Update(task); err != nil {
+			log.Errorf("failed to update task w/ Deleted status: %v", err)
+		}
+		return k.api.killTask(task.ID)
+
 	default:
-		log.Infof("cannot kill pod '%s': task not found %v", podKey, taskId)
+		log.Infof("cannot kill pod '%s': non-terminal task not found %v", podKey, task.ID)
 		return noSuchTaskErr
 	}
 }
@@ -638,7 +674,7 @@ func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}) *Plugin
 	// lock that guards critial sections that involve transferring pods from
 	// the store (cache) to the scheduling queue; its purpose is to maintain
 	// an ordering (vs interleaving) of operations that's easier to reason about.
-	kapi := &k8smScheduler{k}
+	kapi := &k8smScheduler{internal: k}
 	q := newQueuer(podUpdates)
 	podDeleter := &deleter{
 		api: kapi,
@@ -649,17 +685,23 @@ func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}) *Plugin
 		backoff: backoff.New(defaultInitialPodBackoff, defaultMaxPodBackoff),
 		qr:      q,
 	}
+	bind := &binder{
+		api:    kapi,
+		client: k.client,
+	}
+	serviceSnapshots := cache.NewUndeltaStore(bind.updateServices, cache.MetaNamespaceKeyFunc)
+	serviceWatcher := cache.NewReflector(createServiceLW(k.client), &api.Service{}, serviceSnapshots)
+
 	startLatch := make(chan struct{})
-	go func() {
-		select {
-		case <-startLatch:
-			reflector.Run() // TODO(jdef) should listen for termination
-			podDeleter.Run(updates, terminate)
-			q.Run(terminate)
-		}
-	}()
-	q.installDebugHandlers()
-	podtask.InstallDebugHandlers(k.RLocker(), k.taskRegistry)
+	runtime.On(startLatch, func() {
+		reflector.Run()      // TODO(jdef) should listen for termination
+		serviceWatcher.Run() //TODO(jdef) should listen for termination
+		podDeleter.Run(updates, terminate)
+		q.Run(terminate)
+
+		q.installDebugHandlers()
+		podtask.InstallDebugHandlers(k.taskRegistry)
+	})
 	return &PluginConfig{
 		Config: &plugin.Config{
 			MinionLister: nil,
@@ -667,10 +709,7 @@ func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}) *Plugin
 				api:        kapi,
 				podUpdates: podUpdates,
 			},
-			Binder: &binder{
-				api:    kapi,
-				client: k.client,
-			},
+			Binder:  bind,
 			NextPod: q.yield,
 			Error:   eh.handleSchedulingError,
 		},
@@ -684,7 +723,7 @@ func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}) *Plugin
 
 type PluginConfig struct {
 	*plugin.Config
-	api      SchedulerInterface
+	api      schedulerInterface
 	client   *client.Client
 	qr       *queuer
 	deleter  *deleter
@@ -704,7 +743,7 @@ func NewPlugin(c *PluginConfig) PluginInterface {
 
 type schedulingPlugin struct {
 	*plugin.Scheduler
-	api      SchedulerInterface
+	api      schedulerInterface
 	client   *client.Client
 	qr       *queuer
 	deleter  *deleter
@@ -759,7 +798,7 @@ func (s *schedulingPlugin) reconcilePod(oldPod api.Pod) {
 			s.api.Lock()
 			defer s.api.Unlock()
 
-			if _, exists := s.api.taskForPod(podKey); exists {
+			if _, state := s.api.tasks().ForPod(podKey); state != podtask.StateUnknown {
 				//TODO(jdef) reconcile the task
 				log.Errorf("task already registered for pod %v", pod.Name)
 				return
@@ -791,7 +830,7 @@ type listWatch struct {
 	resource      string
 }
 
-func (lw *listWatch) List() (runtime.Object, error) {
+func (lw *listWatch) List() (k8s.Object, error) {
 	return lw.client.
 		Get().
 		Resource(lw.resource).
@@ -816,6 +855,14 @@ func createAllPodsLW(cl *client.Client) *listWatch {
 		client:        cl,
 		fieldSelector: labels.Everything(),
 		resource:      "pods",
+	}
+}
+
+func createServiceLW(cl *client.Client) *listWatch {
+	return &listWatch{
+		client:        cl,
+		fieldSelector: labels.Everything(),
+		resource:      "services",
 	}
 }
 

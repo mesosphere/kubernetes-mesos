@@ -14,7 +14,7 @@ const (
 )
 
 func fakePodTask(id string) (*T, error) {
-	return New(api.NewDefaultContext(), &api.Pod{
+	return New(api.NewDefaultContext(), "", api.Pod{
 		ObjectMeta: api.ObjectMeta{
 			Name:      id,
 			Namespace: api.NamespaceDefault,
@@ -67,7 +67,7 @@ func TestNoPortsInPodOrOffer(t *testing.T) {
 func TestDefaultHostPortMatching(t *testing.T) {
 	t.Parallel()
 	task, _ := fakePodTask("foo")
-	pod := task.Pod
+	pod := &task.Pod
 
 	offer := &mesos.Offer{
 		Resources: []*mesos.Resource{
@@ -92,7 +92,7 @@ func TestDefaultHostPortMatching(t *testing.T) {
 			}},
 		}},
 	}
-	task, err = New(api.NewDefaultContext(), pod, &mesos.ExecutorInfo{})
+	task, err = New(api.NewDefaultContext(), "", *pod, &mesos.ExecutorInfo{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestDefaultHostPortMatching(t *testing.T) {
 func TestAcceptOfferPorts(t *testing.T) {
 	t.Parallel()
 	task, _ := fakePodTask("foo")
-	pod := task.Pod
+	pod := &task.Pod
 
 	offer := &mesos.Offer{
 		Resources: []*mesos.Resource{

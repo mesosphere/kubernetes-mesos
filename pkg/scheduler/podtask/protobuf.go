@@ -27,9 +27,3 @@ func newRanges(ports []uint64) *mesos.Value_Ranges {
 	}
 	return &mesos.Value_Ranges{Range: r}
 }
-
-func newTaskInfo(name string) *mesos.TaskInfo {
-	return &mesos.TaskInfo{
-		Name: proto.String(name),
-	}
-}

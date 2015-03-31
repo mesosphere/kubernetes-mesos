@@ -12,6 +12,7 @@ import (
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers/metrics"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
+	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 )
 
 const (
@@ -85,6 +86,9 @@ type offerSpec struct {
 	hostname string
 }
 
+// offers that may perish (all of them?) implement this interface.
+// callers may expect to access these funcs concurrently so implementations
+// must provide their own form of synchronization around mutable state.
 type Perishable interface {
 	// returns true if this offer has expired
 	HasExpired() bool
@@ -451,7 +455,7 @@ func (s *offerStorage) notifyListeners(ids func() (util.StringSet, uint64)) {
 
 func (s *offerStorage) Init(done <-chan struct{}) {
 	// zero delay, reap offers as soon as they expire
-	go util.Until(s.ageOffers, 0, done)
+	go runtime.Until(s.ageOffers, 0, done)
 
 	// cached offer ids for the purposes of listener notification
 	idCache := &stringsCache{
@@ -467,7 +471,7 @@ func (s *offerStorage) Init(done <-chan struct{}) {
 		ttl: offerIdCacheTTL,
 	}
 
-	go util.Until(func() { s.notifyListeners(idCache.Strings) }, notifyListenersDelay, done)
+	go runtime.Until(func() { s.notifyListeners(idCache.Strings) }, notifyListenersDelay, done)
 }
 
 type stringsCache struct {

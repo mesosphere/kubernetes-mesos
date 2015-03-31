@@ -36,7 +36,7 @@ $ docker run --rm -v $(pwd)/bin:/target mesosphere/kubernetes-mesos:build
 To build from source follow the instructions below.
 Before building anything please review all of the instructions, including any environment setup steps that may be required prior to the actual build.
 
-**NOTE:** Building Kubernetes for Mesos requires Go 1.3+.
+**NOTE:** Building Kubernetes for Mesos requires Go 1.4+.
 * See the [development][1] page for sample environment setup steps.
 
 Kubernetes-Mesos is built using a Makefile to automate the process of patching the vanilla Kubernetes code.

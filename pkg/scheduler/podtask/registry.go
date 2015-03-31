@@ -13,26 +13,40 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
 )
 
-/**
-HACK(jdef): we're not using etcd but k8s has implemented namespace support and
-we're going to try to honor that by namespacing pod keys. Hence, the following
-funcs that were stolen from:
-    https://github.com/GoogleCloudPlatform/kubernetes/blob/release-0.5/pkg/registry/etcd/etcd.go
-**/
-
 const (
-	PodPath                  = "/pods"
+	//TODO(jdef) move this somewhere else
+	PodPath = "/pods"
+
+	// length of historical record of finished tasks
 	defaultFinishedTasksSize = 1024
 )
 
+// state store for pod tasks
 type Registry interface {
+	// register the specified task with this registry, as long as the current error
+	// condition is nil. if no errors occur then return a copy of the registered task.
 	Register(*T, error) (*T, error)
+
+	// unregister the specified task from this registry
 	Unregister(*T)
+
+	// update state for the registered task identified by task.ID, returning a copy of
+	// the updated task, if any.
+	Update(task *T) error
+
+	// return the task registered for the specified task ID and its current state.
+	// if there is no such task then StateUnknown is returned.
 	Get(taskId string) (task *T, currentState StateType)
-	TaskForPod(podID string) (taskID string, ok bool)
+
+	// return the non-terminal task corresponding to the specified pod ID
+	ForPod(podID string) (task *T, currentState StateType)
+
+	// update the task status given the specified mesos task status update, returning a
+	// copy of the updated task (if any) and its state.
 	UpdateStatus(status *mesos.TaskStatus) (*T, StateType)
-	// return a list of task ID's that match the given filter, or all task ID's if filter == nil
-	List(func(*T) bool) []string
+
+	// return a list of task ID's that match the given filter, or all task ID's if filter == nil.
+	List(filter func(*T) bool) []*T
 }
 
 type inMemoryRegistry struct {
@@ -50,23 +64,26 @@ func NewInMemoryRegistry() Registry {
 	}
 }
 
-func (k *inMemoryRegistry) List(accepts func(t *T) bool) (taskids []string) {
+func (k *inMemoryRegistry) List(accepts func(t *T) bool) (tasks []*T) {
 	k.rw.RLock()
 	defer k.rw.RUnlock()
-	for id, task := range k.taskRegistry {
+	for _, task := range k.taskRegistry {
 		if accepts == nil || accepts(task) {
-			taskids = append(taskids, id)
+			tasks = append(tasks, task.Clone())
 		}
 	}
 	return
 }
 
-func (k *inMemoryRegistry) TaskForPod(podID string) (taskID string, ok bool) {
+func (k *inMemoryRegistry) ForPod(podID string) (task *T, currentState StateType) {
 	k.rw.RLock()
 	defer k.rw.RUnlock()
-	// assume caller is holding scheduler lock
-	taskID, ok = k.podToTask[podID]
-	return
+	tid, ok := k.podToTask[podID]
+	if !ok {
+		return nil, StateUnknown
+	}
+	t, state := k._get(tid)
+	return t.Clone(), state
 }
 
 // registers a pod task unless the spec'd error is not nil
@@ -74,10 +91,43 @@ func (k *inMemoryRegistry) Register(task *T, err error) (*T, error) {
 	if err == nil {
 		k.rw.Lock()
 		defer k.rw.Unlock()
+		if _, found := k.podToTask[task.podKey]; found {
+			return nil, fmt.Errorf("task already registered for pod key %q", task.podKey)
+		}
+		if _, found := k.taskRegistry[task.ID]; found {
+			return nil, fmt.Errorf("task already registered for id %q", task.ID)
+		}
 		k.podToTask[task.podKey] = task.ID
 		k.taskRegistry[task.ID] = task
 	}
-	return task, err
+	return task.Clone(), err
+}
+
+// updates internal task state. updates are limited to Spec, Flags, and Offer for
+// StatePending tasks, and are limited to Flag updates (additive only) for StateRunning tasks.
+func (k *inMemoryRegistry) Update(task *T) error {
+	if task == nil {
+		return nil
+	}
+	k.rw.Lock()
+	defer k.rw.Unlock()
+	switch internal, state := k._get(task.ID); state {
+	case StateUnknown:
+		return fmt.Errorf("no such task: %v", task.ID)
+	case StatePending:
+		internal.Offer = task.Offer
+		internal.Spec = task.Spec
+		(&task.Spec).copyTo(&internal.Spec)
+		internal.Flags = map[FlagType]struct{}{}
+		fallthrough
+	case StateRunning:
+		for k, v := range task.Flags {
+			internal.Flags[k] = v
+		}
+		return nil
+	default:
+		return fmt.Errorf("may not update task %v in state %v", task.ID, state)
+	}
 }
 
 func (k *inMemoryRegistry) Unregister(task *T) {
@@ -90,10 +140,13 @@ func (k *inMemoryRegistry) Unregister(task *T) {
 func (k *inMemoryRegistry) Get(taskId string) (*T, StateType) {
 	k.rw.RLock()
 	defer k.rw.RUnlock()
-	return k._get(taskId)
+	t, state := k._get(taskId)
+	return t.Clone(), state
 }
 
-// assume that the caller has already locked around access to task state
+// assume that the caller has already locked around access to task state.
+// the caller is also responsible for cloning the task object before it leaves
+// the context of this registry.
 func (k *inMemoryRegistry) _get(taskId string) (*T, StateType) {
 	if task, found := k.taskRegistry[taskId]; found {
 		return task, task.State
@@ -124,9 +177,9 @@ func (k *inMemoryRegistry) UpdateStatus(status *mesos.TaskStatus) (*T, StateType
 	case mesos.TaskState_TASK_LOST:
 		k.handleTaskLost(task, state, status)
 	default:
-		log.Warning("unhandled task status update: %+v", status)
+		log.Warningf("unhandled status update for task: %v", taskId)
 	}
-	return task, state
+	return task.Clone(), state
 }
 
 func (k *inMemoryRegistry) handleTaskStaging(task *T, state StateType, status *mesos.TaskStatus) {
@@ -138,8 +191,7 @@ func (k *inMemoryRegistry) handleTaskStaging(task *T, state StateType, status *m
 
 func (k *inMemoryRegistry) handleTaskStarting(task *T, state StateType, status *mesos.TaskStatus) {
 	// we expect to receive this when a launched task is finally "bound"
-	// via the API server. however, there's nothing specific for us to do
-	// here.
+	// via the API server. however, there's nothing specific for us to do here.
 	switch state {
 	case StatePending:
 		task.UpdatedTime = time.Now()
@@ -150,24 +202,26 @@ func (k *inMemoryRegistry) handleTaskStarting(task *T, state StateType, status *
 			metrics.BindLatency.Observe(metrics.InMicroseconds(timeToBind))
 		}
 	default:
-		log.Warningf("Ignore status TASK_STARTING because the the task is not pending")
+		taskId := status.GetTaskId().GetValue()
+		log.Warningf("Ignore status TASK_STARTING because the task %v is not pending", taskId)
 	}
 }
 
 func (k *inMemoryRegistry) handleTaskRunning(task *T, state StateType, status *mesos.TaskStatus) {
+	taskId := status.GetTaskId().GetValue()
 	switch state {
 	case StatePending:
 		task.UpdatedTime = time.Now()
-		log.Infof("Received running status for pending task: %+v", status)
+		log.Infof("Received running status for pending task: %v", taskId)
 		fillRunningPodInfo(task, status)
 		task.State = StateRunning
 	case StateRunning:
 		task.UpdatedTime = time.Now()
-		log.V(2).Info("Ignore status TASK_RUNNING because the the task is already running")
+		log.V(2).Infof("Ignore status TASK_RUNNING because the task %v is already running", taskId)
 	case StateFinished:
-		log.Warningf("Ignore status TASK_RUNNING because the the task is already finished")
+		log.Warningf("Ignore status TASK_RUNNING because the task %v is already finished", taskId)
 	default:
-		log.Warningf("Ignore status TASK_RUNNING (%+v) because the the task is discarded", status.GetTaskId())
+		log.Warningf("Ignore status TASK_RUNNING because the task %v is discarded", taskId)
 	}
 }
 
@@ -189,25 +243,26 @@ func fillRunningPodInfo(task *T, taskStatus *mesos.TaskStatus) {
 	if result, err := ParsePodStatusResult(taskStatus); err != nil {
 		log.Errorf("invalid TaskStatus.Data for task '%v': %v", task.ID, err)
 	} else {
-		task.Pod.Status = result.Status
-		log.Infof("received pod status for task %v: %+v", task.ID, task.Pod.Status)
+		task.podStatus = result.Status
+		log.Infof("received pod status for task %v: %+v", task.ID, result.Status)
 	}
 }
 
 func (k *inMemoryRegistry) handleTaskFinished(task *T, state StateType, status *mesos.TaskStatus) {
+	taskId := status.GetTaskId().GetValue()
 	switch state {
 	case StatePending:
-		panic("Pending task finished, this couldn't happen")
+		panic(fmt.Sprintf("Pending task %v finished, this couldn't happen", taskId))
 	case StateRunning:
-		log.V(2).Infof("received finished status for running task: %+v", status)
+		log.V(2).Infof("received finished status for running task: %v", taskId)
 		delete(k.podToTask, task.podKey)
 		task.State = StateFinished
 		task.UpdatedTime = time.Now()
 		k.tasksFinished = k.recordFinishedTask(task.ID)
 	case StateFinished:
-		log.Warningf("Ignore status TASK_FINISHED because the the task is already finished")
+		log.Warningf("Ignore status TASK_FINISHED because the task %v is already finished", taskId)
 	default:
-		log.Warningf("Ignore status TASK_FINISHED because the the task is not running")
+		log.Warningf("Ignore status TASK_FINISHED because the task %v is not running", taskId)
 	}
 }
 
@@ -228,7 +283,6 @@ func (k *inMemoryRegistry) recordFinishedTask(taskId string) *ring.Ring {
 }
 
 func (k *inMemoryRegistry) handleTaskFailed(task *T, state StateType, status *mesos.TaskStatus) {
-	log.Errorf("task failed: %+v", status)
 	switch state {
 	case StatePending:
 		delete(k.taskRegistry, task.ID)
@@ -257,7 +311,6 @@ func (k *inMemoryRegistry) handleTaskKilled(task *T, state StateType, status *me
 }
 
 func (k *inMemoryRegistry) handleTaskLost(task *T, state StateType, status *mesos.TaskStatus) {
-	log.Warningf("task lost: %+v", status)
 	switch state {
 	case StateRunning, StatePending:
 		delete(k.taskRegistry, task.ID)

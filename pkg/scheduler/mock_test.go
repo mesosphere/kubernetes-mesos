@@ -43,16 +43,6 @@ func (m *MockScheduler) createPodTask(ctx api.Context, pod *api.Pod) (task *podt
 	err = args.Error(1)
 	return
 }
-func (m *MockScheduler) getTask(taskId string) (task *podtask.T, currentState podtask.StateType) {
-	args := m.Called(taskId)
-	x := args.Get(0)
-	if x != nil {
-		task = x.(*podtask.T)
-	}
-	y := args.Get(1)
-	currentState = y.(podtask.StateType)
-	return
-}
 func (m *MockScheduler) offers() (f offers.Registry) {
 	args := m.Called()
 	x := args.Get(0)
@@ -61,23 +51,13 @@ func (m *MockScheduler) offers() (f offers.Registry) {
 	}
 	return
 }
-func (m *MockScheduler) registerPodTask(tin *podtask.T, ein error) (tout *podtask.T, eout error) {
-	args := m.Called(tin, ein)
+func (m *MockScheduler) tasks() (f podtask.Registry) {
+	args := m.Called()
 	x := args.Get(0)
 	if x != nil {
-		tout = x.(*podtask.T)
+		f = x.(podtask.Registry)
 	}
-	eout = args.Error(1)
 	return
-}
-func (m *MockScheduler) taskForPod(podID string) (taskID string, ok bool) {
-	args := m.Called(podID)
-	taskID = args.String(0)
-	ok = args.Bool(1)
-	return
-}
-func (m *MockScheduler) unregisterPodTask(task *podtask.T) {
-	m.Called(task)
 }
 func (m *MockScheduler) killTask(taskId string) error {
 	args := m.Called(taskId)

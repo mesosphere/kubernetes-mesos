@@ -14,11 +14,11 @@ K8S_CMD		:= \
                    ${KUBE_GO_PACKAGE}/cmd/kube-apiserver	\
                    ${KUBE_GO_PACKAGE}/cmd/kube-proxy
 
-CMD_DIRS := $(shell cd $(current_dir) && find ./cmd -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|sort|uniq|cut -f1 -d/ --complement)
+CMD_DIRS := $(shell cd $(current_dir) && find ./cmd -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|sort|uniq|sed -e 's~^[^/]*/~~g')
 
 FRAMEWORK_CMD	:= ${CMD_DIRS:%=${K8SM_GO_PACKAGE}/%}
 
-LIB_DIRS := $(shell cd $(current_dir) && find ./pkg -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|sort|uniq|cut -f1 -d/ --complement)
+LIB_DIRS := $(shell cd $(current_dir) && find ./pkg -type f -name '*.go'|sort|while read f; do echo -E "$$(dirname "$$f")"; done|sort|uniq|sed -e 's~^[^/]*/~~g')
 
 FRAMEWORK_LIB	:= ${LIB_DIRS:%=${K8SM_GO_PACKAGE}/%}
 TESTS_LOGV	?= 2
@@ -28,6 +28,9 @@ TESTS_VV        = $(shell for pkg in $(TESTS); do ls $$pkg/*.go | while read -r 
 GIT_VERSION_FILE := $(current_dir)/.kube-version
 
 SHELL		:= /bin/bash
+
+# applying patches requires bash 4+ so this variable may be specified with a full path to a newer version of the bash
+ALT_BASH_SHELL	?= /usr/local/bin/bash
 
 # a list of upstream projects for which we test the availability of patches
 PATCH_SCRIPT	:= $(current_dir)/hack/patches/apply.sh
@@ -39,6 +42,7 @@ DESTDIR		?= /target
 TAGS		?=
 
 BUILDDIR	?= $(current_dir)/_build
+GOPATH		:= $(shell uname | grep -e ^CYGWIN >/dev/null && cygpath --mixed "$(BUILDDIR)" || echo -E "$(BUILDDIR)")
 
 .PHONY: all error require-godep require-vendor install info bootstrap format test patch version test.v test.vv clean lint vet fix prepare
 
@@ -54,8 +58,8 @@ export KUBE_GO_PACKAGE
 export K8SM_GO_PACKAGE
 
 all: patch version
-	env GOPATH=$(BUILDDIR) go install $(K8S_CMD)
-	env GOPATH=$(BUILDDIR) go install -ldflags "$(shell cat $(GIT_VERSION_FILE))" $(FRAMEWORK_FLAGS) $(FRAMEWORK_CMD)
+	env GOPATH=$(GOPATH) go install $(K8S_CMD)
+	env GOPATH=$(GOPATH) go install -ldflags "$(shell cat $(GIT_VERSION_FILE))" $(FRAMEWORK_FLAGS) $(FRAMEWORK_CMD)
 
 error:
 	echo -E "$@: ${MSG}" >&2
@@ -71,22 +75,22 @@ clean:
 	test -n "$(BUILDDIR)" && rm -rf $(BUILDDIR)/*
 
 format:
-	env GOPATH=$(BUILDDIR) go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
+	env GOPATH=$(GOPATH) go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
 
 lint:
-	for pkg in $(FRAMEWORK_CMD) $(FRAMEWORK_LIB); do env GOPATH=$(BUILDDIR) go$@ $$pkg; done
+	for pkg in $(FRAMEWORK_CMD) $(FRAMEWORK_LIB); do env GOPATH=$(GOPATH) go$@ $$pkg; done
 
 vet fix:
-	env GOPATH=$(BUILDDIR) go $@ $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
+	env GOPATH=$(GOPATH) go $@ $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
 
 test test.v:
 	test "$@" = "test.v" && args="-test.v" || args=""; \
 		test -n "$(WITH_RACE)" && args="$$args -race" || true; \
-		env GOPATH=$(BUILDDIR) go test $$args $(TESTS:%=${K8SM_GO_PACKAGE}/%)
+		env GOPATH=$(GOPATH) go test $$args -tags unit_test $(TESTS:%=${K8SM_GO_PACKAGE}/%)
 
 test.vv:
 	test -n "$(WITH_RACE)" && args="$$args -race" || args=""; \
-		env GOPATH=$(BUILDDIR) go test -test.v $$args $(TESTS:%=${K8SM_GO_PACKAGE}/%) -logtostderr=true -vmodule=$(TESTS_VV)
+		env GOPATH=$(GOPATH) go test -test.v $$args -tags unit_test $(TESTS:%=${K8SM_GO_PACKAGE}/%) -logtostderr=true -vmodule=$(TESTS_VV)
 
 install: all
 	mkdir -p $(DESTDIR)
@@ -100,6 +104,7 @@ info:
 	@echo FRAMEWORK_LIB=$(FRAMEWORK_LIB)
 	@echo CMD_DIRS=$(CMD_DIRS)
 	@echo FRAMEWORK_CMD=$(FRAMEWORK_CMD)
+	@echo GOPATH=$(GOPATH)
 
 # noop for now; may be needed if vendoring, dep mgmt tooling changes
 bootstrap:
@@ -110,7 +115,7 @@ prepare:
 	(xdir=$$(dirname $(BUILDDIR)/src/$(K8SM_GO_PACKAGE)); mkdir -p $$xdir && cd $$xdir && ln -s $(current_dir) $$(basename $(K8SM_GO_PACKAGE)))
 
 patch: prepare $(PATCH_SCRIPT)
-	env GOPATH=$(BUILDDIR) $(PATCH_SCRIPT)
+	env GOPATH=$(GOPATH) USR_LOCAL_BASH=$(ALT_BASH_SHELL) $(PATCH_SCRIPT)
 
 version: $(GIT_VERSION_FILE)
 
