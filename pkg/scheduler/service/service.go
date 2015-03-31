@@ -27,7 +27,6 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -445,11 +444,15 @@ func (s *SchedulerServer) onFailover(schedulerProcess *ha.SchedulerProcess, hand
 		errCh <- err
 	}
 
-	var failoverOnce sync.Once
+	failingOver := int32(0)
 	runtime.On(schedulerProcess.Done(), func() {
+		if !atomic.CompareAndSwapInt32(&failingOver, 0, 1) {
+			log.V(1).Infof("scheduler process ended, already failing over")
+			return
+		}
 		select {
 		case <-schedulerProcess.Failover():
-			failoverOnce.Do(doFailover)
+			doFailover()
 		default:
 			if s.HA {
 				errCh <- fmt.Errorf("ha scheduler exiting instead of failing over")
@@ -460,7 +463,11 @@ func (s *SchedulerServer) onFailover(schedulerProcess *ha.SchedulerProcess, hand
 		}
 	})
 	runtime.OnOSSignal(makeFailoverSigChan(), func(_ os.Signal) {
-		failoverOnce.Do(doFailover)
+		if !atomic.CompareAndSwapInt32(&failingOver, 0, 1) {
+			log.V(1).Infof("scheduler process signalled, already failing over")
+			return
+		}
+		doFailover()
 	})
 	return <-errCh
 }
