@@ -177,7 +177,7 @@ func (k *inMemoryRegistry) UpdateStatus(status *mesos.TaskStatus) (*T, StateType
 	case mesos.TaskState_TASK_LOST:
 		k.handleTaskLost(task, state, status)
 	default:
-		log.Warning("unhandled task status update: %+v", status)
+		log.Warningf("unhandled status update for task: %v", taskId)
 	}
 	return task.Clone(), state
 }
@@ -202,24 +202,26 @@ func (k *inMemoryRegistry) handleTaskStarting(task *T, state StateType, status *
 			metrics.BindLatency.Observe(metrics.InMicroseconds(timeToBind))
 		}
 	default:
-		log.Warningf("Ignore status TASK_STARTING because the the task is not pending")
+		taskId := status.GetTaskId().GetValue()
+		log.Warningf("Ignore status TASK_STARTING because the task %v is not pending", taskId)
 	}
 }
 
 func (k *inMemoryRegistry) handleTaskRunning(task *T, state StateType, status *mesos.TaskStatus) {
+	taskId := status.GetTaskId().GetValue()
 	switch state {
 	case StatePending:
 		task.UpdatedTime = time.Now()
-		log.Infof("Received running status for pending task: %+v", status)
+		log.Infof("Received running status for pending task: %v", taskId)
 		fillRunningPodInfo(task, status)
 		task.State = StateRunning
 	case StateRunning:
 		task.UpdatedTime = time.Now()
-		log.V(2).Info("Ignore status TASK_RUNNING because the the task is already running")
+		log.V(2).Infof("Ignore status TASK_RUNNING because the task %v is already running", taskId)
 	case StateFinished:
-		log.Warningf("Ignore status TASK_RUNNING because the the task is already finished")
+		log.Warningf("Ignore status TASK_RUNNING because the task %v is already finished", taskId)
 	default:
-		log.Warningf("Ignore status TASK_RUNNING (%+v) because the the task is discarded", status.GetTaskId())
+		log.Warningf("Ignore status TASK_RUNNING because the task %v is discarded", taskId)
 	}
 }
 
@@ -247,19 +249,20 @@ func fillRunningPodInfo(task *T, taskStatus *mesos.TaskStatus) {
 }
 
 func (k *inMemoryRegistry) handleTaskFinished(task *T, state StateType, status *mesos.TaskStatus) {
+	taskId := status.GetTaskId().GetValue()
 	switch state {
 	case StatePending:
-		panic("Pending task finished, this couldn't happen")
+		panic(fmt.Sprintf("Pending task %v finished, this couldn't happen", taskId))
 	case StateRunning:
-		log.V(2).Infof("received finished status for running task: %+v", status)
+		log.V(2).Infof("received finished status for running task: %v", taskId)
 		delete(k.podToTask, task.podKey)
 		task.State = StateFinished
 		task.UpdatedTime = time.Now()
 		k.tasksFinished = k.recordFinishedTask(task.ID)
 	case StateFinished:
-		log.Warningf("Ignore status TASK_FINISHED because the the task is already finished")
+		log.Warningf("Ignore status TASK_FINISHED because the task %v is already finished", taskId)
 	default:
-		log.Warningf("Ignore status TASK_FINISHED because the the task is not running")
+		log.Warningf("Ignore status TASK_FINISHED because the task %v is not running", taskId)
 	}
 }
 
