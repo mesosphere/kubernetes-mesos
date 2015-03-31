@@ -112,6 +112,7 @@ type SchedulerServer struct {
 
 	executable string // path to the binary running this service
 	client     *client.Client
+	driver     atomic.Value // bindings.SchedulerDriver
 }
 
 // NewSchedulerServer creates a new SchedulerServer with default parameters
@@ -375,6 +376,19 @@ func (s *SchedulerServer) createAPIServerClient() (*client.Client, error) {
 	return c, nil
 }
 
+func (s *SchedulerServer) setDriver(driver bindings.SchedulerDriver, err error) {
+	if err == nil {
+		s.driver.Store(driver)
+	}
+}
+
+func (s *SchedulerServer) getDriver() (driver bindings.SchedulerDriver) {
+	if d := s.driver.Load(); d != nil {
+		driver = d.(bindings.SchedulerDriver)
+	}
+	return
+}
+
 func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 
 	schedulerProcess, dconfig, kpl, etcdClient, deferredInit, ehash := s.bootstrap(hks)
@@ -387,7 +401,6 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), nil))
 	}, defaultHttpBindInterval, schedulerProcess.Done())
 
-	var driver atomic.Value // bindings.SchedulerDriver
 	driverFactory := ha.DriverFactory(func() (drv bindings.SchedulerDriver, err error) {
 		log.V(1).Infoln("performing deferred initialization")
 		if err = deferredInit(); err == nil {
@@ -397,7 +410,7 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 			if dconfig.Framework.Id, err = s.fetchFrameworkID(etcdClient); err == nil {
 				log.V(1).Infoln("instantiating mesos scheduler driver")
 				drv, err = bindings.NewMesosSchedulerDriver(*dconfig)
-				driver.Store(drv)
+				s.setDriver(drv, err)
 			}
 		}
 		return
@@ -414,16 +427,7 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		schedulerProcess.Elect(driverFactory)
 	}
 	runtime.On(schedulerProcess.Elected(), kpl.Run)
-	return s.onFailover(schedulerProcess, func() error {
-		var drv bindings.SchedulerDriver
-		if d := driver.Load(); d != nil {
-			var ok bool
-			if drv, ok = d.(bindings.SchedulerDriver); !ok {
-				log.Warningf("wrong object type, expected bindings.SchedulerDriver not %T", d)
-			}
-		}
-		return s.failover(drv, hks)
-	})
+	return s.onFailover(schedulerProcess, func() error { return s.failover(s.getDriver(), hks) })
 }
 
 // watch the scheduler process for events and properly handle failover. never returns.
