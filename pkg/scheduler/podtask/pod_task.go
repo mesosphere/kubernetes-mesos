@@ -215,7 +215,7 @@ func New(ctx api.Context, id string, pod api.Pod, executor *mesos.ExecutorInfo) 
 		return nil, err
 	}
 	if id == "" {
-		id = "pod_" + uuid.NewUUID().String()
+		id = "pod." + uuid.NewUUID().String()
 	}
 	task := &T{
 		ID:       id,
