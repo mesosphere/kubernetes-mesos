@@ -1,4 +1,5 @@
 // +build darwin dragonfly freebsd linux netbsd openbsd
+// +build !unit_test
 
 package service
 

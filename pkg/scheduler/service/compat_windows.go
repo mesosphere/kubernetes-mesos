@@ -1,4 +1,5 @@
 // +build windows
+// +build !unit_test
 
 package service
 

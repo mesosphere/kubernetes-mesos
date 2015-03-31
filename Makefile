@@ -86,11 +86,11 @@ vet fix:
 test test.v:
 	test "$@" = "test.v" && args="-test.v" || args=""; \
 		test -n "$(WITH_RACE)" && args="$$args -race" || true; \
-		env GOPATH=$(GOPATH) go test $$args $(TESTS:%=${K8SM_GO_PACKAGE}/%)
+		env GOPATH=$(GOPATH) go test $$args -tags unit_test $(TESTS:%=${K8SM_GO_PACKAGE}/%)
 
 test.vv:
 	test -n "$(WITH_RACE)" && args="$$args -race" || args=""; \
-		env GOPATH=$(GOPATH) go test -test.v $$args $(TESTS:%=${K8SM_GO_PACKAGE}/%) -logtostderr=true -vmodule=$(TESTS_VV)
+		env GOPATH=$(GOPATH) go test -test.v $$args -tags unit_test $(TESTS:%=${K8SM_GO_PACKAGE}/%) -logtostderr=true -vmodule=$(TESTS_VV)
 
 install: all
 	mkdir -p $(DESTDIR)

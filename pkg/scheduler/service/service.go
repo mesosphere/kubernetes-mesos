@@ -114,6 +114,13 @@ type SchedulerServer struct {
 	driver     atomic.Value // bindings.SchedulerDriver
 }
 
+// useful for unit testing specific funcs
+type schedulerProcessInterface interface {
+	Done() <-chan struct{}
+	End()
+	Failover() <-chan struct{}
+}
+
 // NewSchedulerServer creates a new SchedulerServer with default parameters
 func NewSchedulerServer() *SchedulerServer {
 	s := SchedulerServer{
@@ -391,7 +398,6 @@ func (s *SchedulerServer) getDriver() (driver bindings.SchedulerDriver) {
 func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 
 	schedulerProcess, dconfig, kpl, etcdClient, deferredInit, ehash := s.bootstrap(hks)
-	schedulerProcess.Begin()
 
 	go s.serviceWriterLoop(schedulerProcess.Done())
 
@@ -426,48 +432,50 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		schedulerProcess.Elect(driverFactory)
 	}
 	runtime.On(schedulerProcess.Elected(), kpl.Run)
-	return s.onFailover(schedulerProcess, func() error { return s.failover(s.getDriver(), hks) })
+	return s.awaitFailover(schedulerProcess, func() error { return s.failover(s.getDriver(), hks) })
 }
 
-// watch the scheduler process for events and properly handle failover. never returns.
-func (s *SchedulerServer) onFailover(schedulerProcess *ha.SchedulerProcess, handler func() error) error {
+// watch the scheduler process for failover signals and properly handle such. may never return.
+func (s *SchedulerServer) awaitFailover(schedulerProcess schedulerProcessInterface, handler func() error) error {
 
 	// we only want to return the first error (if any), everyone else can block forever
 	errCh := make(chan error, 1)
-	doFailover := func() {
+	doFailover := func() error {
 		// we really don't expect handler to return, if it does something went seriously wrong
 		err := handler()
 		if err != nil {
-			schedulerProcess.End()
-			err = fmt.Errorf("failed to failover, scheduler will terminate: %v", err)
+			defer schedulerProcess.End()
+			err = fmt.Errorf("failover failed, scheduler will terminate: %v", err)
 		}
-		errCh <- err
+		return err
 	}
 
-	failingOver := int32(0)
+	// guard for failover signal processing, first signal processor wins
+	failoverLatch := &runtime.Latch{}
 	runtime.On(schedulerProcess.Done(), func() {
-		if !atomic.CompareAndSwapInt32(&failingOver, 0, 1) {
+		if !failoverLatch.Acquire() {
 			log.V(1).Infof("scheduler process ended, already failing over")
-			return
+			select {}
 		}
+		var err error
+		defer func() { errCh <- err }()
 		select {
 		case <-schedulerProcess.Failover():
-			doFailover()
+			err = doFailover()
 		default:
 			if s.HA {
-				errCh <- fmt.Errorf("ha scheduler exiting instead of failing over")
+				err = fmt.Errorf("ha scheduler exiting instead of failing over")
 			} else {
 				log.Infof("exiting scheduler")
-				errCh <- nil
 			}
 		}
 	})
 	runtime.OnOSSignal(makeFailoverSigChan(), func(_ os.Signal) {
-		if !atomic.CompareAndSwapInt32(&failingOver, 0, 1) {
+		if !failoverLatch.Acquire() {
 			log.V(1).Infof("scheduler process signalled, already failing over")
-			return
+			select {}
 		}
-		doFailover()
+		errCh <- doFailover()
 	})
 	return <-errCh
 }
@@ -561,6 +569,7 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 	}
 
 	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(schedulerProcess.Done()))
+	schedulerProcess.Begin()
 	return schedulerProcess, dconfig, kpl, etcdClient, func() (err error) {
 		if err = mesosPodScheduler.Init(schedulerProcess.Master(), kpl); err != nil {
 			err = fmt.Errorf("failed to initialize pod scheduler: %v", err)
