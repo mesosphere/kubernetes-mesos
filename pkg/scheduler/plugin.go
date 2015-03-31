@@ -176,7 +176,7 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *podtask.T) (e
 	}
 
 	if err = b.prepareTaskForLaunch(ctx, binding.Host, task, offerId); err == nil {
-		log.V(2).Infof("launching task : %v", task)
+		log.V(2).Infof("launching task: %v on slave %v for pod %v/%v", task.ID, task.Spec.SlaveID, task.Pod.Namespace, task.Pod.Name)
 		if err = b.api.launchTask(task); err == nil {
 			b.api.offers().Invalidate(offerId)
 			task.Set(podtask.Launched)
