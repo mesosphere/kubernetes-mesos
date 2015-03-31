@@ -6,39 +6,48 @@ import (
 	"time"
 
 	log "github.com/golang/glog"
+	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 )
+
+// logs a testing.Fatalf if the elapsed time d passes before signal chan done is closed
+func fatalAfter(t *testing.T, done <-chan struct{}, d time.Duration, msg string, args ...interface{}) {
+	select {
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf(msg, args...)
+	}
+}
+
+// logs a testing.Fatalf if the signal chan closes before the elapsed time d passes
+func fatalOn(t *testing.T, done <-chan struct{}, d time.Duration, msg string, args ...interface{}) {
+	select {
+	case <-done:
+		t.Fatalf(msg, args...)
+	case <-time.After(d):
+	}
+}
 
 func TestProc_manyEndings(t *testing.T) {
 	p := New()
-	p.End()
-	p.End()
-	p.End()
-	p.End()
-	p.End()
-	select {
-	case <-p.Done():
-	case <-time.After(1 * time.Second):
-		t.Fatalf("timed out waiting for process death")
+	const COUNT = 20
+	var wg sync.WaitGroup
+	wg.Add(COUNT)
+	for i := 0; i < COUNT; i++ {
+		runtime.Go(p.End).Then(wg.Done)
 	}
+	fatalAfter(t, runtime.Go(wg.Wait), 1*time.Second, "timed out waiting for loose End()s")
+	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
 }
 
 func TestProc_neverBegun(t *testing.T) {
 	p := New()
-	select {
-	case <-p.Done():
-		t.Fatalf("expected to time out waiting for process death")
-	case <-time.After(500 * time.Millisecond):
-	}
+	fatalOn(t, p.Done(), 500*time.Millisecond, "expected to time out waiting for process death")
 }
 
 func TestProc_halflife(t *testing.T) {
 	p := New()
 	p.End()
-	select {
-	case <-p.Done():
-	case <-time.After(1 * time.Second):
-		t.Fatalf("timed out waiting for process death")
-	}
+	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
 }
 
 func TestProc_beginTwice(t *testing.T) {
@@ -53,11 +62,7 @@ func TestProc_beginTwice(t *testing.T) {
 		p.Begin() // should be ignored
 	}()
 	p.End()
-	select {
-	case <-p.Done():
-	case <-time.After(1 * time.Second):
-		t.Fatalf("timed out waiting for process death")
-	}
+	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
 }
 
 func TestProc_singleAction(t *testing.T) {
@@ -78,25 +83,12 @@ func TestProc_singleAction(t *testing.T) {
 		}
 	}()
 
-	select {
-	case <-scheduled:
-	case <-time.After(1 * time.Second):
-		t.Fatalf("timed out waiting for deferred action to be scheduled")
-	}
-
-	select {
-	case <-called:
-	case <-time.After(1 * time.Second):
-		t.Fatalf("timed out waiting for deferred action to be invoked")
-	}
+	fatalAfter(t, scheduled, 1*time.Second, "timed out waiting for deferred action to be scheduled")
+	fatalAfter(t, called, 1*time.Second, "timed out waiting for deferred action to be invoked")
 
 	p.End()
 
-	select {
-	case <-p.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatalf("timed out waiting for process death")
-	}
+	fatalAfter(t, p.Done(), 2*time.Second, "timed out waiting for process death")
 }
 
 func TestProc_multiAction(t *testing.T) {
@@ -124,33 +116,16 @@ func TestProc_multiAction(t *testing.T) {
 		}
 	}
 
-	ch := make(chan struct{})
-	go func() {
-		defer close(ch)
-		called.Wait()
-	}()
-	select {
-	case <-ch:
-	case <-time.After(1 * time.Second):
-		t.Fatalf("timed out waiting for deferred actions to be invoked")
-	}
+	fatalAfter(t, runtime.Go(called.Wait), 1*time.Second, "timed out waiting for deferred actions to be invoked")
 
 	p.End()
 
-	select {
-	case <-p.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatalf("timed out waiting for process death")
-	}
+	fatalAfter(t, p.Done(), 2*time.Second, "timed out waiting for process death")
 }
 
 func TestProc_goodLifecycle(t *testing.T) {
 	p := New()
 	p.Begin()
 	p.End()
-	select {
-	case <-p.Done():
-	case <-time.After(1 * time.Second):
-		t.Fatalf("timed out waiting for process death")
-	}
+	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
 }
