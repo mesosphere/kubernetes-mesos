@@ -20,7 +20,7 @@ The following distro-specific steps for installing prerequisites assume that you
 $ apt-get -y install g++ make curl mercurial git
 
 $ (cd /usr/local &&
-  curl -L https://storage.googleapis.com/golang/go1.3.3.linux-amd64.tar.gz |
+  curl -L https://storage.googleapis.com/golang/go1.4.2.linux-amd64.tar.gz |
     tar xvz)
 
 $ export PATH=/usr/local/go/bin:$PATH
