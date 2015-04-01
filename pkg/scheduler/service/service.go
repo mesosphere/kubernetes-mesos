@@ -397,7 +397,7 @@ func (s *SchedulerServer) getDriver() (driver bindings.SchedulerDriver) {
 
 func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 
-	schedulerProcess, dconfig, kpl, etcdClient, deferredInit, ehash := s.bootstrap(hks)
+	schedulerProcess, driverFactory, etcdClient, ehash := s.bootstrap(hks)
 
 	go s.serviceWriterLoop(schedulerProcess.Done())
 
@@ -406,20 +406,6 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), nil))
 	}, defaultHttpBindInterval, schedulerProcess.Done())
 
-	driverFactory := ha.DriverFactory(func() (drv bindings.SchedulerDriver, err error) {
-		log.V(1).Infoln("performing deferred initialization")
-		if err = deferredInit(); err == nil {
-			log.V(1).Infoln("deferred init complete")
-			// defer obtaining framework ID to prevent multiple schedulers
-			// from overwriting each other's framework IDs
-			if dconfig.Framework.Id, err = s.fetchFrameworkID(etcdClient); err == nil {
-				log.V(1).Infoln("instantiating mesos scheduler driver")
-				drv, err = bindings.NewMesosSchedulerDriver(*dconfig)
-				s.setDriver(drv, err)
-			}
-		}
-		return
-	})
 	if s.HA {
 		validation := ha.ValidationFunc(validateLeadershipTransition)
 		srv := ha.NewCandidate(schedulerProcess, driverFactory, validation)
@@ -431,7 +417,6 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		log.Infoln("self-electing in non-HA mode")
 		schedulerProcess.Elect(driverFactory)
 	}
-	runtime.On(schedulerProcess.Elected(), kpl.Run)
 	return s.awaitFailover(schedulerProcess, func() error { return s.failover(s.getDriver(), hks) })
 }
 
@@ -493,7 +478,7 @@ func validateLeadershipTransition(desired, current string) {
 	}
 }
 
-func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess, *bindings.DriverConfig, scheduler.PluginInterface, tools.EtcdClient, func() error, uint64) {
+func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess, ha.DriverFactory, tools.EtcdClient, uint64) {
 
 	s.FrameworkName = strings.TrimSpace(s.FrameworkName)
 	if s.FrameworkName == "" {
@@ -569,13 +554,33 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 	}
 
 	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(schedulerProcess.Done()))
+	runtime.On(mesosPodScheduler.Registration(), kpl.Run)
+
 	schedulerProcess.Begin()
-	return schedulerProcess, dconfig, kpl, etcdClient, func() (err error) {
+
+	deferredInit := func() (err error) {
 		if err = mesosPodScheduler.Init(schedulerProcess.Master(), kpl); err != nil {
 			err = fmt.Errorf("failed to initialize pod scheduler: %v", err)
 		}
 		return
-	}, ehash
+	}
+
+	driverFactory := ha.DriverFactory(func() (drv bindings.SchedulerDriver, err error) {
+		log.V(1).Infoln("performing deferred initialization")
+		if err = deferredInit(); err == nil {
+			log.V(1).Infoln("deferred init complete")
+			// defer obtaining framework ID to prevent multiple schedulers
+			// from overwriting each other's framework IDs
+			if dconfig.Framework.Id, err = s.fetchFrameworkID(etcdClient); err == nil {
+				log.V(1).Infoln("instantiating mesos scheduler driver")
+				drv, err = bindings.NewMesosSchedulerDriver(*dconfig)
+				s.setDriver(drv, err)
+			}
+		}
+		return
+	})
+
+	return schedulerProcess, driverFactory, etcdClient, ehash
 }
 
 func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks *hyperkube.Server) error {

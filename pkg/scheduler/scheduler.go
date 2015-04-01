@@ -94,6 +94,7 @@ type KubernetesScheduler struct {
 	frameworkId    *mesos.FrameworkID
 	masterInfo     *mesos.MasterInfo
 	registered     bool
+	registration   chan struct{} // signal chan that closes upon first successful registration
 	onRegistration sync.Once
 	offers         offers.Registry
 
@@ -170,6 +171,7 @@ func New(config Config) *KubernetesScheduler {
 		slaveIDs:          make(map[string]string),
 		taskRegistry:      podtask.NewInMemoryRegistry(),
 		reconcileCooldown: config.ReconcileCooldown,
+		registration:      make(chan struct{}),
 		asRegisteredMaster: proc.DoerFunc(func(proc.Action) error {
 			return fmt.Errorf("cannot execute action with unregistered scheduler")
 		}),
@@ -263,6 +265,10 @@ func (k *KubernetesScheduler) InstallDebugHandlers() {
 	})
 }
 
+func (k *KubernetesScheduler) Registration() <-chan struct{} {
+	return k.registration
+}
+
 // Registered is called when the scheduler registered with the master successfully.
 func (k *KubernetesScheduler) Registered(drv bindings.SchedulerDriver, fid *mesos.FrameworkID, mi *mesos.MasterInfo) {
 	log.Infof("Scheduler registered with the master: %v with frameworkId: %v\n", mi, fid)
@@ -298,6 +304,8 @@ func (k *KubernetesScheduler) Reregistered(drv bindings.SchedulerDriver, mi *mes
 
 // perform one-time initialization actions upon the first registration event received from Mesos.
 func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDriver) {
+	defer close(k.registration)
+
 	if k.failoverTimeout > 0 {
 		refreshInterval := defaultFrameworkIdRefreshInterval * time.Second
 		if k.failoverTimeout < defaultFrameworkIdRefreshInterval {
