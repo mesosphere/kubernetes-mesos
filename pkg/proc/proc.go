@@ -19,6 +19,10 @@ type procImpl struct {
 }
 
 func New() ProcessInit {
+	return newProcImpl()
+}
+
+func newProcImpl() *procImpl {
 	return &procImpl{
 		backlog:   make(chan Action, 1024), // TODO(jdef) extract backlog
 		exec:      make(chan Action),       // intentionally unbuffered
