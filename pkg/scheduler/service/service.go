@@ -24,11 +24,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"os/signal"
 	"os/user"
 	"strconv"
 	"strings"
-	"syscall"
+	"sync/atomic"
 	"time"
 
 	_ "github.com/mesosphere/kubernetes-mesos/pkg/profile"
@@ -54,6 +53,7 @@ import (
 	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/election"
 	execcfg "github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
+	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
 	schedcfg "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/ha"
@@ -69,6 +69,7 @@ const (
 	defaultMesosUser         = "root" // should have privs to execute docker and iptables commands
 	defaultReconcileInterval = 300    // 5m default task reconciliation interval
 	defaultReconcileCooldown = 15 * time.Second
+	defaultHttpBindInterval  = 5 * time.Second
 )
 
 type SchedulerServer struct {
@@ -110,6 +111,14 @@ type SchedulerServer struct {
 
 	executable string // path to the binary running this service
 	client     *client.Client
+	driver     atomic.Value // bindings.SchedulerDriver
+}
+
+// useful for unit testing specific funcs
+type schedulerProcessInterface interface {
+	Done() <-chan struct{}
+	End()
+	Failover() <-chan struct{}
 }
 
 // NewSchedulerServer creates a new SchedulerServer with default parameters
@@ -373,30 +382,30 @@ func (s *SchedulerServer) createAPIServerClient() (*client.Client, error) {
 	return c, nil
 }
 
+func (s *SchedulerServer) setDriver(driver bindings.SchedulerDriver, err error) {
+	if err == nil {
+		s.driver.Store(driver)
+	}
+}
+
+func (s *SchedulerServer) getDriver() (driver bindings.SchedulerDriver) {
+	if d := s.driver.Load(); d != nil {
+		driver = d.(bindings.SchedulerDriver)
+	}
+	return
+}
+
 func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 
-	schedulerProcess, dconfig, kpl, etcdClient, deferredInit, ehash := s.bootstrap(hks)
-	schedulerProcess.Begin()
+	schedulerProcess, driverFactory, etcdClient, ehash := s.bootstrap(hks)
 
 	go s.serviceWriterLoop(schedulerProcess.Done())
 
-	go util.Until(func() {
+	go runtime.Until(func() {
 		log.V(1).Info("Starting HTTP interface")
 		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), nil))
-	}, 5*time.Second, schedulerProcess.Done()) // TODO(jdef) extract constant
+	}, defaultHttpBindInterval, schedulerProcess.Done())
 
-	var driver bindings.SchedulerDriver
-	driverFactory := ha.DriverFactory(func() (drv bindings.SchedulerDriver, err error) {
-		if err = deferredInit(); err == nil {
-			// defer obtaining framework ID to prevent multiple schedulers
-			// from overwriting each other's framework IDs
-			if dconfig.Framework.Id, err = s.fetchFrameworkID(etcdClient); err == nil {
-				drv, err = bindings.NewMesosSchedulerDriver(*dconfig)
-				driver = drv
-			}
-		}
-		return
-	})
 	if s.HA {
 		validation := ha.ValidationFunc(validateLeadershipTransition)
 		srv := ha.NewCandidate(schedulerProcess, driverFactory, validation)
@@ -405,40 +414,55 @@ func (s *SchedulerServer) Run(hks *hyperkube.Server, _ []string) error {
 		log.Infof("registering for election at %v with id %v", path, sid)
 		go election.Notify(election.NewEtcdMasterElector(etcdClient), path, sid, srv)
 	} else {
+		log.Infoln("self-electing in non-HA mode")
 		schedulerProcess.Elect(driverFactory)
 	}
+	return s.awaitFailover(schedulerProcess, func() error { return s.failover(s.getDriver(), hks) })
+}
 
-	failoverSignal := make(chan os.Signal, 1)
-	signal.Notify(failoverSignal, syscall.SIGUSR1)
+// watch the scheduler process for failover signals and properly handle such. may never return.
+func (s *SchedulerServer) awaitFailover(schedulerProcess schedulerProcessInterface, handler func() error) error {
 
-	select {
-	case <-schedulerProcess.Elected():
-		log.V(1).Info("Spinning up scheduling loop")
-		kpl.Run()
+	// we only want to return the first error (if any), everyone else can block forever
+	errCh := make(chan error, 1)
+	doFailover := func() error {
+		// we really don't expect handler to return, if it does something went seriously wrong
+		err := handler()
+		if err != nil {
+			defer schedulerProcess.End()
+			err = fmt.Errorf("failover failed, scheduler will terminate: %v", err)
+		}
+		return err
+	}
+
+	// guard for failover signal processing, first signal processor wins
+	failoverLatch := &runtime.Latch{}
+	runtime.On(schedulerProcess.Done(), func() {
+		if !failoverLatch.Acquire() {
+			log.V(1).Infof("scheduler process ended, already failing over")
+			select {}
+		}
+		var err error
+		defer func() { errCh <- err }()
 		select {
-		case <-failoverSignal:
-			log.Infoln("received failover signal")
-			goto doFailover
-		case <-schedulerProcess.Done():
-			select {
-			case <-schedulerProcess.Failover():
-				goto doFailover
-			default:
-				//TODO(jdef) should probably WARN here in HA mode
-				log.Infof("scheduler process exited without failover")
+		case <-schedulerProcess.Failover():
+			err = doFailover()
+		default:
+			if s.HA {
+				err = fmt.Errorf("ha scheduler exiting instead of failing over")
+			} else {
+				log.Infof("exiting scheduler")
 			}
 		}
-	case <-schedulerProcess.Done():
-		log.Fatalf("scheduler process exited abnormally, before election")
-	}
-	os.Exit(0)
-
-doFailover:
-	if err := s.failover(driver, hks); err != nil {
-		schedulerProcess.End()
-		log.Fatalf("failed to failover, scheduler will terminate: %v", err)
-	}
-	select {} // will never arrive here
+	})
+	runtime.OnOSSignal(makeFailoverSigChan(), func(_ os.Signal) {
+		if !failoverLatch.Acquire() {
+			log.V(1).Infof("scheduler process signalled, already failing over")
+			select {}
+		}
+		errCh <- doFailover()
+	})
+	return <-errCh
 }
 
 func validateLeadershipTransition(desired, current string) {
@@ -454,7 +478,7 @@ func validateLeadershipTransition(desired, current string) {
 	}
 }
 
-func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess, *bindings.DriverConfig, scheduler.PluginInterface, tools.EtcdClient, func() error, uint64) {
+func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess, ha.DriverFactory, tools.EtcdClient, uint64) {
 
 	s.FrameworkName = strings.TrimSpace(s.FrameworkName)
 	if s.FrameworkName == "" {
@@ -462,6 +486,7 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 	}
 
 	metrics.Register()
+	runtime.Register()
 	http.Handle("/metrics", prometheus.Handler())
 
 	etcdClient := kubelet.EtcdClientOrDie(s.EtcdServerList, s.EtcdConfigFile)
@@ -507,7 +532,6 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 	})
 
 	schedulerProcess := ha.New(mesosPodScheduler)
-
 	masterUri := kmcloud.MasterURI()
 	info, cred, err := s.buildFrameworkInfo()
 	if err != nil {
@@ -530,20 +554,43 @@ func (s *SchedulerServer) bootstrap(hks *hyperkube.Server) (*ha.SchedulerProcess
 	}
 
 	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(schedulerProcess.Done()))
-	return schedulerProcess, dconfig, kpl, etcdClient, func() (err error) {
+	runtime.On(mesosPodScheduler.Registration(), kpl.Run)
+
+	schedulerProcess.Begin()
+
+	deferredInit := func() (err error) {
 		if err = mesosPodScheduler.Init(schedulerProcess.Master(), kpl); err != nil {
 			err = fmt.Errorf("failed to initialize pod scheduler: %v", err)
 		}
 		return
-	}, ehash
+	}
+
+	driverFactory := ha.DriverFactory(func() (drv bindings.SchedulerDriver, err error) {
+		log.V(1).Infoln("performing deferred initialization")
+		if err = deferredInit(); err == nil {
+			log.V(1).Infoln("deferred init complete")
+			// defer obtaining framework ID to prevent multiple schedulers
+			// from overwriting each other's framework IDs
+			if dconfig.Framework.Id, err = s.fetchFrameworkID(etcdClient); err == nil {
+				log.V(1).Infoln("instantiating mesos scheduler driver")
+				drv, err = bindings.NewMesosSchedulerDriver(*dconfig)
+				s.setDriver(drv, err)
+			}
+		}
+		return
+	})
+
+	return schedulerProcess, driverFactory, etcdClient, ehash
 }
 
 func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks *hyperkube.Server) error {
-	stat, err := driver.Stop(true)
-	if stat != mesos.Status_DRIVER_STOPPED {
-		return fmt.Errorf("failed to stop driver for failover, received unexpected status code: %v", stat)
-	} else if err != nil {
-		return err
+	if driver != nil {
+		stat, err := driver.Stop(true)
+		if stat != mesos.Status_DRIVER_STOPPED {
+			return fmt.Errorf("failed to stop driver for failover, received unexpected status code: %v", stat)
+		} else if err != nil {
+			return err
+		}
 	}
 
 	// there's no guarantee that all goroutines are actually programmed intelligently with 'done'
@@ -579,9 +626,7 @@ func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks *hyperku
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true, // disown the spawned scheduler
-	}
+	cmd.SysProcAttr = makeDisownedProcAttr()
 
 	// TODO(jdef) pass in a pipe FD so that we can block, waiting for the child proc to be ready
 	//cmd.ExtraFiles = []*os.File{}

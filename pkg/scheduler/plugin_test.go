@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	mesos "github.com/mesos/mesos-go/mesosproto"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"github.com/stretchr/testify/assert"
@@ -12,7 +13,9 @@ import (
 func TestDeleteOne_NonexistentPod(t *testing.T) {
 	assert := assert.New(t)
 	obj := &MockScheduler{}
-	obj.On("taskForPod", "/pods/default/foo").Return("", false)
+	reg := podtask.NewInMemoryRegistry()
+	obj.On("tasks").Return(reg)
+
 	qr := newQueuer(nil)
 	assert.Equal(0, len(qr.podQueue.List()))
 	d := &deleter{
@@ -32,19 +35,19 @@ func TestDeleteOne_NonexistentPod(t *testing.T) {
 func TestDeleteOne_PendingPod(t *testing.T) {
 	assert := assert.New(t)
 	obj := &MockScheduler{}
-	podKey := "/pods/default/foo"
+	reg := podtask.NewInMemoryRegistry()
+	obj.On("tasks").Return(reg)
+
 	pod := &Pod{Pod: &api.Pod{
 		ObjectMeta: api.ObjectMeta{
 			Name:      "foo",
 			UID:       "foo0",
 			Namespace: api.NamespaceDefault,
 		}}}
-	task := &podtask.T{ID: "bar", Pod: pod.Pod}
-
-	// set expectations
-	obj.On("taskForPod", podKey).Return(task.ID, true)
-	obj.On("getTask", task.ID).Return(task, podtask.StatePending)
-	obj.On("unregisterPodTask", task).Return()
+	_, err := reg.Register(podtask.New(api.NewDefaultContext(), "bar", *pod.Pod, &mesos.ExecutorInfo{}))
+	if err != nil {
+		t.Fatalf("failed to create task: %v", err)
+	}
 
 	// preconditions
 	qr := newQueuer(nil)
@@ -58,7 +61,7 @@ func TestDeleteOne_PendingPod(t *testing.T) {
 		api: obj,
 		qr:  qr,
 	}
-	err := d.deleteOne(pod)
+	err = d.deleteOne(pod)
 	assert.Nil(err)
 	_, found = qr.podQueue.Get("foo0")
 	assert.False(found)
@@ -69,21 +72,25 @@ func TestDeleteOne_PendingPod(t *testing.T) {
 func TestDeleteOne_Running(t *testing.T) {
 	assert := assert.New(t)
 	obj := &MockScheduler{}
+	reg := podtask.NewInMemoryRegistry()
+	obj.On("tasks").Return(reg)
 
-	podKey := "/pods/default/foo"
 	pod := &Pod{Pod: &api.Pod{
 		ObjectMeta: api.ObjectMeta{
 			Name:      "foo",
 			UID:       "foo0",
 			Namespace: api.NamespaceDefault,
 		}}}
-	task := &podtask.T{ID: "bar", Pod: pod.Pod, Flags: make(map[podtask.FlagType]struct{})}
-	task.Set(podtask.Launched)
+	task, err := reg.Register(podtask.New(api.NewDefaultContext(), "bar", *pod.Pod, &mesos.ExecutorInfo{}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
-	// set expectations
-	obj.On("taskForPod", podKey).Return(task.ID, true)
-	obj.On("getTask", task.ID).Return(task, podtask.StatePending)
-	obj.On("killTask", task.ID).Return(nil)
+	task.Set(podtask.Launched)
+	err = reg.Update(task)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// preconditions
 	qr := newQueuer(nil)
@@ -92,44 +99,18 @@ func TestDeleteOne_Running(t *testing.T) {
 	_, found := qr.podQueue.Get("default/foo")
 	assert.True(found)
 
+	obj.On("killTask", task.ID).Return(nil)
+
 	// exec & post conditions
 	d := &deleter{
 		api: obj,
 		qr:  qr,
 	}
-	err := d.deleteOne(pod)
+	err = d.deleteOne(pod)
 	assert.Nil(err)
 	_, found = qr.podQueue.Get("foo0")
 	assert.False(found)
 	assert.Equal(0, len(qr.podQueue.List()))
-	obj.AssertExpectations(t)
-}
-
-func TestDeleteOne_Unknown(t *testing.T) {
-	assert := assert.New(t)
-	obj := &MockScheduler{}
-
-	podKey := "/pods/default/foo"
-	pod := &Pod{Pod: &api.Pod{
-		ObjectMeta: api.ObjectMeta{
-			Name:      "foo",
-			UID:       "foo0",
-			Namespace: api.NamespaceDefault,
-		}}}
-	taskId := "bar123"
-
-	// set expectations
-	obj.On("taskForPod", podKey).Return(taskId, true)
-	obj.On("getTask", taskId).Return(nil, podtask.StateUnknown)
-
-	// exec & post conditions
-	d := &deleter{
-		api: obj,
-		qr:  newQueuer(nil),
-	}
-	err := d.deleteOne(pod)
-	assert.Equal(err, noSuchTaskErr)
-	assert.Equal(0, len(d.qr.podQueue.List()))
 	obj.AssertExpectations(t)
 }
 

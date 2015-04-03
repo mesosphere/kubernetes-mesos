@@ -27,6 +27,7 @@ type slowService struct {
 	// We explicitly have no lock to prove that
 	// Start and Stop are not called concurrently.
 	changes chan<- bool
+	done    <-chan struct{}
 }
 
 func (s *slowService) Validate(d, c Master) {
@@ -34,6 +35,11 @@ func (s *slowService) Validate(d, c Master) {
 }
 
 func (s *slowService) Start() {
+	select {
+	case <-s.done:
+		return // avoid writing to closed changes chan
+	default:
+	}
 	if s.on {
 		s.t.Errorf("started already on service")
 	}
@@ -43,6 +49,11 @@ func (s *slowService) Start() {
 }
 
 func (s *slowService) Stop() {
+	select {
+	case <-s.done:
+		return // avoid writing to closed changes chan
+	default:
+	}
 	if !s.on {
 		s.t.Errorf("stopped already off service")
 	}
@@ -54,10 +65,10 @@ func (s *slowService) Stop() {
 func Test(t *testing.T) {
 	m := NewFake()
 	changes := make(chan bool, 1500)
-	s := &slowService{t: t, changes: changes}
+	done := make(chan struct{})
+	s := &slowService{t: t, changes: changes, done: done}
 	go Notify(m, "", "me", s)
 
-	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 500; i++ {
 			for _, key := range []string{"me", "notme", "alsonotme"} {
@@ -69,6 +80,7 @@ func Test(t *testing.T) {
 
 	<-done
 	time.Sleep(8 * time.Millisecond)
+
 	close(changes)
 
 	changeList := []bool{}

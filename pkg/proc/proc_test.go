@@ -1,169 +1,131 @@
 package proc
 
 import (
-	"github.com/stretchr/testify/assert"
 	"sync"
 	"testing"
 	"time"
+
+	log "github.com/golang/glog"
+	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 )
 
-func TestNewProcImpl(t *testing.T) {
-	proc := newProcImpl()
-	assert.Equal(t, 1024, cap(proc.backlog))
-	assert.Equal(t, 0, cap(proc.exec))
-}
-
-func TestBeforeProcBegin(t *testing.T) {
-	proc := newProcImpl()
-	ch := make(chan struct{})
-	go func() {
-		proc.exec <- func() {
-			close(ch)
-		}
-	}()
+// logs a testing.Fatalf if the elapsed time d passes before signal chan done is closed
+func fatalAfter(t *testing.T, done <-chan struct{}, d time.Duration, msg string, args ...interface{}) {
 	select {
-	case <-time.After(time.Millisecond):
-	case <-ch:
-		t.Error("Process tasks executed before Begin()")
+	case <-done:
+	case <-time.After(d):
+		t.Fatalf(msg, args...)
 	}
 }
 
-func TestProcBegin(t *testing.T) {
-	a := false
-	proc := newProcImpl()
-	proc.Begin()
-	ch := make(chan struct{})
-
-	go func() {
-		proc.backlog <- func() {
-			defer close(ch)
-			a = true
-		}
-	}()
-
+// logs a testing.Fatalf if the signal chan closes before the elapsed time d passes
+func fatalOn(t *testing.T, done <-chan struct{}, d time.Duration, msg string, args ...interface{}) {
 	select {
-	case <-ch:
-		assert.Equal(t, true, a)
-	case <-time.After(time.Millisecond * 5):
-		t.Error("Not processing actions even after Begin called.")
+	case <-done:
+		t.Fatalf(msg, args...)
+	case <-time.After(d):
 	}
 }
 
-func TestProcEnd(t *testing.T) {
-	proc := newProcImpl()
-	proc.Begin()
-	go func() {
-		proc.backlog <- func() {
-			proc.End()
-		}
-	}()
-
-	select {
-	case <-proc.Done():
-		assert.True(t, len(proc.backlog) == 0) // was backlog emptied
-	case <-time.After(time.Millisecond * 5):
-		t.Errorf("Done is not signaled when proc.End() called.")
-	}
-}
-
-func TestProcDoNow(t *testing.T) {
-	proc := newProcImpl()
-	proc.Begin()
-	ch := make(chan struct{})
-	go func() {
-		err := proc.DoNow(func() {
-			close(ch)
-		})
-		assert.NoError(t, err)
-	}()
-
-	select {
-	case <-ch:
-		go proc.End()
-		select {
-		case <-proc.Done():
-		case <-time.After(time.Millisecond):
-			t.Error("Waited to long for Done, after End() called.")
-		}
-	case <-time.After(time.Millisecond * 5):
-		t.Error("Waited too long for DoNow() to execute Action.")
-	}
-}
-
-func TestProcDoLater(t *testing.T) {
-	proc := newProcImpl()
-	proc.Begin()
+func TestProc_manyEndings(t *testing.T) {
+	p := New()
+	const COUNT = 20
 	var wg sync.WaitGroup
-	ch := make(chan struct{}, 1)
-
-	// queue up 100 actions, make sure they all get done.
-	go func() {
-		for i := 0; i < 100; i++ {
-			wg.Add(1)
-			err := proc.DoLater(func() {
-				wg.Done()
-			})
-			assert.NoError(t, err)
-		}
-	}()
-
-	go func() {
-		wg.Wait()
-		ch <- struct{}{}
-	}()
-
-	select {
-	case <-ch:
-	case <-time.After(time.Millisecond * 5):
-		t.Error("Tired of waiting for WG.")
+	wg.Add(COUNT)
+	for i := 0; i < COUNT; i++ {
+		runtime.Go(p.End).Then(wg.Done)
 	}
+	fatalAfter(t, runtime.Go(wg.Wait), 1*time.Second, "timed out waiting for loose End()s")
+	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
 }
 
-func TestProcDo(t *testing.T) {
-	proc := newProcImpl()
-	proc.Begin()
-	var wg sync.WaitGroup
-	// queue up 100 actions, make sure they all get done.
-	go func() {
-		for i := 0; i < 100; i++ {
-			wg.Add(1)
-			err := proc.Do(func() {
-				wg.Done()
-			})
-			assert.NoError(t, err)
-		}
-	}()
-
-	ch := make(chan struct{}, 1)
-	go func() {
-		wg.Wait()
-		ch <- struct{}{}
-	}()
-
-	select {
-	case <-ch:
-	case <-time.After(time.Millisecond * 5):
-		t.Error("Tired of waiting for WG.")
-	}
+func TestProc_neverBegun(t *testing.T) {
+	p := New()
+	fatalOn(t, p.Done(), 500*time.Millisecond, "expected to time out waiting for process death")
 }
 
-// TODO (vvivien) comeback to this test.
-// ProcAdapter does not seem to Begin() to start
-func TestProcAdapterDo(t *testing.T) {
-	procImpl := newProcImpl()
-	proc := DoWith(procImpl, procImpl)
-	ch := make(chan struct{}, 1)
+func TestProc_halflife(t *testing.T) {
+	p := New()
+	p.End()
+	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
+}
+
+func TestProc_beginTwice(t *testing.T) {
+	p := New()
+	p.Begin()
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Fatalf("expected panic because Begin() was invoked more than once")
+			}
+		}()
+		p.Begin() // should be ignored
+	}()
+	p.End()
+	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
+}
+
+func TestProc_singleAction(t *testing.T) {
+	p := New()
+	p.Begin()
+	scheduled := make(chan struct{})
+	called := make(chan struct{})
+
 	go func() {
-		err := proc.Do(func() {
-			ch <- struct{}{}
+		log.Infof("do'ing deferred action")
+		defer close(scheduled)
+		err := p.Do(func() {
+			defer close(called)
+			log.Infof("deferred action invoked")
 		})
-		assert.NoError(t, err)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	}()
 
-	// channel ch not signaled.
-	// select {
-	// case <-ch:
-	// case <-time.After(time.Millisecond * 5):
-	// 	t.Error("Tired of waiting for WG.")
-	// }
+	fatalAfter(t, scheduled, 1*time.Second, "timed out waiting for deferred action to be scheduled")
+	fatalAfter(t, called, 1*time.Second, "timed out waiting for deferred action to be invoked")
+
+	p.End()
+
+	fatalAfter(t, p.Done(), 2*time.Second, "timed out waiting for process death")
+}
+
+func TestProc_multiAction(t *testing.T) {
+	p := New()
+	p.Begin()
+	const COUNT = 10
+	var called sync.WaitGroup
+	called.Add(COUNT)
+
+	// test FIFO property
+	next := 0
+	for i := 0; i < COUNT; i++ {
+		log.Infof("do'ing deferred action %d", i)
+		idx := i
+		err := p.Do(func() {
+			defer called.Done()
+			log.Infof("deferred action invoked")
+			if next != idx {
+				t.Fatalf("expected index %d instead of %d", idx, next)
+			}
+			next++
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	fatalAfter(t, runtime.Go(called.Wait), 1*time.Second, "timed out waiting for deferred actions to be invoked")
+
+	p.End()
+
+	fatalAfter(t, p.Done(), 2*time.Second, "timed out waiting for process death")
+}
+
+func TestProc_goodLifecycle(t *testing.T) {
+	p := New()
+	p.Begin()
+	p.End()
+	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
 }
