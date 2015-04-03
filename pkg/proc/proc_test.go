@@ -2,6 +2,7 @@ package proc
 
 import (
 	"github.com/stretchr/testify/assert"
+	"sync"
 	"testing"
 	"time"
 )
@@ -23,7 +24,7 @@ func TestBeforeProcBegin(t *testing.T) {
 	select {
 	case <-time.After(time.Millisecond):
 	case <-ch:
-		t.Fatalf("Process tasks executed before Begin()")
+		t.Error("Process tasks executed before Begin()")
 	}
 }
 
@@ -35,8 +36,8 @@ func TestProcBegin(t *testing.T) {
 
 	go func() {
 		proc.backlog <- func() {
+			defer close(ch)
 			a = true
-			close(ch)
 		}
 	}()
 
@@ -44,6 +45,70 @@ func TestProcBegin(t *testing.T) {
 	case <-ch:
 		assert.Equal(t, true, a)
 	case <-time.After(time.Millisecond * 5):
-		t.Fatal("Not processing actions even after Begin called.")
+		t.Error("Not processing actions even after Begin called.")
 	}
+}
+
+func TestProcEnd(t *testing.T) {
+	proc := newProcImpl()
+	proc.Begin()
+	go func() {
+		proc.backlog <- func() {
+			proc.End()
+		}
+	}()
+
+	select {
+	case <-proc.Done():
+		assert.True(t, len(proc.backlog) == 0) // was backlog emptied
+	case <-time.After(time.Millisecond * 5):
+		t.Errorf("Done is not signaled when proc.End() called.")
+	}
+}
+
+func TestProcDoNow(t *testing.T) {
+	proc := newProcImpl()
+	proc.Begin()
+	go proc.DoNow(func() {
+		proc.End()
+	})
+
+	select {
+	case <-proc.Done():
+	case <-time.After(time.Millisecond * 5):
+		t.Error("DoNow() not firing")
+	}
+}
+
+func TestProcDoLater(t *testing.T) {
+	proc := newProcImpl()
+	proc.Begin()
+	var wg sync.WaitGroup
+	// queue up 100 actions
+	go func() {
+		for i := 0; i < 100; i++ {
+			wg.Add(i)
+			proc.DoLater(func() {
+				wg.Done()
+			})
+		}
+	}()
+
+	wg.Wait()
+}
+
+func TestProcDo(t *testing.T) {
+	proc := newProcImpl()
+	proc.Begin()
+	var wg sync.WaitGroup
+	go func() {
+		for i := 0; i < 100; i++ {
+			wg.Add(i)
+			proc.Do(func() {
+				wg.Done()
+			})
+		}
+	}()
+
+	wg.Wait()
 }
