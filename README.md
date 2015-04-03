@@ -6,6 +6,7 @@ When [Google Kubernetes][2] meets [Apache Mesos][3]
 
 [![GoDoc] (https://godoc.org/github.com/mesosphere/kubernetes-mesos?status.png)](https://godoc.org/github.com/mesosphere/kubernetes-mesos)
 [![Build Status](https://travis-ci.org/mesosphere/kubernetes-mesos.svg)](https://travis-ci.org/mesosphere/kubernetes-mesos)
+[![Coverage Status](https://coveralls.io/repos/mesosphere/kubernetes-mesos/badge.svg)](https://coveralls.io/r/mesosphere/kubernetes-mesos)
 
 Kubernetes and Mesos are a match made in heaven.
 Kubernetes enables the Pod, an abstraction that represents a group of co-located containers, along with Labels for service discovery, load-balancing, and replication control.
