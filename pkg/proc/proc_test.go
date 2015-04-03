@@ -69,14 +69,24 @@ func TestProcEnd(t *testing.T) {
 func TestProcDoNow(t *testing.T) {
 	proc := newProcImpl()
 	proc.Begin()
-	go proc.DoNow(func() {
-		proc.End()
-	})
+	ch := make(chan struct{})
+	go func() {
+		err := proc.DoNow(func() {
+			close(ch)
+		})
+		assert.NoError(t, err)
+	}()
 
 	select {
-	case <-proc.Done():
+	case <-ch:
+		go proc.End()
+		select {
+		case <-proc.Done():
+		case <-time.After(time.Millisecond):
+			t.Error("Waited to long for Done, after End() called.")
+		}
 	case <-time.After(time.Millisecond * 5):
-		t.Error("DoNow() not firing")
+		t.Error("Waited too long for DoNow() to execute Action.")
 	}
 }
 
@@ -84,31 +94,60 @@ func TestProcDoLater(t *testing.T) {
 	proc := newProcImpl()
 	proc.Begin()
 	var wg sync.WaitGroup
-	// queue up 100 actions
+	ch := make(chan struct{}, 1)
+
+	// queue up 100 actions, make sure they all get done.
 	go func() {
 		for i := 0; i < 100; i++ {
-			wg.Add(i)
-			proc.DoLater(func() {
+			wg.Add(1)
+			err := proc.DoLater(func() {
 				wg.Done()
 			})
+			assert.NoError(t, err)
 		}
 	}()
 
-	wg.Wait()
+	go func() {
+		wg.Wait()
+		ch <- struct{}{}
+	}()
+
+	select {
+	case <-ch:
+	case <-time.After(time.Millisecond * 5):
+		t.Error("Tired of waiting for WG.")
+	}
 }
 
 func TestProcDo(t *testing.T) {
 	proc := newProcImpl()
 	proc.Begin()
 	var wg sync.WaitGroup
+	// queue up 100 actions, make sure they all get done.
 	go func() {
 		for i := 0; i < 100; i++ {
-			wg.Add(i)
-			proc.Do(func() {
+			wg.Add(1)
+			err := proc.Do(func() {
 				wg.Done()
 			})
+			assert.NoError(t, err)
 		}
 	}()
 
-	wg.Wait()
+	ch := make(chan struct{}, 1)
+	go func() {
+		wg.Wait()
+		ch <- struct{}{}
+	}()
+
+	select {
+	case <-ch:
+	case <-time.After(time.Millisecond * 5):
+		t.Error("Tired of waiting for WG.")
+	}
+}
+
+func TestProcAdapterDo(t *testing.T) {
+	proc := DoWith(newProcImpl(), newProcImpl())
+	assert.NotNil(t, proc)
 }
