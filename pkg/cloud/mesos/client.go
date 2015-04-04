@@ -78,7 +78,7 @@ func (c *mesosClient) EnumerateSlaves(ctx context.Context) ([]string, error) {
 
 	//TODO(jdef) should not assume master uses http (what about https?)
 
-	uri := fmt.Sprintf("http://%s/state.json", c.master)
+	uri := fmt.Sprintf("http://%s/state.json", master)
 	req, err := http.NewRequest("GET", uri, nil)
 	if err != nil {
 		return nil, err
