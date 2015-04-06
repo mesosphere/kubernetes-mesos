@@ -12,7 +12,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/container"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
@@ -84,7 +84,7 @@ type KubernetesScheduler struct {
 	executorGroup     uint64
 	scheduleFunc      PodScheduleFunc
 	client            *client.Client
-	etcdClient        tools.EtcdClient
+	etcdClient        tools.EtcdGetSet
 	failoverTimeout   float64 // in seconds
 	reconcileInterval int64
 
@@ -117,7 +117,7 @@ type Config struct {
 	Executor          *mesos.ExecutorInfo
 	ScheduleFunc      PodScheduleFunc
 	Client            *client.Client
-	EtcdClient        tools.EtcdClient
+	EtcdClient        tools.EtcdGetSet
 	FailoverTimeout   float64
 	ReconcileInterval int64
 	ReconcileCooldown time.Duration
@@ -179,7 +179,7 @@ func New(config Config) *KubernetesScheduler {
 	return k
 }
 
-func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterface) error {
+func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterface, mux *http.ServeMux) error {
 	log.V(1).Infoln("initializing kubernetes mesos scheduler")
 
 	//TODO(jdef) watch electedMaster.Done() to figure out when background jobs should be shut down
@@ -192,7 +192,7 @@ func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterfac
 	k.terminate = electedMaster.Done()
 	k.plugin = pl
 	k.offers.Init(k.terminate)
-	k.InstallDebugHandlers()
+	k.InstallDebugHandlers(mux)
 	return k.recoverTasks()
 }
 
@@ -202,9 +202,9 @@ func (k *KubernetesScheduler) asMaster() proc.Doer {
 	return k.asRegisteredMaster
 }
 
-func (k *KubernetesScheduler) InstallDebugHandlers() {
+func (k *KubernetesScheduler) InstallDebugHandlers(mux *http.ServeMux) {
 	requestReconciliation := func(uri string, requestAction func()) {
-		http.HandleFunc(uri, func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc(uri, func(w http.ResponseWriter, r *http.Request) {
 			ch := make(chan struct{})
 			err := k.asMaster().Do(func() {
 				defer close(ch)
@@ -228,7 +228,7 @@ func (k *KubernetesScheduler) InstallDebugHandlers() {
 	requestReconciliation("/debug/actions/requestExplicit", k.reconciler.RequestExplicit)
 	requestReconciliation("/debug/actions/requestImplicit", k.reconciler.RequestImplicit)
 
-	http.HandleFunc("/debug/actions/kamikaze", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/debug/actions/kamikaze", func(w http.ResponseWriter, r *http.Request) {
 		ids := make(chan []string, 1)
 		err := k.asMaster().Do(func() {
 			k.Lock()
@@ -484,7 +484,7 @@ func (k *KubernetesScheduler) reconcileTerminalTask(driver bindings.SchedulerDri
 func (k *KubernetesScheduler) reconcileNonTerminalTask(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
 	// attempt to recover task from pod info:
 	// - task data may contain an api.PodStatusResult; if status.reason == REASON_RECONCILIATION then status.data == nil
-	// - the Name can be parsed by kubelet.ParseFullName() to yield a pod Name and Namespace
+	// - the Name can be parsed by container.ParseFullName() to yield a pod Name and Namespace
 	// - pull the pod metadata down from the api server
 	// - perform task recovery based on pod metadata
 	taskId := taskStatus.TaskId.GetValue()
@@ -506,9 +506,10 @@ func (k *KubernetesScheduler) reconcileNonTerminalTask(driver bindings.Scheduler
 	} else if podStatus, err := podtask.ParsePodStatusResult(taskStatus); err != nil {
 		// possible rogue pod exists at this point because we can't identify it; should kill the task
 		log.Errorf("possible rogue pod; illegal task status data for task %v, expected an api.PodStatusResult: %v", taskId, err)
-	} else if name, namespace, _ := kubelet.ParsePodFullName(podStatus.Name); name == "" || namespace == "" {
+	} else if name, namespace, err := container.ParsePodFullName(podStatus.Name); err != nil {
 		// possible rogue pod exists at this point because we can't identify it; should kill the task
-		log.Errorf("possible rogue pod; illegal api.PodStatusResult, unable to parse full pod name from: '%v' for task %v", podStatus.Name, taskId)
+		log.Errorf("possible rogue pod; illegal api.PodStatusResult, unable to parse full pod name from: '%v' for task %v: %v",
+			podStatus.Name, taskId, err)
 	} else if pod, err := k.client.Pods(namespace).Get(name); err == nil {
 		if t, ok, err := podtask.RecoverFrom(*pod); ok {
 			log.Infof("recovered task %v from metadata in pod %v/%v", taskId, namespace, name)

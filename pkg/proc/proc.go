@@ -13,7 +13,6 @@ import (
 const (
 	defaultActionHandlerCrashDelay = 100 * time.Millisecond
 	defaultActionQueueDepth        = 1024
-	defaultActionScheduleTimeout   = 2 * time.Minute
 )
 
 type procImpl struct {
@@ -24,6 +23,8 @@ type procImpl struct {
 	done      runtime.Signal
 	state     *stateType
 	pid       uint32
+	writeLock sync.Mutex // avoid data race between write and close of backlog
+	changed   *sync.Cond // wait/signal for backlog changes
 }
 
 type Config struct {
@@ -32,16 +33,12 @@ type Config struct {
 
 	// determines the size of the deferred action backlog
 	actionQueueDepth uint32
-
-	// how long we should wait before giving up on scheduling a deferred action
-	actionScheduleTimeout time.Duration
 }
 
 var (
 	defaultConfig = Config{
 		actionHandlerCrashDelay: defaultActionHandlerCrashDelay,
 		actionQueueDepth:        defaultActionQueueDepth,
-		actionScheduleTimeout:   defaultActionScheduleTimeout,
 	}
 	pid uint32
 )
@@ -59,6 +56,7 @@ func newConfigured(config Config) ProcessInit {
 		state:     &state,
 		pid:       atomic.AddUint32(&pid, 1),
 	}
+	pi.changed = sync.NewCond(&pi.writeLock)
 	pi.wg.Add(1) // symmetrical to wg.Done() in End()
 	pi.done = runtime.Go(pi.wg.Wait)
 	return pi
@@ -73,24 +71,29 @@ func (self *procImpl) Begin() {
 		panic(fmt.Errorf("failed to transition from New to Idle state"))
 	}
 	defer log.V(2).Infof("started process %d", self.pid)
-	addMe := true
-	finished := make(chan struct{})
+	entered := false
 	// execute actions on the backlog chan
 	runtime.Go(func() {
 		runtime.Until(func() {
-			if addMe {
-				addMe = false
+			if !entered {
+				entered = true
 				self.wg.Add(1)
 			}
 			for action := range self.backlog {
-				// rely on Until to handle action panics
-				action()
+				select {
+				case <-self.terminate:
+					return
+				default:
+					// signal to indicate there's room in the backlog now
+					self.changed.Broadcast()
+					// rely on Until to handle action panics
+					action()
+				}
 			}
-			close(finished)
-		}, self.actionHandlerCrashDelay, finished)
+		}, self.actionHandlerCrashDelay, self.terminate)
 	}).Then(func() {
 		log.V(2).Infof("finished processing action backlog for process %d", self.pid)
-		if !addMe {
+		if entered {
 			self.wg.Done()
 		}
 	})
@@ -132,10 +135,7 @@ func DoAndWait(p Process, a Action) error {
 // returns errProcessTerminated if the process already ended.
 func (self *procImpl) doLater(deferredAction Action) (err error) {
 	defer func() {
-		if r := recover(); r != nil {
-			defer self.End()
-			err = fmt.Errorf("attempted to schedule action on a closed process backlog: %v", r)
-		} else if err != nil {
+		if err != nil {
 			log.V(2).Infof("failed to execute action: %v", err)
 		}
 	}()
@@ -144,13 +144,25 @@ func (self *procImpl) doLater(deferredAction Action) (err error) {
 		defer self.wg.Done()
 		deferredAction()
 	})
-	select {
-	case <-self.terminate:
-		err = errProcessTerminated
-	case <-time.After(self.actionScheduleTimeout):
-		return errActionScheduleTimeout
-	case self.backlog <- a:
-		// success! noop
+
+	scheduled := false
+	self.writeLock.Lock()
+	defer self.writeLock.Unlock()
+
+	for err == nil && !scheduled {
+		switch s := self.state.get(); s {
+		case stateRunning:
+			select {
+			case self.backlog <- a:
+				scheduled = true
+			default:
+				self.changed.Wait()
+			}
+		case stateTerminal:
+			err = errProcessTerminated
+		default:
+			err = errIllegalState
+		}
 	}
 	return
 }
@@ -173,11 +185,18 @@ func (self *procImpl) flush() {
 
 func (self *procImpl) End() {
 	if self.state.transitionTo(stateTerminal, stateTerminal) {
+		self.writeLock.Lock()
+		defer self.writeLock.Unlock()
+
 		log.V(2).Infof("terminating process %d", self.pid)
+
 		close(self.backlog)
 		close(self.terminate)
 		self.wg.Done()
+		self.changed.Broadcast()
+
 		log.V(2).Infof("waiting for deferred actions to complete")
+
 		<-self.Done()
 		self.flush()
 	}

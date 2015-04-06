@@ -14,11 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// apiserver is the main api server and master for the cluster.
-// it is responsible for serving the cluster management API.
 package main
 
 import (
+	"fmt"
+	"os"
+	"runtime"
+
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/service"
 	"github.com/mesosphere/kubernetes-mesos/pkg/version/verflag"
@@ -26,6 +28,7 @@ import (
 )
 
 func main() {
+	runtime.GOMAXPROCS(runtime.NumCPU())
 	s := service.NewSchedulerServer()
 	s.AddStandaloneFlags(pflag.CommandLine)
 
@@ -35,5 +38,8 @@ func main() {
 
 	verflag.PrintAndExitIfRequested()
 
-	s.Run(nil, pflag.CommandLine.Args())
+	if err := s.Run(nil, pflag.CommandLine.Args()); err != nil {
+		fmt.Fprintf(os.Stderr, err.Error())
+		os.Exit(1)
+	}
 }

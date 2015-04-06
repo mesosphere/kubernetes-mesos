@@ -1,6 +1,7 @@
 package proc
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -127,5 +128,44 @@ func TestProc_goodLifecycle(t *testing.T) {
 	p := New()
 	p.Begin()
 	p.End()
+	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
+}
+
+func TestProc_doWithDeadProc(t *testing.T) {
+	p := New()
+	p.Begin()
+	p.End()
+
+	errUnexpected := fmt.Errorf("unexpected execution of delegated action")
+	decorated := DoWith(p, DoerFunc(func(_ Action) error {
+		return errUnexpected
+	}))
+
+	decorated.Do(func() {})
+	fatalAfter(t, decorated.Done(), 1*time.Second, "timed out waiting for process death")
+}
+
+func TestProc_doWith(t *testing.T) {
+	p := New()
+	p.Begin()
+
+	delegated := false
+	decorated := DoWith(p, DoerFunc(func(a Action) error {
+		delegated = true
+		a()
+		return nil
+	}))
+
+	executed := make(chan struct{})
+	decorated.Do(func() {
+		defer close(executed)
+		if !delegated {
+			t.Fatalf("expected delegated execution")
+		}
+	})
+
+	fatalAfter(t, executed, 1*time.Second, "timed out waiting deferred execution")
+
+	decorated.End()
 	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
 }
