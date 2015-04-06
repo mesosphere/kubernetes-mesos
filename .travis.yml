@@ -1,11 +1,17 @@
 language: go
 
+env:
+  global:
+    - secure: "Fbr+wlPhhtyMtgXa6bTtbK26V/PIXOr+0vBpYK0trDTJTbvvrIFUrCAQEYtb+/3g88mp5Yj0R7+PrGflwLYEGuoEVtz2lLTp+du3QzlDzz2o0OMxPHg/xyG+UuoQdCMDVM4phhEtsOUTLfZ0XGmpyWKz/IVRBjqvYSGWbZp0QT0="
+
 go:
   - 1.4
 
 install:
-  - if ! go get code.google.com/p/go.tools/cmd/cover; then go get golang.org/x/tools/cmd/cover; fi
+  - go get golang.org/x/tools/cmd/cover
   - go get github.com/mattn/goveralls
   - make
 
-script: make test.v
+script:
+  - make test.cover
+  - $(go env GOPATH | awk 'BEGIN{FS=":"} {print $1}')/bin/goveralls -coverprofile=all.coverage.out -service=travis-ci -repotoken $COVERALLS_TOKEN
