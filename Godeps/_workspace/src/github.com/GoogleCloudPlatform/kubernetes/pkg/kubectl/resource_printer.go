@@ -30,7 +30,9 @@ import (
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/conversion"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
+	"github.com/docker/docker/pkg/units"
 	"github.com/ghodss/yaml"
 	"github.com/golang/glog"
 )
@@ -95,11 +97,11 @@ func (fn ResourcePrinterFunc) PrintObj(obj runtime.Object, w io.Writer) error {
 type VersionedPrinter struct {
 	printer   ResourcePrinter
 	convertor runtime.ObjectConvertor
-	version   string
+	version   []string
 }
 
 // NewVersionedPrinter wraps a printer to convert objects to a known API version prior to printing.
-func NewVersionedPrinter(printer ResourcePrinter, convertor runtime.ObjectConvertor, version string) ResourcePrinter {
+func NewVersionedPrinter(printer ResourcePrinter, convertor runtime.ObjectConvertor, version ...string) ResourcePrinter {
 	return &VersionedPrinter{
 		printer:   printer,
 		convertor: convertor,
@@ -112,11 +114,20 @@ func (p *VersionedPrinter) PrintObj(obj runtime.Object, w io.Writer) error {
 	if len(p.version) == 0 {
 		return fmt.Errorf("no version specified, object cannot be converted")
 	}
-	converted, err := p.convertor.ConvertToVersion(obj, p.version)
-	if err != nil {
-		return err
+	for _, version := range p.version {
+		if len(version) == 0 {
+			continue
+		}
+		converted, err := p.convertor.ConvertToVersion(obj, version)
+		if conversion.IsNotRegisteredError(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		return p.printer.PrintObj(converted, w)
 	}
-	return p.printer.PrintObj(converted, w)
+	return fmt.Errorf("the object cannot be converted to any of the versions: %v", p.version)
 }
 
 // JSONPrinter is an implementation of ResourcePrinter which outputs an object as JSON.
@@ -215,16 +226,17 @@ func (h *HumanReadablePrinter) validatePrintHandlerFunc(printFunc reflect.Value)
 	return nil
 }
 
-var podColumns = []string{"POD", "IP", "CONTAINER(S)", "IMAGE(S)", "HOST", "LABELS", "STATUS"}
+var podColumns = []string{"POD", "IP", "CONTAINER(S)", "IMAGE(S)", "HOST", "LABELS", "STATUS", "CREATED"}
 var replicationControllerColumns = []string{"CONTROLLER", "CONTAINER(S)", "IMAGE(S)", "SELECTOR", "REPLICAS"}
 var serviceColumns = []string{"NAME", "LABELS", "SELECTOR", "IP", "PORT"}
 var endpointColumns = []string{"NAME", "ENDPOINTS"}
-var minionColumns = []string{"NAME", "LABELS", "STATUS"}
+var nodeColumns = []string{"NAME", "LABELS", "STATUS"}
 var statusColumns = []string{"STATUS"}
 var eventColumns = []string{"FIRSTSEEN", "LASTSEEN", "COUNT", "NAME", "KIND", "SUBOBJECT", "REASON", "SOURCE", "MESSAGE"}
 var limitRangeColumns = []string{"NAME"}
 var resourceQuotaColumns = []string{"NAME"}
-var namespaceColumns = []string{"NAME", "LABELS"}
+var namespaceColumns = []string{"NAME", "LABELS", "STATUS"}
+var secretColumns = []string{"NAME", "DATA"}
 
 // addDefaultHandlers adds print handlers for default Kubernetes types.
 func (h *HumanReadablePrinter) addDefaultHandlers() {
@@ -235,8 +247,9 @@ func (h *HumanReadablePrinter) addDefaultHandlers() {
 	h.Handler(serviceColumns, printService)
 	h.Handler(serviceColumns, printServiceList)
 	h.Handler(endpointColumns, printEndpoints)
-	h.Handler(minionColumns, printMinion)
-	h.Handler(minionColumns, printMinionList)
+	h.Handler(endpointColumns, printEndpointsList)
+	h.Handler(nodeColumns, printNode)
+	h.Handler(nodeColumns, printNodeList)
 	h.Handler(statusColumns, printStatus)
 	h.Handler(eventColumns, printEvent)
 	h.Handler(eventColumns, printEventList)
@@ -246,6 +259,8 @@ func (h *HumanReadablePrinter) addDefaultHandlers() {
 	h.Handler(resourceQuotaColumns, printResourceQuotaList)
 	h.Handler(namespaceColumns, printNamespace)
 	h.Handler(namespaceColumns, printNamespaceList)
+	h.Handler(secretColumns, printSecret)
+	h.Handler(secretColumns, printSecretList)
 }
 
 func (h *HumanReadablePrinter) unknown(data []byte, w io.Writer) error {
@@ -260,11 +275,35 @@ func (h *HumanReadablePrinter) printHeader(columnNames []string, w io.Writer) er
 	return nil
 }
 
-func stringList(list []string) string {
-	if len(list) == 0 {
-		return "<empty>"
+func formatEndpoints(endpoints *api.Endpoints) string {
+	if len(endpoints.Subsets) == 0 {
+		return "<none>"
 	}
-	return strings.Join(list, ",")
+	list := []string{}
+	max := 3
+	more := false
+Loop:
+	for i := range endpoints.Subsets {
+		ss := &endpoints.Subsets[i]
+		for i := range ss.Ports {
+			port := &ss.Ports[i]
+			if port.Name == "" { // TODO: add multi-port support.
+				for i := range ss.Addresses {
+					if len(list) == max {
+						more = true
+						break Loop
+					}
+					addr := &ss.Addresses[i]
+					list = append(list, fmt.Sprintf("%s:%d", addr.IP, port.Port))
+				}
+			}
+		}
+	}
+	ret := strings.Join(list, ",")
+	if more {
+		ret += "..."
+	}
+	return ret
 }
 
 func podHostString(host, ip string) string {
@@ -285,20 +324,21 @@ func printPod(pod *api.Pod, w io.Writer) error {
 	if len(containers) > 0 {
 		firstContainer, containers = containers[0], containers[1:]
 	}
-	_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+	_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 		pod.Name,
 		pod.Status.PodIP,
 		firstContainer.Name,
 		firstContainer.Image,
 		podHostString(pod.Status.Host, pod.Status.HostIP),
 		formatLabels(pod.Labels),
-		pod.Status.Phase)
+		pod.Status.Phase,
+		units.HumanDuration(time.Now().Sub(pod.CreationTimestamp.Time)))
 	if err != nil {
 		return err
 	}
 	// Lay out all the other containers on separate lines.
 	for _, container := range containers {
-		_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", "", "", container.Name, container.Image, "", "", "")
+		_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", "", "", container.Name, container.Image, "", "", "", "")
 		if err != nil {
 			return err
 		}
@@ -364,13 +404,22 @@ func printServiceList(list *api.ServiceList, w io.Writer) error {
 	return nil
 }
 
-func printEndpoints(endpoint *api.Endpoints, w io.Writer) error {
-	_, err := fmt.Fprintf(w, "%s\t%s\n", endpoint.Name, stringList(endpoint.Endpoints))
+func printEndpoints(endpoints *api.Endpoints, w io.Writer) error {
+	_, err := fmt.Fprintf(w, "%s\t%s\n", endpoints.Name, formatEndpoints(endpoints))
 	return err
 }
 
+func printEndpointsList(list *api.EndpointsList, w io.Writer) error {
+	for _, item := range list.Items {
+		if err := printEndpoints(&item, w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func printNamespace(item *api.Namespace, w io.Writer) error {
-	_, err := fmt.Fprintf(w, "%s\t%s\n", item.Name, formatLabels(item.Labels))
+	_, err := fmt.Fprintf(w, "%s\t%s\t%s\n", item.Name, formatLabels(item.Labels), item.Status.Phase)
 	return err
 }
 
@@ -383,33 +432,48 @@ func printNamespaceList(list *api.NamespaceList, w io.Writer) error {
 	return nil
 }
 
-func printMinion(minion *api.Node, w io.Writer) error {
-	conditionMap := make(map[api.NodeConditionKind]*api.NodeCondition)
-	NodeAllConditions := []api.NodeConditionKind{api.NodeReady, api.NodeReachable}
-	for i := range minion.Status.Conditions {
-		cond := minion.Status.Conditions[i]
-		conditionMap[cond.Kind] = &cond
+func printSecret(item *api.Secret, w io.Writer) error {
+	_, err := fmt.Fprintf(w, "%s\t%v\n", item.Name, len(item.Data))
+	return err
+}
+
+func printSecretList(list *api.SecretList, w io.Writer) error {
+	for _, item := range list.Items {
+		if err := printSecret(&item, w); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func printNode(node *api.Node, w io.Writer) error {
+	conditionMap := make(map[api.NodeConditionType]*api.NodeCondition)
+	NodeAllConditions := []api.NodeConditionType{api.NodeSchedulable, api.NodeReady, api.NodeReachable}
+	for i := range node.Status.Conditions {
+		cond := node.Status.Conditions[i]
+		conditionMap[cond.Type] = &cond
 	}
 	var status []string
 	for _, validCondition := range NodeAllConditions {
 		if condition, ok := conditionMap[validCondition]; ok {
-			if condition.Status == api.ConditionFull {
-				status = append(status, string(condition.Kind))
+			if condition.Status == api.ConditionTrue {
+				status = append(status, string(condition.Type))
 			} else {
-				status = append(status, "Not"+string(condition.Kind))
+				status = append(status, "Not"+string(condition.Type))
 			}
 		}
 	}
 	if len(status) == 0 {
 		status = append(status, "Unknown")
 	}
-	_, err := fmt.Fprintf(w, "%s\t%s\t%s\n", minion.Name, formatLabels(minion.Labels), strings.Join(status, ","))
+	_, err := fmt.Fprintf(w, "%s\t%s\t%s\n", node.Name, formatLabels(node.Labels), strings.Join(status, ","))
 	return err
 }
 
-func printMinionList(list *api.NodeList, w io.Writer) error {
-	for _, minion := range list.Items {
-		if err := printMinion(&minion, w); err != nil {
+func printNodeList(list *api.NodeList, w io.Writer) error {
+	for _, node := range list.Items {
+		if err := printNode(&node, w); err != nil {
 			return err
 		}
 	}
@@ -486,7 +550,7 @@ func printResourceQuotaList(list *api.ResourceQuotaList, w io.Writer) error {
 
 // PrintObj prints the obj in a human-friendly format according to the type of the obj.
 func (h *HumanReadablePrinter) PrintObj(obj runtime.Object, output io.Writer) error {
-	w := tabwriter.NewWriter(output, 20, 5, 3, ' ', 0)
+	w := tabwriter.NewWriter(output, 10, 4, 3, ' ', 0)
 	defer w.Flush()
 	t := reflect.TypeOf(obj)
 	if handler := h.handlerMap[t]; handler != nil {

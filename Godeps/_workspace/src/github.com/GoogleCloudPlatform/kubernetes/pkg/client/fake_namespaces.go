@@ -18,6 +18,7 @@ package client
 
 import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 )
@@ -28,7 +29,7 @@ type FakeNamespaces struct {
 	Fake *Fake
 }
 
-func (c *FakeNamespaces) List(selector labels.Selector) (*api.NamespaceList, error) {
+func (c *FakeNamespaces) List(labels labels.Selector, field fields.Selector) (*api.NamespaceList, error) {
 	c.Fake.Actions = append(c.Fake.Actions, FakeAction{Action: "list-namespaces"})
 	return api.Scheme.CopyOrDie(&c.Fake.NamespacesList).(*api.NamespaceList), nil
 }
@@ -45,7 +46,7 @@ func (c *FakeNamespaces) Delete(name string) error {
 
 func (c *FakeNamespaces) Create(namespace *api.Namespace) (*api.Namespace, error) {
 	c.Fake.Actions = append(c.Fake.Actions, FakeAction{Action: "create-namespace"})
-	return &api.Namespace{}, nil
+	return &api.Namespace{}, c.Fake.Err
 }
 
 func (c *FakeNamespaces) Update(namespace *api.Namespace) (*api.Namespace, error) {
@@ -53,7 +54,17 @@ func (c *FakeNamespaces) Update(namespace *api.Namespace) (*api.Namespace, error
 	return &api.Namespace{}, nil
 }
 
-func (c *FakeNamespaces) Watch(label, field labels.Selector, resourceVersion string) (watch.Interface, error) {
+func (c *FakeNamespaces) Watch(label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error) {
 	c.Fake.Actions = append(c.Fake.Actions, FakeAction{Action: "watch-namespaces", Value: resourceVersion})
 	return c.Fake.Watch, nil
+}
+
+func (c *FakeNamespaces) Finalize(namespace *api.Namespace) (*api.Namespace, error) {
+	c.Fake.Actions = append(c.Fake.Actions, FakeAction{Action: "finalize-namespace", Value: namespace.Name})
+	return &api.Namespace{}, nil
+}
+
+func (c *FakeNamespaces) Status(namespace *api.Namespace) (*api.Namespace, error) {
+	c.Fake.Actions = append(c.Fake.Actions, FakeAction{Action: "status-namespace", Value: namespace.Name})
+	return &api.Namespace{}, nil
 }

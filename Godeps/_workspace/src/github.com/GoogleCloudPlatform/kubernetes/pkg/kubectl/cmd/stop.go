@@ -20,9 +20,28 @@ import (
 	"fmt"
 	"io"
 
+	cmdutil "github.com/GoogleCloudPlatform/kubernetes/pkg/kubectl/cmd/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubectl/resource"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/spf13/cobra"
+)
+
+const (
+	stop_long = `Gracefully shut down a resource by id or filename.
+
+Attempts to shut down and delete a resource that supports graceful termination.
+If the resource is resizable it will be resized to 0 before deletion.`
+	stop_example = `// Shut down foo.
+$ kubectl stop replicationcontroller foo
+
+// Stop pods and services with label name=myLabel.
+$ kubectl stop pods,services -l name=myLabel
+
+// Shut down the service defined in service.json
+$ kubectl stop -f service.json
+
+// Shut down all resources in the path/to/resources directory
+$ kubectl stop -f path/to/resources`
 )
 
 func (f *Factory) NewCmdStop(out io.Writer) *cobra.Command {
@@ -30,48 +49,38 @@ func (f *Factory) NewCmdStop(out io.Writer) *cobra.Command {
 		Filenames util.StringList
 	}{}
 	cmd := &cobra.Command{
-		Use:   "stop (<resource> <id>|-f filename)",
-		Short: "Gracefully shut down a resource by id or filename.",
-		Long: `Gracefully shut down a resource by id or filename.
-
-Attempts to shut down and delete a resource that supports graceful termination.
-If the resource is resizable it will be resized to 0 before deletion.
-
-Examples:
-
-    // Shut down foo.
-    $ kubectl stop replicationcontroller foo
-
-    // Shut down the service defined in service.json
-    $ kubectl stop -f service.json
-
-    // Shut down all resources in the path/to/resources directory
-    $ kubectl stop -f path/to/resources`,
+		Use:     "stop (-f FILENAME | RESOURCE (ID | -l label | --all))",
+		Short:   "Gracefully shut down a resource by id or filename.",
+		Long:    stop_long,
+		Example: stop_example,
 		Run: func(cmd *cobra.Command, args []string) {
-			cmdNamespace, err := f.DefaultNamespace(cmd)
-			checkErr(err)
-			mapper, typer := f.Object(cmd)
-			r := resource.NewBuilder(mapper, typer, f.ClientMapperForCommand(cmd)).
+			cmdNamespace, err := f.DefaultNamespace()
+			cmdutil.CheckErr(err)
+			mapper, typer := f.Object()
+			r := resource.NewBuilder(mapper, typer, f.ClientMapperForCommand()).
 				ContinueOnError().
 				NamespaceParam(cmdNamespace).RequireNamespace().
 				ResourceTypeOrNameArgs(false, args...).
 				FilenameParam(flags.Filenames...).
+				SelectorParam(cmdutil.GetFlagString(cmd, "selector")).
+				SelectAllParam(cmdutil.GetFlagBool(cmd, "all")).
 				Flatten().
 				Do()
-			checkErr(r.Err())
+			cmdutil.CheckErr(r.Err())
 
 			r.Visit(func(info *resource.Info) error {
-				reaper, err := f.Reaper(cmd, info.Mapping)
-				checkErr(err)
-				s, err := reaper.Stop(info.Namespace, info.Name)
-				if err != nil {
+				reaper, err := f.Reaper(info.Mapping)
+				cmdutil.CheckErr(err)
+				if _, err := reaper.Stop(info.Namespace, info.Name); err != nil {
 					return err
 				}
-				fmt.Fprintf(out, "%s\n", s)
+				fmt.Fprintf(out, "%s/%s\n", info.Mapping.Resource, info.Name)
 				return nil
 			})
 		},
 	}
 	cmd.Flags().VarP(&flags.Filenames, "filename", "f", "Filename, directory, or URL to file of resource(s) to be stopped")
+	cmd.Flags().StringP("selector", "l", "", "Selector (label query) to filter on")
+	cmd.Flags().Bool("all", false, "[-all] to select all the specified resources")
 	return cmd
 }

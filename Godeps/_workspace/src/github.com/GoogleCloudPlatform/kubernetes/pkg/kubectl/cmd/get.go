@@ -30,38 +30,44 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const (
+	get_long = `Display one or many resources.
+
+Possible resources include pods (po), replication controllers (rc), services
+(svc), minions (mi), or events (ev).
+
+By specifying the output as 'template' and providing a Go template as the value
+of the --template flag, you can filter the attributes of the fetched resource(s).`
+	get_example = `// List all pods in ps output format.
+$ kubectl get pods
+
+// List a single replication controller with specified NAME in ps output format.
+$ kubectl get replicationController web
+
+// List a single pod in JSON output format.
+$ kubectl get -o json pod web-pod-13je7
+
+// Return only the status value of the specified pod.
+$ kubectl get -o template web-pod-13je7 --template={{.currentState.status}}
+
+// List all replication controllers and services together in ps output format.
+$ kubectl get rc,services
+
+// List one or more resources by their type and names
+$ kubectl get rc/web service/frontend pods/web-pod-13je7`
+)
+
 // NewCmdGet creates a command object for the generic "get" action, which
 // retrieves one or more resources from a server.
 func (f *Factory) NewCmdGet(out io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "get [(-o|--output=)json|yaml|template|...] <resource> [<id>]",
-		Short: "Display one or many resources",
-		Long: `Display one or many resources.
-
-Possible resources include pods (po), replication controllers (rc), services
-(se), minions (mi), or events (ev).
-
-By specifying the output as 'template' and providing a Go template as the value
-of the --template flag, you can filter the attributes of the fetched resource(s).
-
-Examples:
-
-    // List all pods in ps output format.
-    $ kubectl get pods
-
-    // List a single replication controller with specified ID in ps output format.
-    $ kubectl get replicationController 1234-56-7890-234234-456456
-
-    // List a single pod in JSON output format.
-    $ kubectl get -o json pod 1234-56-7890-234234-456456
-
-    // Return only the status value of the specified pod.
-    $ kubectl get -o template pod 1234-56-7890-234234-456456 --template={{.currentState.status}}
-
-    // List all replication controllers and services together in ps output format.
-    $ kubectl get rc,services`,
+		Use:     "get [(-o|--output=)json|yaml|template|...] (RESOURCE [NAME] | RESOURCE/NAME ...)",
+		Short:   "Display one or many resources",
+		Long:    get_long,
+		Example: get_example,
 		Run: func(cmd *cobra.Command, args []string) {
-			RunGet(f, out, cmd, args)
+			err := RunGet(f, out, cmd, args)
+			util.CheckErr(err)
 		},
 	}
 	util.AddPrinterFlags(cmd)
@@ -73,93 +79,117 @@ Examples:
 
 // RunGet implements the generic Get command
 // TODO: convert all direct flag accessors to a struct and pass that instead of cmd
-// TODO: return an error instead of using glog.Fatal and checkErr
-func RunGet(f *Factory, out io.Writer, cmd *cobra.Command, args []string) {
+func RunGet(f *Factory, out io.Writer, cmd *cobra.Command, args []string) error {
 	selector := util.GetFlagString(cmd, "selector")
-	mapper, typer := f.Object(cmd)
+	mapper, typer := f.Object()
 
-	cmdNamespace, err := f.DefaultNamespace(cmd)
-	checkErr(err)
+	cmdNamespace, err := f.DefaultNamespace()
+	if err != nil {
+		return err
+	}
 
 	// handle watch separately since we cannot watch multiple resource types
 	isWatch, isWatchOnly := util.GetFlagBool(cmd, "watch"), util.GetFlagBool(cmd, "watch-only")
 	if isWatch || isWatchOnly {
-		r := resource.NewBuilder(mapper, typer, f.ClientMapperForCommand(cmd)).
+		r := resource.NewBuilder(mapper, typer, f.ClientMapperForCommand()).
 			NamespaceParam(cmdNamespace).DefaultNamespace().
 			SelectorParam(selector).
 			ResourceTypeOrNameArgs(true, args...).
 			SingleResourceType().
 			Do()
-		checkErr(r.Err())
+		if err != nil {
+			return err
+		}
 
 		mapping, err := r.ResourceMapping()
-		checkErr(err)
+		if err != nil {
+			return err
+		}
 
 		printer, err := f.PrinterForMapping(cmd, mapping)
-		checkErr(err)
+		if err != nil {
+			return err
+		}
 
 		obj, err := r.Object()
-		checkErr(err)
+		if err != nil {
+			return err
+		}
 
 		rv, err := mapping.MetadataAccessor.ResourceVersion(obj)
-		checkErr(err)
+		if err != nil {
+			return err
+		}
 
 		// print the current object
 		if !isWatchOnly {
 			if err := printer.PrintObj(obj, out); err != nil {
-				checkErr(fmt.Errorf("unable to output the provided object: %v", err))
+				return fmt.Errorf("unable to output the provided object: %v", err)
 			}
 		}
 
 		// print watched changes
 		w, err := r.Watch(rv)
-		checkErr(err)
+		if err != nil {
+			return err
+		}
 
 		kubectl.WatchLoop(w, func(e watch.Event) error {
 			return printer.PrintObj(e.Object, out)
 		})
-		return
+		return nil
 	}
 
-	b := resource.NewBuilder(mapper, typer, f.ClientMapperForCommand(cmd)).
+	b := resource.NewBuilder(mapper, typer, f.ClientMapperForCommand()).
 		NamespaceParam(cmdNamespace).DefaultNamespace().
 		SelectorParam(selector).
 		ResourceTypeOrNameArgs(true, args...).
+		ContinueOnError().
 		Latest()
 	printer, generic, err := util.PrinterForCommand(cmd)
-	checkErr(err)
+	if err != nil {
+		return err
+	}
 
 	if generic {
-		clientConfig, err := f.ClientConfig(cmd)
-		checkErr(err)
+		clientConfig, err := f.ClientConfig()
+		if err != nil {
+			return err
+		}
 		defaultVersion := clientConfig.Version
 
 		// the outermost object will be converted to the output-version
 		version := util.OutputVersion(cmd, defaultVersion)
-		if len(version) == 0 {
-			// TODO: add a new ResourceBuilder mode for Object() that attempts to ensure the objects
-			// are in the appropriate version if one exists (and if not, use the best effort).
-			// TODO: ensure api-version is set with the default preferred api version by the client
-			// builder on initialization
-			version = latest.Version
+
+		r := b.Flatten().Do()
+		obj, err := r.Object()
+		if err != nil {
+			return err
 		}
-		printer = kubectl.NewVersionedPrinter(printer, api.Scheme, version)
 
-		obj, err := b.Flatten().Do().Object()
-		checkErr(err)
+		// try conversion to all the possible versions
+		// TODO: simplify by adding a ResourceBuilder mode
+		versions := []string{version, latest.Version}
+		infos, _ := r.Infos()
+		for _, info := range infos {
+			versions = append(versions, info.Mapping.APIVersion)
+		}
 
-		err = printer.PrintObj(obj, out)
-		checkErr(err)
-		return
+		// TODO: add a new ResourceBuilder mode for Object() that attempts to ensure the objects
+		// are in the appropriate version if one exists (and if not, use the best effort).
+		// TODO: ensure api-version is set with the default preferred api version by the client
+		// builder on initialization
+		printer := kubectl.NewVersionedPrinter(printer, api.Scheme, versions...)
+
+		return printer.PrintObj(obj, out)
 	}
 
 	// use the default printer for each object
-	err = b.Do().Visit(func(r *resource.Info) error {
+	return b.Do().Visit(func(r *resource.Info) error {
 		printer, err := f.PrinterForMapping(cmd, r.Mapping)
 		if err != nil {
 			return err
 		}
 		return printer.PrintObj(r.Object, out)
 	})
-	checkErr(err)
 }

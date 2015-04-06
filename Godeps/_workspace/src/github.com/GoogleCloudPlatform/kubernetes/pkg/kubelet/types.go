@@ -18,13 +18,12 @@ package kubelet
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/golang/glog"
 )
 
 const ConfigSourceAnnotationKey = "kubernetes.io/config.source"
+const ConfigMirrorAnnotationKey = "kubernetes.io/config.mirror"
 
 // PodOperation defines what changes will be made on a pod configuration.
 type PodOperation int
@@ -42,16 +41,17 @@ const (
 	// These constants identify the sources of pods
 	// Updates from a file
 	FileSource = "file"
-	// Updates from etcd
-	EtcdSource = "etcd"
 	// Updates from querying a web page
 	HTTPSource = "http"
-	// Updates received to the kubelet server
-	ServerSource = "server"
 	// Updates from Kubernetes API Server
 	ApiserverSource = "api"
 	// Updates from all sources
 	AllSource = "*"
+
+	// Used for ConfigMirrorAnnotationKey.
+	MirrorType = "mirror"
+
+	NamespaceDefault = api.NamespaceDefault
 )
 
 // PodUpdate defines an operation sent on the channel. You can add or remove single services by
@@ -64,29 +64,26 @@ const (
 // functionally similar, this helps our unit tests properly check that the correct PodUpdates
 // are generated.
 type PodUpdate struct {
-	Pods   []api.BoundPod
+	Pods   []api.Pod
 	Op     PodOperation
 	Source string
 }
 
-// GetPodFullName returns a name that uniquely identifies a pod across all config sources.
-func GetPodFullName(pod *api.BoundPod) string {
-	return fmt.Sprintf("%s.%s.%s", pod.Name, pod.Namespace, pod.Annotations[ConfigSourceAnnotationKey])
-}
-
-// ParsePodFullName unpacks a pod full name and returns the pod name, namespace, and annotations.
-// If the pod full name is invalid, empty strings are returend.
-func ParsePodFullName(podFullName string) (podName, podNamespace string, podAnnotations map[string]string) {
-	parts := strings.Split(podFullName, ".")
-	expectedNumFields := 3
-	actualNumFields := len(parts)
-	if actualNumFields != expectedNumFields {
-		glog.Errorf("found a podFullName (%q) with too few fields: expected %d, actual %d.", podFullName, expectedNumFields, actualNumFields)
-		return
+// Gets all validated sources from the specified sources.
+func GetValidatedSources(sources []string) ([]string, error) {
+	validated := make([]string, 0, len(sources))
+	for _, source := range sources {
+		switch source {
+		case AllSource:
+			return []string{FileSource, HTTPSource, ApiserverSource}, nil
+		case FileSource, HTTPSource, ApiserverSource:
+			validated = append(validated, source)
+			break
+		case "":
+			break
+		default:
+			return []string{}, fmt.Errorf("unknown pod source %q", source)
+		}
 	}
-	podName = parts[0]
-	podNamespace = parts[1]
-	podAnnotations = make(map[string]string)
-	podAnnotations[ConfigSourceAnnotationKey] = parts[2]
-	return
+	return validated, nil
 }

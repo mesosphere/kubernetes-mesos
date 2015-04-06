@@ -20,29 +20,39 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/rest"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/validation"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/endpoint"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/minion"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util/fielderrors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 	"github.com/golang/glog"
 )
 
 // REST adapts a service registry into apiserver's RESTStorage model.
 type REST struct {
-	registry  Registry
-	cloud     cloudprovider.Interface
-	machines  minion.Registry
-	portalMgr *ipAllocator
+	registry    Registry
+	cloud       cloudprovider.Interface
+	machines    minion.Registry
+	endpoints   endpoint.Registry
+	portalMgr   *ipAllocator
+	clusterName string
 }
 
-// NewREST returns a new REST.
-func NewREST(registry Registry, cloud cloudprovider.Interface, machines minion.Registry, portalNet *net.IPNet) *REST {
+// NewStorage returns a new REST.
+func NewStorage(registry Registry, cloud cloudprovider.Interface, machines minion.Registry, endpoints endpoint.Registry, portalNet *net.IPNet,
+	clusterName string) *REST {
 	// TODO: Before we can replicate masters, this has to be synced (e.g. lives in etcd)
 	ipa := newIPAllocator(portalNet)
 	if ipa == nil {
@@ -51,10 +61,12 @@ func NewREST(registry Registry, cloud cloudprovider.Interface, machines minion.R
 	reloadIPsFromStorage(ipa, registry)
 
 	return &REST{
-		registry:  registry,
-		cloud:     cloud,
-		machines:  machines,
-		portalMgr: ipa,
+		registry:    registry,
+		cloud:       cloud,
+		machines:    machines,
+		endpoints:   endpoints,
+		portalMgr:   ipa,
+		clusterName: clusterName,
 	}
 }
 
@@ -68,8 +80,7 @@ func reloadIPsFromStorage(ipa *ipAllocator, registry Registry) {
 	}
 	for i := range services.Items {
 		service := &services.Items[i]
-		if service.Spec.PortalIP == "" {
-			glog.Warningf("service %q has no PortalIP", service.Name)
+		if !api.IsServiceIPSet(service) {
 			continue
 		}
 		if err := ipa.Allocate(net.ParseIP(service.Spec.PortalIP)); err != nil {
@@ -86,17 +97,17 @@ func (rs *REST) Create(ctx api.Context, obj runtime.Object) (runtime.Object, err
 		return nil, err
 	}
 
-	if len(service.Spec.PortalIP) == 0 {
+	if api.IsServiceIPRequested(service) {
 		// Allocate next available.
 		ip, err := rs.portalMgr.AllocateNext()
 		if err != nil {
 			return nil, err
 		}
 		service.Spec.PortalIP = ip.String()
-	} else {
+	} else if api.IsServiceIPSet(service) {
 		// Try to respect the requested IP.
 		if err := rs.portalMgr.Allocate(net.ParseIP(service.Spec.PortalIP)); err != nil {
-			el := errors.ValidationErrorList{errors.NewFieldInvalid("spec.portalIP", service.Spec.PortalIP, err.Error())}
+			el := fielderrors.ValidationErrorList{fielderrors.NewFieldInvalid("spec.portalIP", service.Spec.PortalIP, err.Error())}
 			return nil, errors.NewInvalid("Service", service.Name, el)
 		}
 	}
@@ -106,15 +117,21 @@ func (rs *REST) Create(ctx api.Context, obj runtime.Object) (runtime.Object, err
 	if service.Spec.CreateExternalLoadBalancer {
 		err := rs.createExternalLoadBalancer(ctx, service)
 		if err != nil {
+			if api.IsServiceIPSet(service) {
+				rs.portalMgr.Release(net.ParseIP(service.Spec.PortalIP))
+			}
 			return nil, err
 		}
 	}
 
-	if err := rs.registry.CreateService(ctx, service); err != nil {
+	out, err := rs.registry.CreateService(ctx, service)
+	if err != nil {
+		if api.IsServiceIPSet(service) {
+			rs.portalMgr.Release(net.ParseIP(service.Spec.PortalIP))
+		}
 		err = rest.CheckGeneratedNameError(rest.Services, err, service)
-		return nil, err
 	}
-	return rs.registry.GetService(ctx, service.Name)
+	return out, err
 }
 
 func hostsFromMinionList(list *api.NodeList) []string {
@@ -130,9 +147,11 @@ func (rs *REST) Delete(ctx api.Context, id string) (runtime.Object, error) {
 	if err != nil {
 		return nil, err
 	}
-	rs.portalMgr.Release(net.ParseIP(service.Spec.PortalIP))
+	if api.IsServiceIPSet(service) {
+		rs.portalMgr.Release(net.ParseIP(service.Spec.PortalIP))
+	}
 	if service.Spec.CreateExternalLoadBalancer {
-		rs.deleteExternalLoadBalancer(service)
+		rs.deleteExternalLoadBalancer(ctx, service)
 	}
 	return &api.Status{Status: api.StatusSuccess}, rs.registry.DeleteService(ctx, id)
 }
@@ -145,8 +164,7 @@ func (rs *REST) Get(ctx api.Context, id string) (runtime.Object, error) {
 	return service, err
 }
 
-// TODO: implement field selector?
-func (rs *REST) List(ctx api.Context, label, field labels.Selector) (runtime.Object, error) {
+func (rs *REST) List(ctx api.Context, label labels.Selector, field fields.Selector) (runtime.Object, error) {
 	list, err := rs.registry.ListServices(ctx)
 	if err != nil {
 		return nil, err
@@ -162,8 +180,8 @@ func (rs *REST) List(ctx api.Context, label, field labels.Selector) (runtime.Obj
 }
 
 // Watch returns Services events via a watch.Interface.
-// It implements apiserver.ResourceWatcher.
-func (rs *REST) Watch(ctx api.Context, label, field labels.Selector, resourceVersion string) (watch.Interface, error) {
+// It implements rest.Watcher.
+func (rs *REST) Watch(ctx api.Context, label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error) {
 	return rs.registry.WatchServices(ctx, label, field, resourceVersion)
 }
 
@@ -195,7 +213,7 @@ func (rs *REST) Update(ctx api.Context, obj runtime.Object) (runtime.Object, boo
 	if externalLoadBalancerNeedsUpdate(oldService, service) {
 		// TODO: support updating existing balancers
 		if oldService.Spec.CreateExternalLoadBalancer {
-			err = rs.deleteExternalLoadBalancer(oldService)
+			err = rs.deleteExternalLoadBalancer(ctx, oldService)
 			if err != nil {
 				return nil, false, err
 			}
@@ -207,26 +225,56 @@ func (rs *REST) Update(ctx api.Context, obj runtime.Object) (runtime.Object, boo
 			}
 		}
 	}
-	err = rs.registry.UpdateService(ctx, service)
-	if err != nil {
-		return nil, false, err
-	}
-	out, err := rs.registry.GetService(ctx, service.Name)
+	out, err := rs.registry.UpdateService(ctx, service)
 	return out, false, err
 }
 
+// Implement Redirector.
+var _ = rest.Redirector(&REST{})
+
 // ResourceLocation returns a URL to which one can send traffic for the specified service.
-func (rs *REST) ResourceLocation(ctx api.Context, id string) (string, error) {
-	e, err := rs.registry.GetEndpoints(ctx, id)
+func (rs *REST) ResourceLocation(ctx api.Context, id string) (*url.URL, http.RoundTripper, error) {
+	// Allow ID as "svcname" or "svcname:port".
+	parts := strings.Split(id, ":")
+	if len(parts) > 2 {
+		return nil, nil, errors.NewBadRequest(fmt.Sprintf("invalid service request %q", id))
+	}
+	svcName := parts[0]
+	portStr := ""
+	if len(parts) == 2 {
+		portStr = parts[1]
+	}
+
+	eps, err := rs.endpoints.GetEndpoints(ctx, svcName)
 	if err != nil {
-		return "", err
+		return nil, nil, err
 	}
-	if len(e.Endpoints) == 0 {
-		return "", fmt.Errorf("no endpoints available for %v", id)
+	if len(eps.Subsets) == 0 {
+		return nil, nil, fmt.Errorf("no endpoints available for %q", svcName)
 	}
-	// We leave off the scheme ('http://') because we have no idea what sort of server
-	// is listening at this endpoint.
-	return e.Endpoints[rand.Intn(len(e.Endpoints))], nil
+	// Pick a random Subset to start searching from.
+	ssSeed := rand.Intn(len(eps.Subsets))
+	// Find a Subset that has the port.
+	for ssi := 0; ssi < len(eps.Subsets); ssi++ {
+		ss := &eps.Subsets[(ssSeed+ssi)%len(eps.Subsets)]
+		for i := range ss.Ports {
+			if ss.Ports[i].Name == portStr {
+				// Pick a random address.
+				ip := ss.Addresses[rand.Intn(len(ss.Addresses))].IP
+				port := ss.Ports[i].Port
+				// We leave off the scheme ('http://') because we have no idea what sort of server
+				// is listening at this endpoint.
+				return &url.URL{
+					Host: net.JoinHostPort(ip, strconv.Itoa(port)),
+				}, nil, nil
+			}
+		}
+	}
+	return nil, nil, fmt.Errorf("no endpoints available for %q", id)
+}
+
+func (rs *REST) getLoadbalancerName(ctx api.Context, service *api.Service) string {
+	return rs.clusterName + "-" + api.NamespaceValue(ctx) + "-" + service.Name
 }
 
 func (rs *REST) createExternalLoadBalancer(ctx api.Context, service *api.Service) error {
@@ -253,27 +301,28 @@ func (rs *REST) createExternalLoadBalancer(ctx api.Context, service *api.Service
 	if err != nil {
 		return err
 	}
+	name := rs.getLoadbalancerName(ctx, service)
 	// TODO: We should be able to rely on valid input, and not do defaulting here.
 	var affinityType api.AffinityType = service.Spec.SessionAffinity
 	if len(service.Spec.PublicIPs) > 0 {
 		for _, publicIP := range service.Spec.PublicIPs {
-			_, err = balancer.CreateTCPLoadBalancer(service.Name, zone.Region, net.ParseIP(publicIP), service.Spec.Port, hostsFromMinionList(hosts), affinityType)
+			_, err = balancer.CreateTCPLoadBalancer(name, zone.Region, net.ParseIP(publicIP), service.Spec.Port, hostsFromMinionList(hosts), affinityType)
 			if err != nil {
 				// TODO: have to roll-back any successful calls.
 				return err
 			}
 		}
 	} else {
-		ip, err := balancer.CreateTCPLoadBalancer(service.Name, zone.Region, nil, service.Spec.Port, hostsFromMinionList(hosts), affinityType)
+		endpoint, err := balancer.CreateTCPLoadBalancer(name, zone.Region, nil, service.Spec.Port, hostsFromMinionList(hosts), affinityType)
 		if err != nil {
 			return err
 		}
-		service.Spec.PublicIPs = []string{ip.String()}
+		service.Spec.PublicIPs = []string{endpoint}
 	}
 	return nil
 }
 
-func (rs *REST) deleteExternalLoadBalancer(service *api.Service) error {
+func (rs *REST) deleteExternalLoadBalancer(ctx api.Context, service *api.Service) error {
 	if rs.cloud == nil {
 		return fmt.Errorf("requested an external service, but no cloud provider supplied.")
 	}
@@ -293,7 +342,7 @@ func (rs *REST) deleteExternalLoadBalancer(service *api.Service) error {
 	if err != nil {
 		return err
 	}
-	if err := balancer.DeleteTCPLoadBalancer(service.Name, zone.Region); err != nil {
+	if err := balancer.DeleteTCPLoadBalancer(rs.getLoadbalancerName(ctx, service), zone.Region); err != nil {
 		return err
 	}
 	return nil

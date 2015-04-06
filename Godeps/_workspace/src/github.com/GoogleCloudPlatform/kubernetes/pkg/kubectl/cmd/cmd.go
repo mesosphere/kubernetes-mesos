@@ -34,7 +34,6 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 
-	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -46,31 +45,36 @@ const (
 // Factory provides abstractions that allow the Kubectl command to be extended across multiple types
 // of resources and different API sets.
 // TODO: make the functions interfaces
+// TODO: pass the various interfaces on the factory directly into the command constructors (so the
+// commands are decoupled from the factory).
 type Factory struct {
 	clients *clientCache
 	flags   *pflag.FlagSet
 
 	// Returns interfaces for dealing with arbitrary runtime.Objects.
-	Object func(cmd *cobra.Command) (meta.RESTMapper, runtime.ObjectTyper)
+	Object func() (meta.RESTMapper, runtime.ObjectTyper)
 	// Returns a client for accessing Kubernetes resources or an error.
-	Client func(cmd *cobra.Command) (*client.Client, error)
+	Client func() (*client.Client, error)
 	// Returns a client.Config for accessing the Kubernetes server.
-	ClientConfig func(cmd *cobra.Command) (*client.Config, error)
+	ClientConfig func() (*client.Config, error)
 	// Returns a RESTClient for working with the specified RESTMapping or an error. This is intended
 	// for working with arbitrary resources and is not guaranteed to point to a Kubernetes APIServer.
-	RESTClient func(cmd *cobra.Command, mapping *meta.RESTMapping) (resource.RESTClient, error)
+	RESTClient func(mapping *meta.RESTMapping) (resource.RESTClient, error)
 	// Returns a Describer for displaying the specified RESTMapping type or an error.
-	Describer func(cmd *cobra.Command, mapping *meta.RESTMapping) (kubectl.Describer, error)
+	Describer func(mapping *meta.RESTMapping) (kubectl.Describer, error)
 	// Returns a Printer for formatting objects of the given type or an error.
-	Printer func(cmd *cobra.Command, mapping *meta.RESTMapping, noHeaders bool) (kubectl.ResourcePrinter, error)
+	Printer func(mapping *meta.RESTMapping, noHeaders bool) (kubectl.ResourcePrinter, error)
 	// Returns a Resizer for changing the size of the specified RESTMapping type or an error
-	Resizer func(cmd *cobra.Command, mapping *meta.RESTMapping) (kubectl.Resizer, error)
+	Resizer func(mapping *meta.RESTMapping) (kubectl.Resizer, error)
 	// Returns a Reaper for gracefully shutting down resources.
-	Reaper func(cmd *cobra.Command, mapping *meta.RESTMapping) (kubectl.Reaper, error)
+	Reaper func(mapping *meta.RESTMapping) (kubectl.Reaper, error)
+	// PodSelectorForResource returns the pod selector associated with the provided resource name
+	// or an error.
+	PodSelectorForResource func(mapping *meta.RESTMapping, namespace, name string) (string, error)
 	// Returns a schema that can validate objects stored on disk.
-	Validator func(*cobra.Command) (validation.Schema, error)
+	Validator func() (validation.Schema, error)
 	// Returns the default namespace to use in cases where no other namespace is specified
-	DefaultNamespace func(cmd *cobra.Command) (string, error)
+	DefaultNamespace func() (string, error)
 }
 
 // NewFactory creates a factory with the default Kubernetes resources defined
@@ -95,27 +99,27 @@ func NewFactory(optionalClientConfig clientcmd.ClientConfig) *Factory {
 		clients: clients,
 		flags:   flags,
 
-		Object: func(cmd *cobra.Command) (meta.RESTMapper, runtime.ObjectTyper) {
+		Object: func() (meta.RESTMapper, runtime.ObjectTyper) {
 			cfg, err := clientConfig.ClientConfig()
-			checkErr(err)
+			cmdutil.CheckErr(err)
 			cmdApiVersion := cfg.Version
 
 			return kubectl.OutputVersionMapper{mapper, cmdApiVersion}, api.Scheme
 		},
-		Client: func(cmd *cobra.Command) (*client.Client, error) {
+		Client: func() (*client.Client, error) {
 			return clients.ClientForVersion("")
 		},
-		ClientConfig: func(cmd *cobra.Command) (*client.Config, error) {
+		ClientConfig: func() (*client.Config, error) {
 			return clients.ClientConfigForVersion("")
 		},
-		RESTClient: func(cmd *cobra.Command, mapping *meta.RESTMapping) (resource.RESTClient, error) {
+		RESTClient: func(mapping *meta.RESTMapping) (resource.RESTClient, error) {
 			client, err := clients.ClientForVersion(mapping.APIVersion)
 			if err != nil {
 				return nil, err
 			}
 			return client.RESTClient, nil
 		},
-		Describer: func(cmd *cobra.Command, mapping *meta.RESTMapping) (kubectl.Describer, error) {
+		Describer: func(mapping *meta.RESTMapping) (kubectl.Describer, error) {
 			client, err := clients.ClientForVersion(mapping.APIVersion)
 			if err != nil {
 				return nil, err
@@ -126,25 +130,60 @@ func NewFactory(optionalClientConfig clientcmd.ClientConfig) *Factory {
 			}
 			return describer, nil
 		},
-		Printer: func(cmd *cobra.Command, mapping *meta.RESTMapping, noHeaders bool) (kubectl.ResourcePrinter, error) {
+		Printer: func(mapping *meta.RESTMapping, noHeaders bool) (kubectl.ResourcePrinter, error) {
 			return kubectl.NewHumanReadablePrinter(noHeaders), nil
 		},
-		Resizer: func(cmd *cobra.Command, mapping *meta.RESTMapping) (kubectl.Resizer, error) {
+		PodSelectorForResource: func(mapping *meta.RESTMapping, namespace, name string) (string, error) {
+			// TODO: replace with a swagger schema based approach (identify pod selector via schema introspection)
+			client, err := clients.ClientForVersion("")
+			if err != nil {
+				return "", err
+			}
+			switch mapping.Kind {
+			case "ReplicationController":
+				rc, err := client.ReplicationControllers(namespace).Get(name)
+				if err != nil {
+					return "", err
+				}
+				return kubectl.MakeLabels(rc.Spec.Selector), nil
+			case "Pod":
+				rc, err := client.Pods(namespace).Get(name)
+				if err != nil {
+					return "", err
+				}
+				if len(rc.Labels) == 0 {
+					return "", fmt.Errorf("the pod has no labels and cannot be exposed")
+				}
+				return kubectl.MakeLabels(rc.Labels), nil
+			case "Service":
+				rc, err := client.ReplicationControllers(namespace).Get(name)
+				if err != nil {
+					return "", err
+				}
+				if rc.Spec.Selector == nil {
+					return "", fmt.Errorf("the service has no pod selector set")
+				}
+				return kubectl.MakeLabels(rc.Spec.Selector), nil
+			default:
+				return "", fmt.Errorf("it is not possible to get a pod selector from %s", mapping.Kind)
+			}
+		},
+		Resizer: func(mapping *meta.RESTMapping) (kubectl.Resizer, error) {
 			client, err := clients.ClientForVersion(mapping.APIVersion)
 			if err != nil {
 				return nil, err
 			}
 			return kubectl.ResizerFor(mapping.Kind, client)
 		},
-		Reaper: func(cmd *cobra.Command, mapping *meta.RESTMapping) (kubectl.Reaper, error) {
+		Reaper: func(mapping *meta.RESTMapping) (kubectl.Reaper, error) {
 			client, err := clients.ClientForVersion(mapping.APIVersion)
 			if err != nil {
 				return nil, err
 			}
 			return kubectl.ReaperFor(mapping.Kind, client)
 		},
-		Validator: func(cmd *cobra.Command) (validation.Schema, error) {
-			if cmdutil.GetFlagBool(cmd, "validate") {
+		Validator: func() (validation.Schema, error) {
+			if flags.Lookup("validate").Value.String() == "true" {
 				client, err := clients.ClientForVersion("")
 				if err != nil {
 					return nil, err
@@ -153,7 +192,7 @@ func NewFactory(optionalClientConfig clientcmd.ClientConfig) *Factory {
 			}
 			return validation.NullSchema{}, nil
 		},
-		DefaultNamespace: func(cmd *cobra.Command) (string, error) {
+		DefaultNamespace: func() (string, error) {
 			return clientConfig.Namespace()
 		},
 	}
@@ -168,6 +207,12 @@ func (f *Factory) BindFlags(flags *pflag.FlagSet) {
 	// pflags currently.  See https://github.com/spf13/cobra/issues/44.
 	util.AddPFlagSetToPFlagSet(pflag.CommandLine, flags)
 
+	// Hack for global access to validation flag.
+	// TODO: Refactor out after configuration flag overhaul.
+	if f.flags.Lookup("validate") == nil {
+		f.flags.Bool("validate", false, "If true, use a schema to validate the input before sending it")
+	}
+
 	if f.flags != nil {
 		f.flags.VisitAll(func(flag *pflag.Flag) {
 			flags.AddFlag(flag)
@@ -179,11 +224,10 @@ func (f *Factory) BindFlags(flags *pflag.FlagSet) {
 	// TODO Add a verbose flag that turns on glog logging. Probably need a way
 	// to do that automatically for every subcommand.
 	flags.BoolVar(&f.clients.matchVersion, FlagMatchBinaryVersion, false, "Require server version to match client version")
-	flags.Bool("validate", false, "If true, use a schema to validate the input before sending it")
 }
 
 // NewKubectlCommand creates the `kubectl` command and its nested children.
-func (f *Factory) NewKubectlCommand(out io.Writer) *cobra.Command {
+func (f *Factory) NewKubectlCommand(in io.Reader, out, err io.Writer) *cobra.Command {
 	// Parent command to which all subcommands are added.
 	cmds := &cobra.Command{
 		Use:   "kubectl",
@@ -196,20 +240,20 @@ Find more information at https://github.com/GoogleCloudPlatform/kubernetes.`,
 
 	f.BindFlags(cmds.PersistentFlags())
 
-	cmds.AddCommand(f.NewCmdVersion(out))
-	cmds.AddCommand(f.NewCmdProxy(out))
-
 	cmds.AddCommand(f.NewCmdGet(out))
 	cmds.AddCommand(f.NewCmdDescribe(out))
 	cmds.AddCommand(f.NewCmdCreate(out))
 	cmds.AddCommand(f.NewCmdUpdate(out))
 	cmds.AddCommand(f.NewCmdDelete(out))
 
-	cmds.AddCommand(cmdconfig.NewCmdConfig(out))
 	cmds.AddCommand(NewCmdNamespace(out))
 	cmds.AddCommand(f.NewCmdLog(out))
 	cmds.AddCommand(f.NewCmdRollingUpdate(out))
 	cmds.AddCommand(f.NewCmdResize(out))
+
+	cmds.AddCommand(f.NewCmdExec(in, out, err))
+	cmds.AddCommand(f.NewCmdPortForward())
+	cmds.AddCommand(f.NewCmdProxy(out))
 
 	cmds.AddCommand(f.NewCmdRunContainer(out))
 	cmds.AddCommand(f.NewCmdStop(out))
@@ -217,12 +261,17 @@ Find more information at https://github.com/GoogleCloudPlatform/kubernetes.`,
 
 	cmds.AddCommand(f.NewCmdLabel(out))
 
+	cmds.AddCommand(cmdconfig.NewCmdConfig(out))
+	cmds.AddCommand(f.NewCmdClusterInfo(out))
+	cmds.AddCommand(f.NewCmdApiVersions(out))
+	cmds.AddCommand(f.NewCmdVersion(out))
+
 	return cmds
 }
 
 // PrintObject prints an api object given command line flags to modify the output format
 func (f *Factory) PrintObject(cmd *cobra.Command, obj runtime.Object, out io.Writer) error {
-	mapper, _ := f.Object(cmd)
+	mapper, _ := f.Object()
 	_, kind, err := api.Scheme.ObjectVersionAndKind(obj)
 	if err != nil {
 		return err
@@ -248,8 +297,10 @@ func (f *Factory) PrinterForMapping(cmd *cobra.Command, mapping *meta.RESTMappin
 		return nil, err
 	}
 	if ok {
-		clientConfig, err := f.ClientConfig(cmd)
-		checkErr(err)
+		clientConfig, err := f.ClientConfig()
+		if err != nil {
+			return nil, err
+		}
 		defaultVersion := clientConfig.Version
 
 		version := cmdutil.OutputVersion(cmd, defaultVersion)
@@ -261,7 +312,7 @@ func (f *Factory) PrinterForMapping(cmd *cobra.Command, mapping *meta.RESTMappin
 		}
 		printer = kubectl.NewVersionedPrinter(printer, mapping.ObjectConvertor, version)
 	} else {
-		printer, err = f.Printer(cmd, mapping, cmdutil.GetFlagBool(cmd, "no-headers"))
+		printer, err = f.Printer(mapping, cmdutil.GetFlagBool(cmd, "no-headers"))
 		if err != nil {
 			return nil, err
 		}
@@ -269,10 +320,10 @@ func (f *Factory) PrinterForMapping(cmd *cobra.Command, mapping *meta.RESTMappin
 	return printer, nil
 }
 
-// ClientMapperForCommand returns a ClientMapper for the given command and factory.
-func (f *Factory) ClientMapperForCommand(cmd *cobra.Command) resource.ClientMapper {
+// ClientMapperForCommand returns a ClientMapper for the factory.
+func (f *Factory) ClientMapperForCommand() resource.ClientMapper {
 	return resource.ClientMapperFunc(func(mapping *meta.RESTMapping) (resource.RESTClient, error) {
-		return f.RESTClient(cmd, mapping)
+		return f.RESTClient(mapping)
 	})
 }
 
@@ -309,9 +360,8 @@ func (f *Factory) ClientMapperForCommand(cmd *cobra.Command) resource.ClientMapp
 //           3.  If the command line specifies one and the auth info specifies another, honor the command line technique.
 //   2.  Use default values and potentially prompt for auth information
 func DefaultClientConfig(flags *pflag.FlagSet) clientcmd.ClientConfig {
-	loadingRules := clientcmd.NewClientConfigLoadingRules()
-	loadingRules.EnvVarPath = os.Getenv(clientcmd.RecommendedConfigPathEnvVar)
-	flags.StringVar(&loadingRules.CommandLinePath, "kubeconfig", "", "Path to the kubeconfig file to use for CLI requests.")
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	flags.StringVar(&loadingRules.ExplicitPath, "kubeconfig", "", "Path to the kubeconfig file to use for CLI requests.")
 
 	overrides := &clientcmd.ConfigOverrides{}
 	flagNames := clientcmd.RecommendedConfigOverrideFlags("")
@@ -323,18 +373,6 @@ func DefaultClientConfig(flags *pflag.FlagSet) clientcmd.ClientConfig {
 	clientConfig := clientcmd.NewInteractiveDeferredLoadingClientConfig(loadingRules, overrides, os.Stdin)
 
 	return clientConfig
-}
-
-func checkErr(err error) {
-	if err != nil {
-		glog.FatalDepth(1, err.Error())
-	}
-}
-
-func usageError(cmd *cobra.Command, format string, args ...interface{}) {
-	glog.Errorf(format, args...)
-	glog.Errorf("See '%s -h' for help.", cmd.CommandPath())
-	os.Exit(1)
 }
 
 func runHelp(cmd *cobra.Command, args []string) {

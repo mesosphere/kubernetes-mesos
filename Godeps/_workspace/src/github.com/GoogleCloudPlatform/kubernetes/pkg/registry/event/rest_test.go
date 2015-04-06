@@ -21,8 +21,9 @@ import (
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/rest"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/testapi"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/apiserver"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/registrytest"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
@@ -35,7 +36,7 @@ type testRegistry struct {
 
 func NewTestREST() (testRegistry, *REST) {
 	reg := testRegistry{registrytest.NewGeneric(nil)}
-	return reg, NewREST(reg)
+	return reg, NewStorage(reg)
 }
 
 func testEvent(name string) *api.Event {
@@ -73,8 +74,8 @@ func TestRESTCreate(t *testing.T) {
 	}
 
 	for _, item := range table {
-		_, rest := NewTestREST()
-		c, err := rest.Create(item.ctx, item.event)
+		_, storage := NewTestREST()
+		c, err := storage.Create(item.ctx, item.event)
 		if !item.valid {
 			if err == nil {
 				ctxNS := api.NamespaceValue(item.ctx)
@@ -93,7 +94,7 @@ func TestRESTCreate(t *testing.T) {
 			t.Errorf("diff: %s", util.ObjectDiff(e, a))
 		}
 		// Ensure we implement the interface
-		_ = apiserver.ResourceWatcher(rest)
+		_ = rest.Watcher(storage)
 	}
 }
 
@@ -180,7 +181,7 @@ func TestRESTgetAttrs(t *testing.T) {
 	if e, a := label, (labels.Set{}); !reflect.DeepEqual(e, a) {
 		t.Errorf("diff: %s", util.ObjectDiff(e, a))
 	}
-	expect := labels.Set{
+	expect := fields.Set{
 		"involvedObject.kind":            "Pod",
 		"involvedObject.name":            "foo",
 		"involvedObject.namespace":       "baz",
@@ -237,7 +238,7 @@ func TestRESTList(t *testing.T) {
 	reg.ObjectList = &api.EventList{
 		Items: []api.Event{*eventA, *eventB, *eventC},
 	}
-	got, err := rest.List(api.NewContext(), labels.Everything(), labels.Set{"source": "GoodSource"}.AsSelector())
+	got, err := rest.List(api.NewContext(), labels.Everything(), fields.Set{"source": "GoodSource"}.AsSelector())
 	if err != nil {
 		t.Fatalf("Unexpected error %v", err)
 	}
@@ -262,7 +263,7 @@ func TestRESTWatch(t *testing.T) {
 		Reason: "ForTesting",
 	}
 	reg, rest := NewTestREST()
-	wi, err := rest.Watch(api.NewContext(), labels.Everything(), labels.Everything(), "0")
+	wi, err := rest.Watch(api.NewContext(), labels.Everything(), fields.Everything(), "0")
 	if err != nil {
 		t.Fatalf("Unexpected error %v", err)
 	}

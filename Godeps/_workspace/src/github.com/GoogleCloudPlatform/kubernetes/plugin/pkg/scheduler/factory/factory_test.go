@@ -19,7 +19,6 @@ package factory
 import (
 	"net/http"
 	"net/http/httptest"
-	"path"
 	"reflect"
 	"testing"
 	"time"
@@ -30,7 +29,10 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
+	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	schedulerapi "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler/api"
+	latestschedulerapi "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler/api/latest"
 )
 
 func TestCreate(t *testing.T) {
@@ -46,6 +48,89 @@ func TestCreate(t *testing.T) {
 	factory.Create()
 }
 
+// Test configures a scheduler from a policies defined in a file
+// It combines some configurable predicate/priorities with some pre-defined ones
+func TestCreateFromConfig(t *testing.T) {
+	var configData []byte
+	var policy schedulerapi.Policy
+
+	handler := util.FakeHandler{
+		StatusCode:   500,
+		ResponseBody: "",
+		T:            t,
+	}
+	server := httptest.NewServer(&handler)
+	defer server.Close()
+	client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Version()})
+	factory := NewConfigFactory(client)
+
+	// Pre-register some predicate and priority functions
+	RegisterFitPredicate("PredicateOne", PredicateOne)
+	RegisterFitPredicate("PredicateTwo", PredicateTwo)
+	RegisterPriorityFunction("PriorityOne", PriorityOne, 1)
+	RegisterPriorityFunction("PriorityTwo", PriorityTwo, 1)
+
+	configData = []byte(`{
+		"kind" : "Policy",
+		"apiVersion" : "v1",
+		"predicates" : [
+			{"name" : "TestZoneAffinity", "argument" : {"serviceAffinity" : {"labels" : ["zone"]}}},
+			{"name" : "TestRequireZone", "argument" : {"labelsPresence" : {"labels" : ["zone"], "presence" : true}}},
+			{"name" : "PredicateOne"},
+			{"name" : "PredicateTwo"}
+		],
+		"priorities" : [
+			{"name" : "RackSpread", "weight" : 3, "argument" : {"serviceAntiAffinity" : {"label" : "rack"}}},
+			{"name" : "PriorityOne", "weight" : 2},
+			{"name" : "PriorityTwo", "weight" : 1}		]
+	}`)
+	err := latestschedulerapi.Codec.DecodeInto(configData, &policy)
+	if err != nil {
+		t.Errorf("Invalid configuration: %v", err)
+	}
+
+	factory.CreateFromConfig(policy)
+}
+
+func TestCreateFromEmptyConfig(t *testing.T) {
+	var configData []byte
+	var policy schedulerapi.Policy
+
+	handler := util.FakeHandler{
+		StatusCode:   500,
+		ResponseBody: "",
+		T:            t,
+	}
+	server := httptest.NewServer(&handler)
+	defer server.Close()
+	client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Version()})
+	factory := NewConfigFactory(client)
+
+	configData = []byte(`{}`)
+	err := latestschedulerapi.Codec.DecodeInto(configData, &policy)
+	if err != nil {
+		t.Errorf("Invalid configuration: %v", err)
+	}
+
+	factory.CreateFromConfig(policy)
+}
+
+func PredicateOne(pod api.Pod, existingPods []api.Pod, node string) (bool, error) {
+	return true, nil
+}
+
+func PredicateTwo(pod api.Pod, existingPods []api.Pod, node string) (bool, error) {
+	return true, nil
+}
+
+func PriorityOne(pod api.Pod, podLister algorithm.PodLister, minionLister algorithm.MinionLister) (algorithm.HostPriorityList, error) {
+	return []algorithm.HostPriority{}, nil
+}
+
+func PriorityTwo(pod api.Pod, podLister algorithm.PodLister, minionLister algorithm.MinionLister) (algorithm.HostPriorityList, error) {
+	return []algorithm.HostPriority{}, nil
+}
+
 func TestPollMinions(t *testing.T) {
 	table := []struct {
 		minions       []api.Node
@@ -57,7 +142,7 @@ func TestPollMinions(t *testing.T) {
 					ObjectMeta: api.ObjectMeta{Name: "foo"},
 					Status: api.NodeStatus{
 						Conditions: []api.NodeCondition{
-							{Kind: api.NodeReady, Status: api.ConditionFull},
+							{Type: api.NodeReady, Status: api.ConditionTrue},
 						},
 					},
 				},
@@ -65,7 +150,24 @@ func TestPollMinions(t *testing.T) {
 					ObjectMeta: api.ObjectMeta{Name: "bar"},
 					Status: api.NodeStatus{
 						Conditions: []api.NodeCondition{
-							{Kind: api.NodeReachable, Status: api.ConditionFull},
+							{Type: api.NodeReachable, Status: api.ConditionTrue},
+						},
+					},
+				},
+				{
+					ObjectMeta: api.ObjectMeta{Name: "fiz"},
+					Status: api.NodeStatus{
+						Conditions: []api.NodeCondition{
+							{Type: api.NodeSchedulable, Status: api.ConditionTrue},
+						},
+					},
+				},
+				{
+					ObjectMeta: api.ObjectMeta{Name: "biz"},
+					Status: api.NodeStatus{
+						Conditions: []api.NodeCondition{
+							{Type: api.NodeReady, Status: api.ConditionTrue},
+							{Type: api.NodeReachable, Status: api.ConditionTrue},
 						},
 					},
 				},
@@ -73,22 +175,52 @@ func TestPollMinions(t *testing.T) {
 					ObjectMeta: api.ObjectMeta{Name: "baz"},
 					Status: api.NodeStatus{
 						Conditions: []api.NodeCondition{
-							{Kind: api.NodeReady, Status: api.ConditionFull},
-							{Kind: api.NodeReachable, Status: api.ConditionFull},
+							{Type: api.NodeReady, Status: api.ConditionTrue},
+							{Type: api.NodeReady, Status: api.ConditionTrue},
 						},
 					},
 				},
 				{
-					ObjectMeta: api.ObjectMeta{Name: "baz"},
+					ObjectMeta: api.ObjectMeta{Name: "fuz"},
 					Status: api.NodeStatus{
 						Conditions: []api.NodeCondition{
-							{Kind: api.NodeReady, Status: api.ConditionFull},
-							{Kind: api.NodeReady, Status: api.ConditionFull},
+							{Type: api.NodeSchedulable, Status: api.ConditionTrue},
+							{Type: api.NodeReady, Status: api.ConditionTrue},
+							{Type: api.NodeReachable, Status: api.ConditionTrue},
+						},
+					},
+				},
+				{
+					ObjectMeta: api.ObjectMeta{Name: "buz"},
+					Status: api.NodeStatus{
+						Conditions: []api.NodeCondition{
+							{Type: api.NodeSchedulable, Status: api.ConditionFalse},
+							{Type: api.NodeReady, Status: api.ConditionTrue},
+							{Type: api.NodeReachable, Status: api.ConditionTrue},
+						},
+					},
+				},
+				{
+					ObjectMeta: api.ObjectMeta{Name: "foobar"},
+					Status: api.NodeStatus{
+						Conditions: []api.NodeCondition{
+							{Type: api.NodeSchedulable, Status: api.ConditionTrue},
+							{Type: api.NodeReady, Status: api.ConditionFalse},
+							{Type: api.NodeReachable, Status: api.ConditionTrue},
+						},
+					},
+				},
+				{
+					ObjectMeta: api.ObjectMeta{Name: "fizbiz"},
+					Status: api.NodeStatus{
+						Conditions: []api.NodeCondition{
+							{Type: api.NodeSchedulable, Status: api.ConditionTrue},
+							{Type: api.NodeReachable, Status: api.ConditionFalse},
 						},
 					},
 				},
 			},
-			expectedCount: 4,
+			expectedCount: 5,
 		},
 		{
 			minions: []api.Node{
@@ -96,7 +228,7 @@ func TestPollMinions(t *testing.T) {
 					ObjectMeta: api.ObjectMeta{Name: "foo"},
 					Status: api.NodeStatus{
 						Conditions: []api.NodeCondition{
-							{Kind: api.NodeReady, Status: api.ConditionFull},
+							{Type: api.NodeReady, Status: api.ConditionTrue},
 						},
 					},
 				},
@@ -104,7 +236,7 @@ func TestPollMinions(t *testing.T) {
 					ObjectMeta: api.ObjectMeta{Name: "bar"},
 					Status: api.NodeStatus{
 						Conditions: []api.NodeCondition{
-							{Kind: api.NodeReady, Status: api.ConditionNone},
+							{Type: api.NodeReady, Status: api.ConditionFalse},
 						},
 					},
 				},
@@ -117,8 +249,29 @@ func TestPollMinions(t *testing.T) {
 					ObjectMeta: api.ObjectMeta{Name: "foo"},
 					Status: api.NodeStatus{
 						Conditions: []api.NodeCondition{
-							{Kind: api.NodeReady, Status: api.ConditionFull},
-							{Kind: api.NodeReachable, Status: api.ConditionNone}},
+							{Type: api.NodeSchedulable, Status: api.ConditionTrue},
+						},
+					},
+				},
+				{
+					ObjectMeta: api.ObjectMeta{Name: "bar"},
+					Status: api.NodeStatus{
+						Conditions: []api.NodeCondition{
+							{Type: api.NodeSchedulable, Status: api.ConditionFalse},
+						},
+					},
+				},
+			},
+			expectedCount: 0,
+		},
+		{
+			minions: []api.Node{
+				{
+					ObjectMeta: api.ObjectMeta{Name: "foo"},
+					Status: api.NodeStatus{
+						Conditions: []api.NodeCondition{
+							{Type: api.NodeReady, Status: api.ConditionTrue},
+							{Type: api.NodeReachable, Status: api.ConditionFalse}},
 					},
 				},
 			},
@@ -130,8 +283,8 @@ func TestPollMinions(t *testing.T) {
 					ObjectMeta: api.ObjectMeta{Name: "foo"},
 					Status: api.NodeStatus{
 						Conditions: []api.NodeCondition{
-							{Kind: api.NodeReachable, Status: api.ConditionFull},
-							{Kind: "invalidValue", Status: api.ConditionNone}},
+							{Type: api.NodeReachable, Status: api.ConditionTrue},
+							{Type: "invalidValue", Status: api.ConditionFalse}},
 					},
 				},
 			},
@@ -146,7 +299,7 @@ func TestPollMinions(t *testing.T) {
 					},
 				},
 			},
-			expectedCount: 1,
+			expectedCount: 0,
 		},
 	}
 
@@ -159,7 +312,11 @@ func TestPollMinions(t *testing.T) {
 		}
 		mux := http.NewServeMux()
 		// FakeHandler musn't be sent requests other than the one you want to test.
-		mux.Handle("/api/"+testapi.Version()+"/minions", &handler)
+		resource := "nodes"
+		if api.PreV1Beta3(testapi.Version()) {
+			resource = "minions"
+		}
+		mux.Handle(testapi.ResourcePath(resource, api.NamespaceAll, ""), &handler)
 		server := httptest.NewServer(mux)
 		defer server.Close()
 		client := client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Version()})
@@ -170,7 +327,7 @@ func TestPollMinions(t *testing.T) {
 			t.Errorf("Unexpected error: %v", err)
 			continue
 		}
-		handler.ValidateRequest(t, "/api/"+testapi.Version()+"/minions", "GET", nil)
+		handler.ValidateRequest(t, testapi.ResourcePath(resource, api.NamespaceAll, ""), "GET", nil)
 
 		if a := ce.Len(); item.expectedCount != a {
 			t.Errorf("Expected %v, got %v", item.expectedCount, a)
@@ -178,27 +335,11 @@ func TestPollMinions(t *testing.T) {
 	}
 }
 
-func makeNamespaceURL(namespace, suffix string, isClient bool) string {
-	if !(testapi.Version() == "v1beta1" || testapi.Version() == "v1beta2") {
-		return makeURL("/ns/" + namespace + suffix)
-	}
-	// if this is a url the client should call, encode the url
-	if isClient {
-		return makeURL(suffix + "?namespace=" + namespace)
-	}
-	// its not a client url, so its what the server needs to listen on
-	return makeURL(suffix)
-}
-
-func makeURL(suffix string) string {
-	return path.Join("/api", testapi.Version(), suffix)
-}
-
 func TestDefaultErrorFunc(t *testing.T) {
 	testPod := &api.Pod{
 		ObjectMeta: api.ObjectMeta{Name: "foo", Namespace: "bar"},
 		Spec: api.PodSpec{
-			RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
+			RestartPolicy: api.RestartPolicyAlways,
 			DNSPolicy:     api.DNSClusterFirst,
 		},
 	}
@@ -210,7 +351,7 @@ func TestDefaultErrorFunc(t *testing.T) {
 	mux := http.NewServeMux()
 
 	// FakeHandler musn't be sent requests other than the one you want to test.
-	mux.Handle(makeNamespaceURL("bar", "/pods/foo", false), &handler)
+	mux.Handle(testapi.ResourcePath("pods", "bar", "foo"), &handler)
 	server := httptest.NewServer(mux)
 	defer server.Close()
 	factory := NewConfigFactory(client.NewOrDie(&client.Config{Host: server.URL, Version: testapi.Version()}))
@@ -233,7 +374,7 @@ func TestDefaultErrorFunc(t *testing.T) {
 		if !exists {
 			continue
 		}
-		handler.ValidateRequest(t, makeNamespaceURL("bar", "/pods/foo", true), "GET", nil)
+		handler.ValidateRequest(t, testapi.ResourcePathWithQueryParams("pods", "bar", "foo"), "GET", nil)
 		if e, a := testPod, got; !reflect.DeepEqual(e, a) {
 			t.Errorf("Expected %v, got %v", e, a)
 		}
@@ -280,9 +421,11 @@ func TestBind(t *testing.T) {
 		{binding: &api.Binding{
 			ObjectMeta: api.ObjectMeta{
 				Namespace: api.NamespaceDefault,
+				Name:      "foo",
 			},
-			PodID: "foo",
-			Host:  "foohost.kubernetes.mydomain.com",
+			Target: api.ObjectReference{
+				Name: "foohost.kubernetes.mydomain.com",
+			},
 		}},
 	}
 
@@ -302,7 +445,7 @@ func TestBind(t *testing.T) {
 			continue
 		}
 		expectedBody := runtime.EncodeOrDie(testapi.Codec(), item.binding)
-		handler.ValidateRequest(t, "/api/"+testapi.Version()+"/bindings?namespace=default", "POST", &expectedBody)
+		handler.ValidateRequest(t, testapi.ResourcePathWithQueryParams("bindings", api.NamespaceDefault, ""), "POST", &expectedBody)
 	}
 }
 

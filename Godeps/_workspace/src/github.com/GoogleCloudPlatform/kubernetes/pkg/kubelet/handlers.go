@@ -24,7 +24,6 @@ import (
 	"strconv"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/types"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/golang/glog"
@@ -72,16 +71,15 @@ func ResolvePort(portReference util.IntOrString, container *api.Container) (int,
 func (h *httpActionHandler) Run(podFullName string, uid types.UID, container *api.Container, handler *api.Handler) error {
 	host := handler.HTTPGet.Host
 	if len(host) == 0 {
-		status, err := h.kubelet.GetPodStatus(podFullName, uid)
+		status, err := h.kubelet.GetPodStatus(podFullName)
 		if err != nil {
 			glog.Errorf("Unable to get pod info, event handlers may be invalid.")
 			return err
 		}
-		netInfo, found := status.Info[dockertools.PodInfraContainerName]
-		if !found {
+		if status.PodIP == "" {
 			return fmt.Errorf("failed to find networking container: %v", status)
 		}
-		host = netInfo.PodIP
+		host = status.PodIP
 	}
 	var port int
 	if handler.HTTPGet.Port.Kind == util.IntstrString && len(handler.HTTPGet.Port.StrVal) == 0 {

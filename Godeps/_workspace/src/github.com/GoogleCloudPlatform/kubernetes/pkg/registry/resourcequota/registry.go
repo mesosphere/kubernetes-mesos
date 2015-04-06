@@ -17,59 +17,71 @@ limitations under the License.
 package resourcequota
 
 import (
-	"fmt"
-
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/generic"
-	etcdgeneric "github.com/GoogleCloudPlatform/kubernetes/pkg/registry/generic/etcd"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/registry/resourcequotausage"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/rest"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 )
 
-// Registry implements operations to modify ResourceQuota objects
+// Registry is an interface implemented by things that know how to store ResourceQuota objects.
 type Registry interface {
-	generic.Registry
-	resourcequotausage.Registry
+	// ListResourceQuotas obtains a list of resourceQuotas having labels which match selector.
+	ListResourceQuotas(ctx api.Context, selector labels.Selector) (*api.ResourceQuotaList, error)
+	// Watch for new/changed/deleted resourceQuotas
+	WatchResourceQuotas(ctx api.Context, label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error)
+	// Get a specific resourceQuota
+	GetResourceQuota(ctx api.Context, resourceQuotaID string) (*api.ResourceQuota, error)
+	// Create a resourceQuota based on a specification.
+	CreateResourceQuota(ctx api.Context, resourceQuota *api.ResourceQuota) error
+	// Update an existing resourceQuota
+	UpdateResourceQuota(ctx api.Context, resourceQuota *api.ResourceQuota) error
+	// Delete an existing resourceQuota
+	DeleteResourceQuota(ctx api.Context, resourceQuotaID string) error
 }
 
-// registry implements custom changes to generic.Etcd.
-type registry struct {
-	*etcdgeneric.Etcd
+// storage puts strong typing around storage calls
+type storage struct {
+	rest.StandardStorage
 }
 
-// ApplyStatus atomically updates the ResourceQuotaStatus based on the observed ResourceQuotaUsage
-func (r *registry) ApplyStatus(ctx api.Context, usage *api.ResourceQuotaUsage) error {
-	obj, err := r.Get(ctx, usage.Name)
+// NewRegistry returns a new Registry interface for the given Storage. Any mismatched
+// types will panic.
+func NewRegistry(s rest.StandardStorage) Registry {
+	return &storage{s}
+}
+
+func (s *storage) ListResourceQuotas(ctx api.Context, label labels.Selector) (*api.ResourceQuotaList, error) {
+	obj, err := s.List(ctx, label, fields.Everything())
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	if len(usage.ResourceVersion) == 0 {
-		return fmt.Errorf("A resource observation must have a resourceVersion specified to ensure atomic updates")
-	}
-
-	// set the status
-	resourceQuota := obj.(*api.ResourceQuota)
-	resourceQuota.ResourceVersion = usage.ResourceVersion
-	resourceQuota.Status = usage.Status
-	return r.UpdateWithName(ctx, resourceQuota.Name, resourceQuota)
+	return obj.(*api.ResourceQuotaList), nil
 }
 
-// NewEtcdRegistry returns a registry which will store ResourceQuota in the given helper
-func NewEtcdRegistry(h tools.EtcdHelper) Registry {
-	return &registry{
-		Etcd: &etcdgeneric.Etcd{
-			NewFunc:      func() runtime.Object { return &api.ResourceQuota{} },
-			NewListFunc:  func() runtime.Object { return &api.ResourceQuotaList{} },
-			EndpointName: "resourcequotas",
-			KeyRootFunc: func(ctx api.Context) string {
-				return etcdgeneric.NamespaceKeyRootFunc(ctx, "/registry/resourcequotas")
-			},
-			KeyFunc: func(ctx api.Context, id string) (string, error) {
-				return etcdgeneric.NamespaceKeyFunc(ctx, "/registry/resourcequotas", id)
-			},
-			Helper: h,
-		},
+func (s *storage) WatchResourceQuotas(ctx api.Context, label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error) {
+	return s.Watch(ctx, label, field, resourceVersion)
+}
+
+func (s *storage) GetResourceQuota(ctx api.Context, resourceQuotaID string) (*api.ResourceQuota, error) {
+	obj, err := s.Get(ctx, resourceQuotaID)
+	if err != nil {
+		return nil, err
 	}
+	return obj.(*api.ResourceQuota), nil
+}
+
+func (s *storage) CreateResourceQuota(ctx api.Context, resourceQuota *api.ResourceQuota) error {
+	_, err := s.Create(ctx, resourceQuota)
+	return err
+}
+
+func (s *storage) UpdateResourceQuota(ctx api.Context, resourceQuota *api.ResourceQuota) error {
+	_, _, err := s.Update(ctx, resourceQuota)
+	return err
+}
+
+func (s *storage) DeleteResourceQuota(ctx api.Context, resourceQuotaID string) error {
+	_, err := s.Delete(ctx, resourceQuotaID, nil)
+	return err
 }

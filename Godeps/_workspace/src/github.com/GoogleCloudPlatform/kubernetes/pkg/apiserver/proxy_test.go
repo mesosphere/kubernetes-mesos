@@ -28,7 +28,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/rest"
 	"golang.org/x/net/html"
+	"golang.org/x/net/websocket"
 )
 
 func parseURLOrDie(inURL string) *url.URL {
@@ -273,20 +275,17 @@ func TestProxy(t *testing.T) {
 		}))
 		defer proxyServer.Close()
 
+		serverURL, _ := url.Parse(proxyServer.URL)
 		simpleStorage := &SimpleRESTStorage{
 			errors:                    map[string]error{},
-			resourceLocation:          proxyServer.URL,
+			resourceLocation:          serverURL,
 			expectedResourceNamespace: item.reqNamespace,
 		}
 
-		namespaceHandler := Handle(map[string]RESTStorage{
-			"foo": simpleStorage,
-		}, codec, "/prefix", "version", selfLinker, admissionControl, requestContextMapper, namespaceMapper)
+		namespaceHandler := handleNamespaced(map[string]rest.Storage{"foo": simpleStorage})
 		namespaceServer := httptest.NewServer(namespaceHandler)
 		defer namespaceServer.Close()
-		legacyNamespaceHandler := Handle(map[string]RESTStorage{
-			"foo": simpleStorage,
-		}, codec, "/prefix", "version", selfLinker, admissionControl, requestContextMapper, legacyNamespaceMapper)
+		legacyNamespaceHandler := handle(map[string]rest.Storage{"foo": simpleStorage})
 		legacyNamespaceServer := httptest.NewServer(legacyNamespaceHandler)
 		defer legacyNamespaceServer.Close()
 
@@ -295,8 +294,8 @@ func TestProxy(t *testing.T) {
 			server           *httptest.Server
 			proxyTestPattern string
 		}{
-			{namespaceServer, "/prefix/version/proxy/namespaces/" + item.reqNamespace + "/foo/id" + item.path},
-			{legacyNamespaceServer, "/prefix/version/proxy/foo/id" + item.path + "?namespace=" + item.reqNamespace},
+			{namespaceServer, "/api/version2/proxy/namespaces/" + item.reqNamespace + "/foo/id" + item.path},
+			{legacyNamespaceServer, "/api/version/proxy/foo/id" + item.path + "?namespace=" + item.reqNamespace},
 		}
 
 		for _, serverPattern := range serverPatterns {
@@ -325,5 +324,46 @@ func TestProxy(t *testing.T) {
 				t.Errorf("%v - expected %v, got %v. url: %#v", item.method, e, a, req.URL)
 			}
 		}
+	}
+}
+
+func TestProxyUpgrade(t *testing.T) {
+	backendServer := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		defer ws.Close()
+		body := make([]byte, 5)
+		ws.Read(body)
+		ws.Write([]byte("hello " + string(body)))
+	}))
+	defer backendServer.Close()
+
+	serverURL, _ := url.Parse(backendServer.URL)
+	simpleStorage := &SimpleRESTStorage{
+		errors:                    map[string]error{},
+		resourceLocation:          serverURL,
+		expectedResourceNamespace: "myns",
+	}
+
+	namespaceHandler := handleNamespaced(map[string]rest.Storage{"foo": simpleStorage})
+
+	server := httptest.NewServer(namespaceHandler)
+	defer server.Close()
+
+	ws, err := websocket.Dial("ws://"+server.Listener.Addr().String()+"/api/version2/proxy/namespaces/myns/foo/123", "", "http://127.0.0.1/")
+	if err != nil {
+		t.Fatalf("websocket dial err: %s", err)
+	}
+	defer ws.Close()
+
+	if _, err := ws.Write([]byte("world")); err != nil {
+		t.Fatalf("write err: %s", err)
+	}
+
+	response := make([]byte, 20)
+	n, err := ws.Read(response)
+	if err != nil {
+		t.Fatalf("read err: %s", err)
+	}
+	if e, a := "hello world", string(response[0:n]); e != a {
+		t.Fatalf("expected '%#v', got '%#v'", e, a)
 	}
 }

@@ -22,12 +22,13 @@ import (
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/rest"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/httplog"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 )
 
 type RedirectHandler struct {
-	storage                map[string]RESTStorage
+	storage                map[string]rest.Storage
 	codec                  runtime.Codec
 	context                api.RequestContextMapper
 	apiRequestInfoResolver *APIRequestInfoResolver
@@ -38,7 +39,7 @@ func (r *RedirectHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	var apiResource string
 	var httpCode int
 	reqStart := time.Now()
-	defer monitor("redirect", verb, apiResource, httpCode, reqStart)
+	defer monitor("redirect", &verb, &apiResource, &httpCode, reqStart)
 
 	requestInfo, err := r.apiRequestInfoResolver.GetAPIRequestInfo(req)
 	if err != nil {
@@ -70,22 +71,33 @@ func (r *RedirectHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	apiResource = resource
 
-	redirector, ok := storage.(Redirector)
+	redirector, ok := storage.(rest.Redirector)
 	if !ok {
 		httplog.LogOf(req, w).Addf("'%v' is not a redirector", resource)
 		httpCode = errorJSON(errors.NewMethodNotSupported(resource, "redirect"), r.codec, w)
 		return
 	}
 
-	location, err := redirector.ResourceLocation(ctx, id)
+	location, _, err := redirector.ResourceLocation(ctx, id)
 	if err != nil {
 		status := errToAPIStatus(err)
 		writeJSON(status.Code, r.codec, status, w)
 		httpCode = status.Code
 		return
 	}
+	if location == nil {
+		httplog.LogOf(req, w).Addf("ResourceLocation for %v returned nil", id)
+		notFound(w, req)
+		httpCode = http.StatusNotFound
+		return
+	}
 
-	w.Header().Set("Location", location)
+	// Default to http
+	if location.Scheme == "" {
+		location.Scheme = "http"
+	}
+
+	w.Header().Set("Location", location.String())
 	w.WriteHeader(http.StatusTemporaryRedirect)
 	httpCode = http.StatusTemporaryRedirect
 }

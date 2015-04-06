@@ -24,6 +24,12 @@ import (
 // Codec encodes internal objects to the v1beta2 scheme
 var Codec = runtime.CodecFor(api.Scheme, "v1beta2")
 
+// Dependency does nothing but give a hook for other packages to force a
+// compile-time error when this API version is eventually removed.  This is
+// useful, for example, to clean up things that are implicitly tied to
+// semantics of older APIs.
+const Dependency = true
+
 func init() {
 	api.Scheme.AddKnownTypes("v1beta2",
 		&Pod{},
@@ -36,6 +42,7 @@ func init() {
 		&Endpoints{},
 		&EndpointsList{},
 		&Minion{},
+		&NodeInfo{},
 		&MinionList{},
 		&Binding{},
 		&Status{},
@@ -43,16 +50,21 @@ func init() {
 		&EventList{},
 		&ContainerManifest{},
 		&ContainerManifestList{},
-		&BoundPod{},
-		&BoundPods{},
 		&List{},
 		&LimitRange{},
 		&LimitRangeList{},
 		&ResourceQuota{},
 		&ResourceQuotaList{},
-		&ResourceQuotaUsage{},
 		&Namespace{},
 		&NamespaceList{},
+		&Secret{},
+		&SecretList{},
+		&PersistentVolume{},
+		&PersistentVolumeList{},
+		&PersistentVolumeClaim{},
+		&PersistentVolumeClaimList{},
+		&DeleteOptions{},
+		&ListOptions{},
 	)
 	// Future names are supported
 	api.Scheme.AddKnownTypeWithName("v1beta2", "Node", &Minion{})
@@ -69,6 +81,7 @@ func (*ServiceList) IsAnAPIObject()               {}
 func (*Endpoints) IsAnAPIObject()                 {}
 func (*EndpointsList) IsAnAPIObject()             {}
 func (*Minion) IsAnAPIObject()                    {}
+func (*NodeInfo) IsAnAPIObject()                  {}
 func (*MinionList) IsAnAPIObject()                {}
 func (*Binding) IsAnAPIObject()                   {}
 func (*Status) IsAnAPIObject()                    {}
@@ -76,13 +89,18 @@ func (*Event) IsAnAPIObject()                     {}
 func (*EventList) IsAnAPIObject()                 {}
 func (*ContainerManifest) IsAnAPIObject()         {}
 func (*ContainerManifestList) IsAnAPIObject()     {}
-func (*BoundPod) IsAnAPIObject()                  {}
-func (*BoundPods) IsAnAPIObject()                 {}
 func (*List) IsAnAPIObject()                      {}
 func (*LimitRange) IsAnAPIObject()                {}
 func (*LimitRangeList) IsAnAPIObject()            {}
 func (*ResourceQuota) IsAnAPIObject()             {}
 func (*ResourceQuotaList) IsAnAPIObject()         {}
-func (*ResourceQuotaUsage) IsAnAPIObject()        {}
 func (*Namespace) IsAnAPIObject()                 {}
 func (*NamespaceList) IsAnAPIObject()             {}
+func (*Secret) IsAnAPIObject()                    {}
+func (*SecretList) IsAnAPIObject()                {}
+func (*PersistentVolume) IsAnAPIObject()          {}
+func (*PersistentVolumeList) IsAnAPIObject()      {}
+func (*PersistentVolumeClaim) IsAnAPIObject()     {}
+func (*PersistentVolumeClaimList) IsAnAPIObject() {}
+func (*DeleteOptions) IsAnAPIObject()             {}
+func (*ListOptions) IsAnAPIObject()               {}
