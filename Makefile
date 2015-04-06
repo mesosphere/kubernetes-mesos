@@ -22,7 +22,7 @@ LIB_DIRS := $(shell cd $(current_dir) && find ./pkg -type f -name '*.go'|sort|wh
 
 FRAMEWORK_LIB	:= ${LIB_DIRS:%=${K8SM_GO_PACKAGE}/%}
 TESTS_LOGV	?= 2
-TESTS		?= $(LIB_DIRS)
+TESTS		?= $(LIB_DIRS) $(CMD_DIRS)
 TESTS_VV        = $(shell for pkg in $(TESTS); do ls $$pkg/*.go | while read -r f; do basename "$$f"|egrep -v -e '_test.go$$'|grep -v -e '^doc\.go'|sed -e 's/\.go$$/=$(TESTS_LOGV)/g'; done; done | xargs echo -n | tr ' ' ',')
 
 GIT_VERSION_FILE := $(current_dir)/.kube-version
