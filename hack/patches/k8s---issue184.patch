@@ -2,15 +2,15 @@ diff --git a/pkg/kubelet/kubelet.go b/pkg/kubelet/kubelet.go
 index 1507115..103bfee 100644
 --- a/pkg/kubelet/kubelet.go
 +++ b/pkg/kubelet/kubelet.go
-@@ -1390,7 +1390,10 @@ func filterHostPortConflicts(pods []api.BoundPod) []api.BoundPod {
- func (kl *Kubelet) syncLoop(updates <-chan PodUpdate, handler SyncHandler) {
- 	for {
+@@ -1600,7 +1600,10 @@ func filterHostPortConflicts(pods []api.BoundPod) []api.BoundPod {
+ 		unsyncedPod := false
+ 		podSyncTypes := make(map[types.UID]metrics.SyncPodType)
  		select {
 -		case u := <-updates:
 +		case u, ok := <-updates:
 +			if !ok {
 +				return
 +			}
- 			switch u.Op {
- 			case SET:
- 				glog.V(3).Infof("SET: Containers changed")
+ 			kl.podManager.UpdatePods(u, podSyncTypes)
+ 			unsyncedPod = true
+ 		case <-time.After(kl.resyncInterval):
