@@ -22,6 +22,7 @@ import (
 	"runtime"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	"github.com/mesosphere/kubernetes-mesos/pkg/hyperkube"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/service"
 	"github.com/mesosphere/kubernetes-mesos/pkg/version/verflag"
 	"github.com/spf13/pflag"
@@ -38,7 +39,7 @@ func main() {
 
 	verflag.PrintAndExitIfRequested()
 
-	if err := s.Run(nil, pflag.CommandLine.Args()); err != nil {
+	if err := s.Run(hyperkube.Nil(), pflag.CommandLine.Args()); err != nil {
 		fmt.Fprintf(os.Stderr, err.Error())
 		os.Exit(1)
 	}

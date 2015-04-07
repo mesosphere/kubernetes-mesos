@@ -28,6 +28,7 @@ import (
 	bindings "github.com/mesos/mesos-go/executor"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
+	"github.com/mesosphere/kubernetes-mesos/pkg/hyperkube"
 
 	"github.com/spf13/pflag"
 )
@@ -47,17 +48,6 @@ type KubeletExecutorServer struct {
 	ProxyBindall    bool
 	SuicideTimeout  time.Duration
 	EnableProfiling bool
-}
-
-type hyperkubeInterface interface {
-	// FindServer will find a specific server named name.
-	FindServer(name string) bool
-
-	// The executable name, used for help and soft-link invocation
-	Name() string
-
-	// Flags returns a flagset for "global" flags.
-	Flags() *pflag.FlagSet
 }
 
 func NewKubeletExecutorServer() *KubeletExecutorServer {
@@ -110,7 +100,7 @@ func (s *KubeletExecutorServer) AddHyperkubeFlags(fs *pflag.FlagSet) {
 }
 
 // Run runs the specified KubeletExecutorServer.
-func (s *KubeletExecutorServer) Run(hks hyperkubeInterface, _ []string) error {
+func (s *KubeletExecutorServer) Run(hks hyperkube.Interface, _ []string) error {
 	rand.Seed(time.Now().UTC().UnixNano())
 
 	if err := util.ApplyOomScoreAdj(0, s.OOMScoreAdj); err != nil {
@@ -225,14 +215,14 @@ func defaultBindingAddress() string {
 
 func (ks *KubeletExecutorServer) createAndInitKubelet(
 	kc *app.KubeletConfig,
-	hks hyperkubeInterface,
+	hks hyperkube.Interface,
 	clientConfig *client.Config,
 	finished chan struct{},
 ) (app.KubeletBootstrap, *kconfig.PodConfig, error) {
 
-	// TODO: block until all sources have delivered at least one update to the channel, or break the sync loop
+	// TODO(k8s): block until all sources have delivered at least one update to the channel, or break the sync loop
 	// up into "per source" synchronizations
-	// TODO: KubeletConfig.KubeClient should be a client interface, but client interface misses certain methods
+	// TODO(k8s): KubeletConfig.KubeClient should be a client interface, but client interface misses certain methods
 	// used by kubelet. Since NewMainKubelet expects a client interface, we need to make sure we are not passing
 	// a nil pointer to it when what we really want is a nil interface.
 	var kubeClient client.Interface
@@ -272,7 +262,8 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(
 		kc.Recorder,
 		kc.CadvisorInterface,
 		kc.ImageGCPolicy,
-		kc.Cloud)
+		nil, // Cloud, which is unused anyway
+	)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -341,7 +332,7 @@ type kubeletExecutor struct {
 	proxyBindall    bool
 	address         util.IP
 	dockerClient    dockertools.DockerInterface
-	hks             hyperkubeInterface
+	hks             hyperkube.Interface
 	kubeletFinished chan struct{}   // closed once kubelet.Run() returns
 	executorDone    <-chan struct{} // from KubeletExecutor.Done()
 	clientConfig    *client.Config

@@ -49,6 +49,7 @@ import (
 	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/election"
 	execcfg "github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
+	"github.com/mesosphere/kubernetes-mesos/pkg/hyperkube"
 	"github.com/mesosphere/kubernetes-mesos/pkg/profile"
 	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler"
@@ -115,17 +116,6 @@ type SchedulerServer struct {
 	client     *client.Client
 	driver     atomic.Value // bindings.SchedulerDriver
 	mux        *http.ServeMux
-}
-
-type hyperkubeInterface interface {
-	// FindServer will find a specific server named name.
-	FindServer(name string) bool
-
-	// The executable name, used for help and soft-link invocation
-	Name() string
-
-	// Flags returns a flagset for "global" flags.
-	Flags() *pflag.FlagSet
 }
 
 // useful for unit testing specific funcs
@@ -255,7 +245,7 @@ func (s *SchedulerServer) serveFrameworkArtifact(path string) (string, string) {
 	return hostURI, base
 }
 
-func (s *SchedulerServer) prepareExecutorInfo(hks hyperkubeInterface) *mesos.ExecutorInfo {
+func (s *SchedulerServer) prepareExecutorInfo(hks hyperkube.Interface) (*mesos.ExecutorInfo, *uid.UID, error) {
 	ci := &mesos.CommandInfo{
 		Shell: proto.Bool(false),
 	}
@@ -271,7 +261,7 @@ func (s *SchedulerServer) prepareExecutorInfo(hks hyperkubeInterface) *mesos.Exe
 		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(true)})
 		ci.Value = proto.String(fmt.Sprintf("./%s", executorCmd))
 	} else if !hks.FindServer(KM_EXECUTOR) {
-		log.Fatalf("either run this scheduler via km or else --executor_path is required")
+		return nil, nil, fmt.Errorf("either run this scheduler via km or else --executor_path is required")
 	} else {
 		if strings.Index(s.KMPath, "://") > 0 {
 			// URI could point directly to executable, e.g. hdfs:///km
@@ -296,12 +286,12 @@ func (s *SchedulerServer) prepareExecutorInfo(hks hyperkubeInterface) *mesos.Exe
 		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(true)})
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--proxy_exec=./%s", proxyCmd))
 	} else if !hks.FindServer(KM_PROXY) {
-		log.Fatalf("either run this scheduler via km or else --proxy_path is required")
+		return nil, nil, fmt.Errorf("either run this scheduler via km or else --proxy_path is required")
 	} else if s.ExecutorPath != "" {
-		log.Fatalf("proxy can only use km binary if executor does the same")
+		return nil, nil, fmt.Errorf("proxy can only use km binary if executor does the same")
 	} // else, executor is smart enough to know when proxy_path is required, or to use km
 
-	//TODO(jdef): provide some way (env var?) for user's to customize executor config
+	//TODO(jdef): provide some way (env var?) for users to customize executor config
 	//TODO(jdef): set -address to 127.0.0.1 if `address` is 127.0.0.1
 	//TODO(jdef): propagate dockercfg from RootDirectory?
 
@@ -330,36 +320,35 @@ func (s *SchedulerServer) prepareExecutorInfo(hks hyperkubeInterface) *mesos.Exe
 		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri)})
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--auth_path=%s", basename))
 	}
-	if s.ClusterDNS != nil {
-		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--cluster_dns=%v", s.ClusterDNS))
+	appendOptional := func(name string, value interface{}) {
+		if value != nil {
+			ci.Arguments = append(ci.Arguments, fmt.Sprintf("--%s=%v", name, value))
+		}
 	}
-	if s.ClusterDomain != "" {
-		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--cluster_domain=%s", s.ClusterDomain))
-	}
-	if s.KubeletRootDirectory != "" {
-		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--root_dir=%s", s.KubeletRootDirectory))
-	}
-	if s.KubeletDockerEndpoint != "" {
-		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--docker_endpoint=%s", s.KubeletDockerEndpoint))
-	}
-	if s.KubeletPodInfraContainerImage != "" {
-		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--pod_infra_container_image=%s", s.KubeletPodInfraContainerImage))
-	}
-	if s.KubeletHostNetworkSources != "" {
-		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--host_network_sources=%s", s.KubeletHostNetworkSources))
-	}
-	if s.KubeletNetworkPluginName != "" {
-		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--network_plugin=%s", s.KubeletNetworkPluginName))
-	}
+	appendOptional("cluster_dns", s.ClusterDNS)
+	appendOptional("cluster_domain", s.ClusterDomain)
+	appendOptional("root_dir", s.KubeletRootDirectory)
+	appendOptional("docker_endpoint", s.KubeletDockerEndpoint)
+	appendOptional("pod_infra_container_image", s.KubeletPodInfraContainerImage)
+	appendOptional("host_network_sources", s.KubeletHostNetworkSources)
+	appendOptional("network_plugin", s.KubeletNetworkPluginName)
 
 	log.V(1).Infof("prepared executor command %q with args '%+v'", ci.GetValue(), ci.Arguments)
 
 	// Create mesos scheduler driver.
-	return &mesos.ExecutorInfo{
+	info := &mesos.ExecutorInfo{
 		Command: ci,
 		Name:    proto.String(execcfg.DefaultInfoName),
 		Source:  proto.String(execcfg.DefaultInfoSource),
 	}
+
+	// calculate ExecutorInfo hash to be used for validating compatibility
+	// of ExecutorInfo's generated by other HA schedulers.
+	ehash := hashExecutorInfo(info)
+	eid := uid.New(ehash, execcfg.DefaultInfoID)
+	info.ExecutorId = &mesos.ExecutorID{Value: proto.String(eid.String())}
+
+	return info, eid, nil
 }
 
 // TODO(jdef): hacked from kubelet/server/server.go
@@ -405,9 +394,9 @@ func (s *SchedulerServer) getDriver() (driver bindings.SchedulerDriver) {
 	return
 }
 
-func (s *SchedulerServer) Run(hks hyperkubeInterface, _ []string) error {
+func (s *SchedulerServer) Run(hks hyperkube.Interface, _ []string) error {
 
-	schedulerProcess, driverFactory, etcdClient, ehash := s.bootstrap(hks)
+	schedulerProcess, driverFactory, etcdClient, eid := s.bootstrap(hks)
 
 	go runtime.Until(func() {
 		log.V(1).Info("Starting HTTP interface")
@@ -421,7 +410,7 @@ func (s *SchedulerServer) Run(hks hyperkubeInterface, _ []string) error {
 		validation := ha.ValidationFunc(validateLeadershipTransition)
 		srv := ha.NewCandidate(schedulerProcess, driverFactory, validation)
 		path := fmt.Sprintf(meta.DefaultElectionFormat, s.FrameworkName)
-		sid := uid.New(ehash, "").String()
+		sid := uid.New(eid.Group(), "").String()
 		log.Infof("registering for election at %v with id %v", path, sid)
 		go election.Notify(election.NewEtcdMasterElector(etcdClient), path, sid, srv)
 	} else {
@@ -499,7 +488,7 @@ func newEtcd(etcdConfigFile string, etcdServerList util.StringList) (client tool
 	return
 }
 
-func (s *SchedulerServer) bootstrap(hks hyperkubeInterface) (*ha.SchedulerProcess, ha.DriverFactory, tools.EtcdGetSet, uint64) {
+func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProcess, ha.DriverFactory, tools.EtcdGetSet, *uid.UID) {
 
 	s.FrameworkName = strings.TrimSpace(s.FrameworkName)
 	if s.FrameworkName == "" {
@@ -532,19 +521,16 @@ func (s *SchedulerServer) bootstrap(hks hyperkubeInterface) (*ha.SchedulerProces
 		log.Warningf("user-specified reconcile cooldown too small, defaulting to %v", s.ReconcileCooldown)
 	}
 
-	// Create mesos scheduler driver.
-	executor := s.prepareExecutorInfo(hks)
-
-	// calculate ExecutorInfo hash to be used for validating compatibility
-	// of ExecutorInfo's generated by other HA schedulers.
-	ehash := hashExecutorInfo(executor)
-	eid := uid.New(ehash, execcfg.DefaultInfoID).String()
-	executor.ExecutorId = &mesos.ExecutorID{Value: proto.String(eid)}
+	executor, eid, err := s.prepareExecutorInfo(hks)
+	if err != nil {
+		log.Fatalf("misconfigured executor: %v", err)
+	}
 
 	etcdClient, err := newEtcd(s.EtcdConfigFile, s.EtcdServerList)
 	if err != nil {
 		log.Fatalf("misconfigured etcd: %v", err)
 	}
+
 	mesosPodScheduler := scheduler.New(scheduler.Config{
 		Executor:          executor,
 		ScheduleFunc:      scheduler.FCFSScheduleFunc,
@@ -579,7 +565,7 @@ func (s *SchedulerServer) bootstrap(hks hyperkubeInterface) (*ha.SchedulerProces
 
 	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(schedulerProcess.Done(), s.mux))
 	runtime.On(mesosPodScheduler.Registration(), kpl.Run)
-	runtime.On(mesosPodScheduler.Registration(), func() { s.serviceWriterLoop(schedulerProcess.Done()) })
+	runtime.On(mesosPodScheduler.Registration(), s.newServiceWriter(schedulerProcess.Done()))
 
 	schedulerProcess.Begin()
 
@@ -605,10 +591,10 @@ func (s *SchedulerServer) bootstrap(hks hyperkubeInterface) (*ha.SchedulerProces
 		return
 	})
 
-	return schedulerProcess, driverFactory, etcdClient, ehash
+	return schedulerProcess, driverFactory, etcdClient, eid
 }
 
-func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks hyperkubeInterface) error {
+func (s *SchedulerServer) failover(driver bindings.SchedulerDriver, hks hyperkube.Interface) error {
 	if driver != nil {
 		stat, err := driver.Stop(true)
 		if stat != mesos.Status_DRIVER_STOPPED {

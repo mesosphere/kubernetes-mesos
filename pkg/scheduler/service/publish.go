@@ -32,23 +32,25 @@ const (
 	SCHEDULER_SERVICE_NAME = "k8sm-scheduler"
 )
 
-func (m *SchedulerServer) serviceWriterLoop(stop <-chan struct{}) {
-	for {
-		// Update service & endpoint records.
-		// TODO(k8s): when it becomes possible to change this stuff,
-		// stop polling and start watching.
-		if err := m.createSchedulerServiceIfNeeded(SCHEDULER_SERVICE_NAME, ports.SchedulerPort); err != nil {
-			glog.Errorf("Can't create scheduler service: %v", err)
-		}
+func (m *SchedulerServer) newServiceWriter(stop <-chan struct{}) func() {
+	return func() {
+		for {
+			// Update service & endpoint records.
+			// TODO(k8s): when it becomes possible to change this stuff,
+			// stop polling and start watching.
+			if err := m.createSchedulerServiceIfNeeded(SCHEDULER_SERVICE_NAME, ports.SchedulerPort); err != nil {
+				glog.Errorf("Can't create scheduler service: %v", err)
+			}
 
-		if err := m.setEndpoints(SCHEDULER_SERVICE_NAME, net.IP(m.Address), m.Port); err != nil {
-			glog.Errorf("Can't create scheduler endpoints: %v", err)
-		}
+			if err := m.setEndpoints(SCHEDULER_SERVICE_NAME, net.IP(m.Address), m.Port); err != nil {
+				glog.Errorf("Can't create scheduler endpoints: %v", err)
+			}
 
-		select {
-		case <-stop:
-			return
-		case <-time.After(10 * time.Second):
+			select {
+			case <-stop:
+				return
+			case <-time.After(10 * time.Second):
+			}
 		}
 	}
 }
