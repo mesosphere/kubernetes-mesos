@@ -3,8 +3,6 @@
 package service
 
 import (
-	"os"
-	"syscall"
 	"testing"
 	"time"
 
@@ -33,14 +31,6 @@ func (self *fakeSchedulerProcess) Failover() <-chan struct{} {
 
 func (self *fakeSchedulerProcess) End() {
 	self.ended.Acquire()
-}
-
-func makeFailoverSigChan() <-chan os.Signal {
-	return nil
-}
-
-func makeDisownedProcAttr() *syscall.SysProcAttr {
-	return nil
 }
 
 func Test_awaitFailoverDone(t *testing.T) {

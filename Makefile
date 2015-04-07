@@ -85,7 +85,7 @@ lint:
 vet fix:
 	env GOPATH=$(_GOPATH) go $@ $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
 
-test test.v:
+test test.v: patch
 	test "$@" = "test.v" && args="-test.v" || args=""; \
 		test -n "$(WITH_RACE)" && args="$$args -race" || true; \
 		env GOPATH=$(_GOPATH) go test $$args -tags unit_test $(TESTS:%=${K8SM_GO_PACKAGE}/%)
