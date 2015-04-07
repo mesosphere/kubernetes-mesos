@@ -320,12 +320,14 @@ func (s *SchedulerServer) prepareExecutorInfo(hks hyperkube.Interface) (*mesos.E
 		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri)})
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--auth_path=%s", basename))
 	}
-	appendOptional := func(name string, value interface{}) {
-		if value != nil {
-			ci.Arguments = append(ci.Arguments, fmt.Sprintf("--%s=%v", name, value))
+	appendOptional := func(name string, value string) {
+		if value != "" {
+			ci.Arguments = append(ci.Arguments, fmt.Sprintf("--%s=%s", name, value))
 		}
 	}
-	appendOptional("cluster_dns", s.ClusterDNS)
+	if s.ClusterDNS != nil {
+		appendOptional("cluster_dns", s.ClusterDNS.String())
+	}
 	appendOptional("cluster_domain", s.ClusterDomain)
 	appendOptional("root_dir", s.KubeletRootDirectory)
 	appendOptional("docker_endpoint", s.KubeletDockerEndpoint)
