@@ -2,12 +2,36 @@ package runtime
 
 import (
 	"os"
+	"sync"
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 )
 
 type Signal <-chan struct{}
+
+// return a func that will close the signal chan.
+// multiple invocations of the returned func will not generate a panic.
+// two funcs from separate invocations of Closer() (on the same sig chan) will cause a panic if both invoked.
+// for example:
+//     // good
+//     x := runtime.Go(func() { ... })
+//     f := x.Closer()
+//     f()
+//     f()
+//
+//     // bad
+//     x := runtime.Go(func() { ... })
+//     f := x.Closer()
+//     g := x.Closer()
+//     f()
+//     g() // this will panic
+func Closer(sig chan<- struct{}) func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() { close(sig) })
+	}
+}
 
 // upon receiving signal sig invoke function f and immediately return a signal
 // that indicates f's completion. used to chain handler funcs, for example:

@@ -148,19 +148,17 @@ func New(config Config) *KubernetesScheduler {
 				return true
 			},
 			DeclineOffer: func(id string) error {
-				ch := make(chan error, 1)
-				err := k.asRegisteredMaster.Do(func() {
+				errOnce := proc.NewErrorOnce(k.terminate)
+				errOuter := k.asRegisteredMaster.Do(func() {
 					var err error
-					defer func() { ch <- err }()
+					defer errOnce.Report(err)
 
 					offerId := mutil.NewOfferID(id)
 					filters := &mesos.Filters{}
 					_, err = k.driver.DeclineOffer(offerId, filters)
 				})
-				if err != nil {
-					return err
-				}
-				return <-ch
+				go errOnce.Forward(errOuter)
+				return <-errOnce.Err()
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
 			LingerTTL:     defaultOfferLingerTTL * time.Second,
@@ -172,8 +170,8 @@ func New(config Config) *KubernetesScheduler {
 		taskRegistry:      podtask.NewInMemoryRegistry(),
 		reconcileCooldown: config.ReconcileCooldown,
 		registration:      make(chan struct{}),
-		asRegisteredMaster: proc.DoerFunc(func(proc.Action) error {
-			return fmt.Errorf("cannot execute action with unregistered scheduler")
+		asRegisteredMaster: proc.DoerFunc(func(proc.Action) <-chan error {
+			return proc.ErrorChan(fmt.Errorf("cannot execute action with unregistered scheduler"))
 		}),
 	}
 	return k
@@ -183,9 +181,9 @@ func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterfac
 	log.V(1).Infoln("initializing kubernetes mesos scheduler")
 
 	//TODO(jdef) watch electedMaster.Done() to figure out when background jobs should be shut down
-	k.asRegisteredMaster = proc.DoerFunc(func(a proc.Action) error {
+	k.asRegisteredMaster = proc.DoerFunc(func(a proc.Action) <-chan error {
 		if !k.registered {
-			return fmt.Errorf("failed to execute registered action, scheduler is disconnected")
+			return proc.ErrorChan(fmt.Errorf("failed to execute registered action, scheduler is disconnected"))
 		}
 		return electedMaster.Do(a)
 	})
@@ -203,34 +201,39 @@ func (k *KubernetesScheduler) asMaster() proc.Doer {
 }
 
 func (k *KubernetesScheduler) InstallDebugHandlers(mux *http.ServeMux) {
-	requestReconciliation := func(uri string, requestAction func()) {
+	wrappedHandler := func(uri string, h http.Handler) {
 		mux.HandleFunc(uri, func(w http.ResponseWriter, r *http.Request) {
 			ch := make(chan struct{})
-			err := k.asMaster().Do(func() {
-				defer close(ch)
-				requestAction()
-				w.WriteHeader(http.StatusNoContent)
-			})
-			if err != nil {
+			closer := runtime.Closer(ch)
+			proc.OnError(k.asMaster().Do(func() {
+				defer closer()
+				h.ServeHTTP(w, r)
+			}), func(err error) {
+				defer closer()
+				log.Warningf("failed HTTP request for %s: %v", uri, err)
 				w.WriteHeader(http.StatusServiceUnavailable)
-				return
-			}
+			}, k.terminate)
 			select {
 			case <-time.After(defaultHttpHandlerTimeout):
-				log.Warningf("timed out waiting for reconciliation request to be accepted")
+				log.Warningf("timed out waiting for request to be processed")
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
 			case <-ch: // noop
 			}
 		})
 	}
-
+	requestReconciliation := func(uri string, requestAction func()) {
+		wrappedHandler(uri, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestAction()
+			w.WriteHeader(http.StatusNoContent)
+		}))
+	}
 	requestReconciliation("/debug/actions/requestExplicit", k.reconciler.RequestExplicit)
 	requestReconciliation("/debug/actions/requestImplicit", k.reconciler.RequestImplicit)
 
-	mux.HandleFunc("/debug/actions/kamikaze", func(w http.ResponseWriter, r *http.Request) {
+	wrappedHandler("/debug/actions/kamikaze", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ids := make(chan []string, 1)
-		err := k.asMaster().Do(func() {
+		func() {
 			k.Lock()
 			defer k.Unlock()
 			slaves := []string{}
@@ -238,31 +241,21 @@ func (k *KubernetesScheduler) InstallDebugHandlers(mux *http.ServeMux) {
 				slaves = append(slaves, slaveId)
 			}
 			ids <- slaves
-		})
-		if err != nil {
-			log.Errorf("cannot execute kamikaze request: %v", err)
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		select {
-		case <-time.After(defaultHttpHandlerTimeout):
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		case slaves := <-ids:
-			for _, slaveId := range slaves {
-				_, err := k.driver.SendFrameworkMessage(
-					k.executor.ExecutorId,
-					mutil.NewSlaveID(slaveId),
-					messages.Kamikaze)
-				if err != nil {
-					log.Warningf("failed to send kamikaze message to slave %s: %v", slaveId, err)
-				} else {
-					io.WriteString(w, fmt.Sprintf("kamikaze slave %s\n", slaveId))
-				}
+		}()
+		slaves := <-ids
+		for _, slaveId := range slaves {
+			_, err := k.driver.SendFrameworkMessage(
+				k.executor.ExecutorId,
+				mutil.NewSlaveID(slaveId),
+				messages.Kamikaze)
+			if err != nil {
+				log.Warningf("failed to send kamikaze message to slave %s: %v", slaveId, err)
+			} else {
+				io.WriteString(w, fmt.Sprintf("kamikaze slave %s\n", slaveId))
 			}
-			io.WriteString(w, "OK")
 		}
-	})
+		io.WriteString(w, "OK")
+	}))
 }
 
 func (k *KubernetesScheduler) Registration() <-chan struct{} {
@@ -746,16 +739,16 @@ func newReconciler(doer proc.Doer, action ReconcilerAction, cooldown time.Durati
 			// but it could take a while and the scheduler needs to be able to
 			// process updates, the callbacks for which ALSO execute in the SAME
 			// deferred execution context -- so the action MUST be executed async.
-			ch := make(chan error, 1)
-			err := doer.Do(func() {
+			err := proc.NewErrorOnce(done)
+			errCh := doer.Do(func() {
 				// only triggers the action if we're the currently elected,
 				// registered master and runs the action async.
-				go func() { ch <- action(driver, cancel) }()
+				go func() {
+					err.Report(action(driver, cancel))
+				}()
 			})
-			if err != nil {
-				return err
-			}
-			return <-ch
+			go err.Forward(errCh)
+			return <-err.Err()
 		},
 	}
 }
@@ -804,15 +797,18 @@ requestLoop:
 						continue requestLoop
 					}
 				}
-				err := r.Do(func() {
+				errOnce := proc.NewErrorOnce(r.done)
+				errCh := r.Do(func() {
 					log.Infoln("implicit reconcile tasks")
 					metrics.ReconciliationExecuted.WithLabelValues("implicit").Inc()
 					if _, err := driver.ReconcileTasks([]*mesos.TaskStatus{}); err != nil {
-						log.Errorf("failed to request implicit reconciliation from mesos: %v", err)
+						log.V(1).Infof("failed to request implicit reconciliation from mesos: %v", err)
+						errOnce.Report(err)
 					}
 				})
-				if err != nil {
-					log.Warningf("failed to run implicit reconciliation: %v", err)
+				go errOnce.Forward(errCh)
+				if err := <-errOnce.Err(); err != nil {
+					log.Errorf("failed to run implicit reconciliation: %v", err)
 				}
 				goto slowdown
 			}
