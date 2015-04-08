@@ -59,4 +59,5 @@ The command line parameters that affect the hash calculation are listed below.
 - `--executor_*`
 - `--kubelet_*`
 - `--km_path`
+- `--profiling`
 - `--proxy_path`
