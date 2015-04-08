@@ -95,6 +95,31 @@ Or if you have multiple Mesos masters registered with a Zookeeper cluster then s
 $ export mesos_master=zk://${zkserver1}:2181,${zkserver2}:2181,${zkserver3}:2181/mesos
 ```
 
+Create a configuration file for the Mesos cloud provider:
+
+```shell
+$ edit ./mesos-cloud.conf
+```
+
+The file content should have the following format:
+
+```ini
+[mesos-cloud]
+	mesos-master        = leader.mesos:5050
+	http-client-timeout = 5s
+	state-cache-ttl     = 20s
+```
+
+**Mesos Cloud Provider Configuration Options:**
+
+- `mesos-master`: Location of the Mesos master.  This value can take the
+  form `host:port` or a canonical Zookeeper URL
+(`zk://host1:port1,host2:port2/your/znode/path`)
+- `http-client-timeout`: Time to wait for a response from the Mesos
+  master when querying the state.
+- `state-cache-ttl`: Maximum age of the cached Mesos state, after which
+  new values will be fetched.
+
 Fire up the kubernetes-mesos framework components (yes, these are **all** required for a working framework):
 
 ```shell
@@ -105,6 +130,7 @@ $ ./bin/km apiserver \
   --portal_net=10.10.10.0/24 \
   --port=8888 \
   --cloud_provider=mesos
+  --cloud_config=./mesos-cloud.conf
 
 $ ./bin/km controller-manager \
   --master=$servicehost:8888 \
