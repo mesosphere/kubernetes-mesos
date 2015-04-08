@@ -78,6 +78,9 @@ To run etcd, see [github.com/coreos/etcd][6], or run it via docker:
 $ sudo docker run -d --hostname $(hostname -f) -p 4001:4001 -p 7001:7001 --name=etcd coreos/etcd
 ```
 
+**NOTE:** A troublesome etcd bug, [discovered][15] circa Kubernetes v0.14.2, has been fixed in etcd v2.0.9.
+If you are running an older version of etcd you may want to consider an upgrade.
+
 #### kubernetes-mesos
 
 Ensure that your Mesos cluster is started.
@@ -372,3 +375,4 @@ $ make test.v
 [12]: docs/README.md
 [13]: docs/issues.md
 [14]: https://github.com/GoogleCloudPlatform/kubernetes/releases/tag/v0.14.0
+[15]: https://github.com/GoogleCloudPlatform/kubernetes/pull/6544
