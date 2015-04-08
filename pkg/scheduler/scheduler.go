@@ -48,13 +48,11 @@ const (
 
 type Slave struct {
 	HostName string
-	Offers   map[string]empty
 }
 
 func newSlave(hostName string) *Slave {
 	return &Slave{
 		HostName: hostName,
-		Offers:   make(map[string]empty),
 	}
 }
 
@@ -339,15 +337,12 @@ func (k *KubernetesScheduler) ResourceOffers(driver bindings.SchedulerDriver, of
 	// Record the offers in the global offer map as well as each slave's offer map.
 	k.offers.Add(offers)
 	for _, offer := range offers {
-		offerId := offer.GetId().GetValue()
 		slaveId := offer.GetSlaveId().GetValue()
-
 		slave, exists := k.slaves[slaveId]
 		if !exists {
 			k.slaves[slaveId] = newSlave(offer.GetHostname())
 			slave = k.slaves[slaveId]
 		}
-		slave.Offers[offerId] = empty{}
 		k.slaveIDs[slave.HostName] = slaveId
 	}
 }
@@ -357,21 +352,7 @@ func (k *KubernetesScheduler) OfferRescinded(driver bindings.SchedulerDriver, of
 	log.Infof("Offer rescinded %v\n", offerId)
 
 	oid := offerId.GetValue()
-	if offer, ok := k.offers.Get(oid); ok {
-		k.offers.Delete(oid, offerMetrics.OfferRescinded)
-		if details := offer.Details(); details != nil {
-			k.Lock()
-			defer k.Unlock()
-
-			slaveId := details.GetSlaveId().GetValue()
-
-			if slave, found := k.slaves[slaveId]; !found {
-				log.Infof("No slave for id %s associated with offer id %s", slaveId, oid)
-			} else {
-				delete(slave.Offers, oid)
-			}
-		} // else, offer already expired / lingering
-	}
+	k.offers.Delete(oid, offerMetrics.OfferRescinded)
 }
 
 // StatusUpdate is called when a status update message is sent to the scheduler.
@@ -554,15 +535,8 @@ func (k *KubernetesScheduler) FrameworkMessage(driver bindings.SchedulerDriver,
 func (k *KubernetesScheduler) SlaveLost(driver bindings.SchedulerDriver, slaveId *mesos.SlaveID) {
 	log.Infof("Slave %v is lost\n", slaveId)
 
-	k.Lock()
-	defer k.Unlock()
-
-	// invalidate all offers mapped to that slave
-	if slave, ok := k.slaves[slaveId.GetValue()]; ok {
-		for offerId := range slave.Offers {
-			k.offers.Invalidate(offerId)
-		}
-	}
+	sid := slaveId.GetValue()
+	k.offers.InvalidateForSlave(sid)
 
 	// TODO(jdef): delete slave from our internal list? probably not since we may need to reconcile
 	// tasks. it would be nice to somehow flag the slave as lost so that, perhaps, we can periodically
@@ -883,7 +857,6 @@ func (ks *KubernetesScheduler) recoverTasks() error {
 			slave = newSlave(t.Offer.Host())
 			ks.slaves[slaveId] = slave
 		}
-		slave.Offers[t.Offer.Id()] = empty{}
 		ks.slaveIDs[slave.HostName] = slaveId
 	}
 	for _, pod := range podList.Items {
