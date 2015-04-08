@@ -152,7 +152,6 @@ func New(config Config) *KubernetesScheduler {
 				errOuter := k.asRegisteredMaster.Do(func() {
 					var err error
 					defer errOnce.Report(err)
-
 					offerId := mutil.NewOfferID(id)
 					filters := &mesos.Filters{}
 					_, err = k.driver.DeclineOffer(offerId, filters)
@@ -739,16 +738,18 @@ func newReconciler(doer proc.Doer, action ReconcilerAction, cooldown time.Durati
 			// but it could take a while and the scheduler needs to be able to
 			// process updates, the callbacks for which ALSO execute in the SAME
 			// deferred execution context -- so the action MUST be executed async.
-			err := proc.NewErrorOnce(done)
+			errOnce := proc.NewErrorOnce(done)
 			errCh := doer.Do(func() {
 				// only triggers the action if we're the currently elected,
 				// registered master and runs the action async.
 				go func() {
-					err.Report(action(driver, cancel))
+					var err error
+					defer errOnce.Report(err)
+					err = action(driver, cancel)
 				}()
 			})
-			go err.Forward(errCh)
-			return <-err.Err()
+			go errOnce.Forward(errCh)
+			return <-errOnce.Err()
 		},
 	}
 }
@@ -799,11 +800,12 @@ requestLoop:
 				}
 				errOnce := proc.NewErrorOnce(r.done)
 				errCh := r.Do(func() {
+					var err error
+					defer errOnce.Report(err)
 					log.Infoln("implicit reconcile tasks")
 					metrics.ReconciliationExecuted.WithLabelValues("implicit").Inc()
-					if _, err := driver.ReconcileTasks([]*mesos.TaskStatus{}); err != nil {
+					if _, err = driver.ReconcileTasks([]*mesos.TaskStatus{}); err != nil {
 						log.V(1).Infof("failed to request implicit reconciliation from mesos: %v", err)
-						errOnce.Report(err)
 					}
 				})
 				go errOnce.Forward(errCh)

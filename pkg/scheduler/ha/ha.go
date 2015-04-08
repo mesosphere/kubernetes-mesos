@@ -143,9 +143,7 @@ func (self *SchedulerProcess) Failover() <-chan struct{} {
 // returns a Process instance that will only execute a proc.Action if the scheduler is the elected master
 func (self *SchedulerProcess) Master() proc.Process {
 	return proc.DoWith(self, proc.DoerFunc(func(a proc.Action) <-chan error {
-		err := proc.NewErrorOnce(self.Done())
-		err.Report(masterStage.When(self, a))
-		return err.Err()
+		return proc.ErrorChan(masterStage.When(self, a))
 	}))
 }
 

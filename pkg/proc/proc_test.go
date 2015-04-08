@@ -223,12 +223,12 @@ func TestProc_doWithNestedErrorPropagation(t *testing.T) {
 	}))
 
 	expectedErr := fmt.Errorf("expecting this")
+	errOnce := NewErrorOnce(p.Done())
 	decorated2 := DoWith(decorated, DoerFunc(func(a Action) <-chan error {
 		delegated = true
 		a()
-		e := NewErrorOnce(p.Done())
-		e.Report(expectedErr)
-		return e.Err()
+		errOnce.Report(fmt.Errorf("unexpected error in decorator2"))
+		return ErrorChan(fmt.Errorf("another unexpected error in decorator2"))
 	}))
 
 	executed := make(chan struct{})
@@ -237,14 +237,16 @@ func TestProc_doWithNestedErrorPropagation(t *testing.T) {
 		if !delegated {
 			t.Fatalf("expected delegated execution")
 		}
+		errOnce.Report(expectedErr)
 	})
 	if err == nil {
 		t.Fatalf("expected !nil error chan")
 	}
+	go errOnce.Forward(err)
 
 	foundError := false
 	fatalAfter(t, executed, 1*time.Second, "timed out waiting deferred execution")
-	fatalAfter(t, decorated2.OnError(err, func(e error) {
+	fatalAfter(t, decorated2.OnError(errOnce.Err(), func(e error) {
 		if e != expectedErr {
 			t.Fatalf("unexpected error: %v", err)
 		} else {
