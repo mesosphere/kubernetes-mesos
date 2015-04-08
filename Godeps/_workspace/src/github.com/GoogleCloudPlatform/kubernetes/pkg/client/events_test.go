@@ -1,5 +1,5 @@
 /*
-Copyright 2014 Google Inc. All rights reserved.
+Copyright 2015 Google Inc. All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ import (
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/testapi"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 )
@@ -31,15 +32,19 @@ func TestEventSearch(t *testing.T) {
 	c := &testClient{
 		Request: testRequest{
 			Method: "GET",
-			Path:   "/events",
+			Path:   testapi.ResourcePath("events", "baz", ""),
 			Query: url.Values{
-				"fields": []string{"involvedObject.kind=Pod,involvedObject.name=foo,involvedObject.namespace=baz"},
-				"labels": []string{},
+				api.FieldSelectorQueryParam(testapi.Version()): []string{
+					getInvolvedObjectNameFieldLabel(testapi.Version()) + "=foo,",
+					"involvedObject.namespace=baz,",
+					"involvedObject.kind=Pod",
+				},
+				api.LabelSelectorQueryParam(testapi.Version()): []string{},
 			},
 		},
 		Response: Response{StatusCode: 200, Body: &api.EventList{}},
 	}
-	eventList, err := c.Setup().Events("").Search(
+	eventList, err := c.Setup().Events("baz").Search(
 		&api.Pod{
 			ObjectMeta: api.ObjectMeta{
 				Name:      "foo",
@@ -73,13 +78,13 @@ func TestEventCreate(t *testing.T) {
 	c := &testClient{
 		Request: testRequest{
 			Method: "POST",
-			Path:   "/events",
+			Path:   testapi.ResourcePath("events", api.NamespaceDefault, ""),
 			Body:   event,
 		},
 		Response: Response{StatusCode: 200, Body: event},
 	}
 
-	response, err := c.Setup().Events("").Create(event)
+	response, err := c.Setup().Events(api.NamespaceDefault).Create(event)
 
 	if err != nil {
 		t.Fatalf("%v should be nil.", err)
@@ -112,13 +117,13 @@ func TestEventGet(t *testing.T) {
 	c := &testClient{
 		Request: testRequest{
 			Method: "GET",
-			Path:   "/events/1",
+			Path:   testapi.ResourcePath("events", "other", "1"),
 			Body:   nil,
 		},
 		Response: Response{StatusCode: 200, Body: event},
 	}
 
-	response, err := c.Setup().Events("").Get("1")
+	response, err := c.Setup().Events("other").Get("1")
 
 	if err != nil {
 		t.Fatalf("%v should be nil.", err)
@@ -153,13 +158,13 @@ func TestEventList(t *testing.T) {
 	c := &testClient{
 		Request: testRequest{
 			Method: "GET",
-			Path:   "/events",
+			Path:   testapi.ResourcePath("events", ns, ""),
 			Body:   nil,
 		},
 		Response: Response{StatusCode: 200, Body: eventList},
 	}
 	response, err := c.Setup().Events(ns).List(labels.Everything(),
-		labels.Everything())
+		fields.Everything())
 
 	if err != nil {
 		t.Errorf("%#v should be nil.", err)
@@ -174,4 +179,17 @@ func TestEventList(t *testing.T) {
 		responseEvent.InvolvedObject; !reflect.DeepEqual(e, r) {
 		t.Errorf("%#v != %#v.", e, r)
 	}
+}
+
+func TestEventDelete(t *testing.T) {
+	ns := api.NamespaceDefault
+	c := &testClient{
+		Request: testRequest{
+			Method: "DELETE",
+			Path:   testapi.ResourcePath("events", ns, "foo"),
+		},
+		Response: Response{StatusCode: 200},
+	}
+	err := c.Setup().Events(ns).Delete("foo")
+	c.Validate(t, nil, err)
 }

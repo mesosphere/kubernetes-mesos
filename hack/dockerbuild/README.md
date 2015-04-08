@@ -63,12 +63,12 @@ To hack in your currently checked out repo mount the root of the github repo to 
 ## Profiling
 
 Profiling in the cloud with Kubernetes-Mesos is easy!
-First, ssh into your Mesos cluster and generate a set of project binaries with profiling enabled (the `TAGS` variable is important here):
+First, ssh into your Mesos cluster and generate a set of project binaries:
 
-    $ docker run --rm -ti -e GIT_BRANCH=offer_storage -e TAGS=profile \
+    $ docker run --rm -ti -e GIT_BRANCH=offer_storage \
         -v $(pwd)/bin:/target mesosphere/kubernetes-mesos:build
 
-Next, [start the framework](https://github.com/mesosphere/kubernetes-mesos/#start-the-framework) and schedule some pods.
+Next, [start the framework](https://github.com/mesosphere/kubernetes-mesos/#start-the-framework) with the `--profiling` flag and schedule some pods.
 Once the framework and executors are up and running you can start capturing heaps:
 
     $ ts=$(date +'%Y%m%d%H%M%S')

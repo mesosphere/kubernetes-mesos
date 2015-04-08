@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Google Inc. All rights reserved.
+Copyright 2014 Google Inc. All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,27 +18,27 @@ package kubelet
 
 import (
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-func TestParsePodFullName(t *testing.T) {
-	// Arrange
-	podFullName := "ca4e7148-9ab9-11e4-924c-f0921cde18c1.default.etcd"
+func TestGetValidatedSources(t *testing.T) {
+	// Empty.
+	sources, err := GetValidatedSources([]string{""})
+	require.NoError(t, err)
+	require.Len(t, sources, 0)
 
-	// Act
-	podName, podNamespace, podAnnotations := ParsePodFullName(podFullName)
+	// Success.
+	sources, err = GetValidatedSources([]string{FileSource, ApiserverSource})
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
 
-	// Assert
-	expectedPodName := "ca4e7148-9ab9-11e4-924c-f0921cde18c1"
-	expectedPodNamespace := "default"
-	expectedSource := "etcd"
-	if podName != expectedPodName {
-		t.Errorf("Unexpected PodName. Expected: %q Actual: %q", expectedPodName, podName)
-	}
-	if podNamespace != expectedPodNamespace {
-		t.Errorf("Unexpected PodNamespace. Expected: %q Actual: %q", expectedPodNamespace, podNamespace)
-	}
-	if podAnnotations[ConfigSourceAnnotationKey] != expectedSource {
-		t.Errorf("Unexpected PodSource. Expected: %q Actual: %q", expectedPodNamespace, podNamespace)
-	}
+	// All.
+	sources, err = GetValidatedSources([]string{AllSource})
+	require.NoError(t, err)
+	require.Len(t, sources, 3)
 
+	// Unknown source.
+	sources, err = GetValidatedSources([]string{"taco"})
+	require.Error(t, err)
 }

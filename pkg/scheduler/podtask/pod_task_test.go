@@ -85,7 +85,7 @@ func TestDefaultHostPortMatching(t *testing.T) {
 	//--
 	pod.Spec = api.PodSpec{
 		Containers: []api.Container{{
-			Ports: []api.Port{{
+			Ports: []api.ContainerPort{{
 				HostPort: 123,
 			}, {
 				HostPort: 123,
@@ -122,7 +122,7 @@ func TestAcceptOfferPorts(t *testing.T) {
 
 	pod.Spec = api.PodSpec{
 		Containers: []api.Container{{
-			Ports: []api.Port{{
+			Ports: []api.ContainerPort{{
 				HostPort: 123,
 			}},
 		}},

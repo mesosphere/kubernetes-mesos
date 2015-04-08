@@ -17,10 +17,12 @@ If you have ideas or patches, feel free to contribute!
 
 Refer to the [documentation pages][12] for a review of core concepts, system architecture, and [known issues][13].
 
+This project is currently based on the [Kubernetes v0.14 release][14] and has customized the release distribution:
+components have been added, removed, and/or changed.
+
 ### Tutorial
 
 Mesosphere maintains a tutorial for running [Kubernetes-Mesos on GCE][10], which is periodically updated to coincide with releases of this project.
-Please use a release from the [0.3.x series][11] for the best experience with the tutorial.
 
 ### Binaries
 
@@ -74,8 +76,11 @@ If you are not running in a production setting then a single etcd instance will 
 To run etcd, see [github.com/coreos/etcd][6], or run it via docker:
 
 ```shell
-$ sudo docker run -d --hostname $(hostname -f) -p 4001:4001 -p 7001:7001 coreos/etcd
+$ sudo docker run -d --hostname $(hostname -f) -p 4001:4001 -p 7001:7001 --name=etcd coreos/etcd
 ```
+
+**NOTE:** A troublesome etcd bug, [discovered][15] circa Kubernetes v0.14.2, has been fixed in etcd v2.0.9.
+If you are running an older version of etcd you may want to consider an upgrade.
 
 #### kubernetes-mesos
 
@@ -366,7 +371,9 @@ $ make test.v
 [7]: DEVELOP.md#prerequisites
 [8]: http://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing
 [9]: https://github.com/GoogleCloudPlatform/kubernetes/releases/tag/v0.5
-[10]: https://mesosphere.com/docs/tutorials/kubernetes-mesos-gcp/
+[10]: https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/getting-started-guides/mesos.md
 [11]: https://github.com/mesosphere/kubernetes-mesos/releases
 [12]: docs/README.md
 [13]: docs/issues.md
+[14]: https://github.com/GoogleCloudPlatform/kubernetes/releases/tag/v0.14.0
+[15]: https://github.com/GoogleCloudPlatform/kubernetes/pull/6544

@@ -22,68 +22,91 @@ import (
 
 	"github.com/spf13/cobra"
 
+	cmdutil "github.com/GoogleCloudPlatform/kubernetes/pkg/kubectl/cmd/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubectl/resource"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 )
 
+const (
+	create_long = `Create a resource by filename or stdin.
+
+JSON and YAML formats are accepted.`
+	create_example = `// Create a pod using the data in pod.json.
+$ kubectl create -f pod.json
+
+// Create a pod based on the JSON passed into stdin.
+$ cat pod.json | kubectl create -f -`
+)
+
 func (f *Factory) NewCmdCreate(out io.Writer) *cobra.Command {
-	flags := &struct {
-		Filenames util.StringList
-	}{}
+	var filenames util.StringList
 	cmd := &cobra.Command{
-		Use:   "create -f filename",
-		Short: "Create a resource by filename or stdin",
-		Long: `Create a resource by filename or stdin.
-
-JSON and YAML formats are accepted.
-
-Examples:
-
-    // Create a pod using the data in pod.json.
-    $ kubectl create -f pod.json
-
-    // Create a pod based on the JSON passed into stdin.
-    $ cat pod.json | kubectl create -f -`,
+		Use:     "create -f FILENAME",
+		Short:   "Create a resource by filename or stdin",
+		Long:    create_long,
+		Example: create_example,
 		Run: func(cmd *cobra.Command, args []string) {
-			schema, err := f.Validator(cmd)
-			checkErr(err)
-
-			cmdNamespace, err := f.DefaultNamespace(cmd)
-			checkErr(err)
-
-			mapper, typer := f.Object(cmd)
-			r := resource.NewBuilder(mapper, typer, f.ClientMapperForCommand(cmd)).
-				ContinueOnError().
-				NamespaceParam(cmdNamespace).RequireNamespace().
-				FilenameParam(flags.Filenames...).
-				Flatten().
-				Do()
-			checkErr(r.Err())
-
-			count := 0
-			err = r.Visit(func(info *resource.Info) error {
-				data, err := info.Mapping.Codec.Encode(info.Object)
-				if err != nil {
-					return err
-				}
-				if err := schema.ValidateBytes(data); err != nil {
-					return err
-				}
-				obj, err := resource.NewHelper(info.Client, info.Mapping).Create(info.Namespace, true, data)
-				if err != nil {
-					return err
-				}
-				count++
-				info.Refresh(obj, true)
-				fmt.Fprintf(out, "%s\n", info.Name)
-				return nil
-			})
-			checkErr(err)
-			if count == 0 {
-				checkErr(fmt.Errorf("no objects passed to create"))
-			}
+			cmdutil.CheckErr(ValidateArgs(cmd, args))
+			cmdutil.CheckErr(RunCreate(f, out, cmd, filenames))
 		},
 	}
-	cmd.Flags().VarP(&flags.Filenames, "filename", "f", "Filename, directory, or URL to file to use to create the resource")
+	cmd.Flags().VarP(&filenames, "filename", "f", "Filename, directory, or URL to file to use to create the resource")
 	return cmd
+}
+
+func ValidateArgs(cmd *cobra.Command, args []string) error {
+	if len(args) != 0 {
+		return cmdutil.UsageError(cmd, "Unexpected args: %v", args)
+	}
+	return nil
+}
+
+func RunCreate(f *Factory, out io.Writer, cmd *cobra.Command, filenames util.StringList) error {
+	schema, err := f.Validator()
+	if err != nil {
+		return err
+	}
+
+	cmdNamespace, err := f.DefaultNamespace()
+	if err != nil {
+		return err
+	}
+
+	mapper, typer := f.Object()
+	r := resource.NewBuilder(mapper, typer, f.ClientMapperForCommand()).
+		ContinueOnError().
+		NamespaceParam(cmdNamespace).RequireNamespace().
+		FilenameParam(filenames...).
+		Flatten().
+		Do()
+	err = r.Err()
+	if err != nil {
+		return err
+	}
+
+	count := 0
+	err = r.Visit(func(info *resource.Info) error {
+		data, err := info.Mapping.Codec.Encode(info.Object)
+		if err != nil {
+			return err
+		}
+		if err := schema.ValidateBytes(data); err != nil {
+			return err
+		}
+		obj, err := resource.NewHelper(info.Client, info.Mapping).Create(info.Namespace, true, data)
+		if err != nil {
+			return err
+		}
+		count++
+		info.Refresh(obj, true)
+		fmt.Fprintf(out, "%s/%s\n", info.Mapping.Resource, info.Name)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("no objects passed to create")
+	}
+	return nil
 }

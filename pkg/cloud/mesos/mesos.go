@@ -14,6 +14,8 @@ import (
 )
 
 var (
+	PluginName = "mesos"
+
 	noHostNameSpecified = errors.New("No hostname specified")
 
 	//TODO(jdef) this should handle mesos upid's (perhaps once we move to pure bindings)
@@ -22,7 +24,7 @@ var (
 
 func init() {
 	cloudprovider.RegisterCloudProvider(
-		"mesos",
+		PluginName,
 		func(conf io.Reader) (cloudprovider.Interface, error) {
 			return newMesosCloud()
 		})
@@ -76,7 +78,7 @@ func (c *MesosCloud) Clusters() (cloudprovider.Clusters, bool) {
 }
 
 // IPAddress returns an IP address of the specified instance.
-func (c *MesosCloud) IPAddress(name string) (net.IP, error) {
+func (c *MesosCloud) ipAddress(name string) (net.IP, error) {
 	if name == "" {
 		return nil, noHostNameSpecified
 	}
@@ -90,6 +92,15 @@ func (c *MesosCloud) IPAddress(name string) (net.IP, error) {
 	}
 }
 
+// ExternalID returns the cloud provider ID of the specified instance.
+func (c *MesosCloud) ExternalID(instance string) (string, error) {
+	ip, err := c.ipAddress(instance)
+	if err != nil {
+		return "", err
+	}
+	return ip.String(), nil
+}
+
 // List lists instances that match 'filter' which is a regular expression
 // which must match the entire instance name (fqdn).
 func (c *MesosCloud) List(filter string) ([]string, error) {
@@ -97,16 +108,49 @@ func (c *MesosCloud) List(filter string) ([]string, error) {
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
 
-	// TODO(jdef) listing all slaves for now, until EnlistedSlaves scales better
-	// Because of this, minion health checks should be disabled on the apiserver
-	addr, err := c.client.EnumerateSlaves(ctx)
-	if err == nil && len(addr) == 0 {
+	nodes, err := c.client.listSlaves(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
 		log.V(2).Info("no slaves found, are any running?")
+		return nil, nil
+	}
+	addr := []string{}
+	for _, node := range nodes {
+		addr = append(addr, node.hostname)
 	}
 	return addr, err
 }
 
 // GetNodeResources gets the resources for a particular node
 func (c *MesosCloud) GetNodeResources(name string) (*api.NodeResources, error) {
+	//TODO(jdef) use a timeout here? 15s?
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
+
+	nodes, err := c.client.listSlaves(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		log.V(2).Info("no slaves found, are any running?")
+	} else {
+		for _, node := range nodes {
+			if name == node.hostname {
+				return node.resources, nil
+			}
+		}
+	}
+	log.Warningf("failed to locate node spec for %q", name)
 	return nil, nil
+}
+
+// NodeAddresses returns the addresses of the specified instance.
+func (c *MesosCloud) NodeAddresses(name string) ([]api.NodeAddress, error) {
+	ip, err := c.ipAddress(name)
+	if err != nil {
+		return nil, err
+	}
+	return []api.NodeAddress{{Type: api.NodeLegacyHostIP, Address: ip.String()}}, nil
 }

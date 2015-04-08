@@ -21,10 +21,12 @@ import (
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/admission"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/latest"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/meta"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
@@ -45,6 +47,10 @@ type provision struct {
 }
 
 func (p *provision) Admit(a admission.Attributes) (err error) {
+	// only handle create requests
+	if a.GetOperation() != "CREATE" {
+		return nil
+	}
 	defaultVersion, kind, err := latest.RESTMapper.VersionAndKindForResource(a.GetResource())
 	if err != nil {
 		return err
@@ -71,7 +77,7 @@ func (p *provision) Admit(a admission.Attributes) (err error) {
 		return nil
 	}
 	_, err = p.client.Namespaces().Create(namespace)
-	if err != nil {
+	if err != nil && !errors.IsAlreadyExists(err) {
 		return err
 	}
 	return nil
@@ -82,14 +88,15 @@ func NewProvision(c client.Interface) admission.Interface {
 	reflector := cache.NewReflector(
 		&cache.ListWatch{
 			ListFunc: func() (runtime.Object, error) {
-				return c.Namespaces().List(labels.Everything())
+				return c.Namespaces().List(labels.Everything(), fields.Everything())
 			},
 			WatchFunc: func(resourceVersion string) (watch.Interface, error) {
-				return c.Namespaces().Watch(labels.Everything(), labels.Everything(), resourceVersion)
+				return c.Namespaces().Watch(labels.Everything(), fields.Everything(), resourceVersion)
 			},
 		},
 		&api.Namespace{},
 		store,
+		0,
 	)
 	reflector.Run()
 	return &provision{

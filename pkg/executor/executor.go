@@ -12,6 +12,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/container"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 	"github.com/fsouza/go-dockerclient"
@@ -22,7 +23,6 @@ import (
 	mutil "github.com/mesos/mesos-go/mesosutil"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/messages"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
-	"gopkg.in/v2/yaml"
 )
 
 const (
@@ -82,21 +82,22 @@ type suicideWatcher interface {
 // KubernetesExecutor is an mesos executor that runs pods
 // in a minion machine.
 type KubernetesExecutor struct {
-	kl              *kubelet.Kubelet // the kubelet instance.
-	updateChan      chan<- interface{}
-	state           stateType
-	tasks           map[string]*kuberTask
-	pods            map[string]*api.BoundPod
-	lock            sync.RWMutex
-	sourcename      string
-	client          *client.Client
-	events          <-chan watch.Event
-	done            chan struct{} // signals shutdown
-	outgoing        chan func() (mesos.Status, error)
-	dockerClient    dockertools.DockerInterface
-	suicideWatch    suicideWatcher
-	suicideTimeout  time.Duration
-	kubeletFinished <-chan struct{} // signals that kubelet Run() died
+	kl                  *kubelet.Kubelet // the kubelet instance.
+	updateChan          chan<- interface{}
+	state               stateType
+	tasks               map[string]*kuberTask
+	pods                map[string]*api.Pod
+	lock                sync.RWMutex
+	sourcename          string
+	client              *client.Client
+	events              <-chan watch.Event
+	done                chan struct{} // signals shutdown
+	outgoing            chan func() (mesos.Status, error)
+	dockerClient        dockertools.DockerInterface
+	suicideWatch        suicideWatcher
+	suicideTimeout      time.Duration
+	kubeletFinished     <-chan struct{} // signals that kubelet Run() died
+	initialRegistration sync.Once
 }
 
 type Config struct {
@@ -121,7 +122,7 @@ func New(config Config) *KubernetesExecutor {
 		updateChan:      config.Updates,
 		state:           disconnectedState,
 		tasks:           make(map[string]*kuberTask),
-		pods:            make(map[string]*api.BoundPod),
+		pods:            make(map[string]*api.Pod),
 		sourcename:      config.SourceName,
 		client:          config.APIClient,
 		done:            make(chan struct{}),
@@ -178,6 +179,7 @@ func (k *KubernetesExecutor) Registered(driver bindings.ExecutorDriver,
 	if !(&k.state).transition(disconnectedState, connectedState) {
 		log.Errorf("failed to register/transition to a connected state")
 	}
+	k.initialRegistration.Do(k.onInitialRegistration)
 }
 
 // Reregistered is called when the executor is successfully re-registered with the slave.
@@ -189,6 +191,16 @@ func (k *KubernetesExecutor) Reregistered(driver bindings.ExecutorDriver, slaveI
 	log.Infof("Reregistered with slave %v\n", slaveInfo)
 	if !(&k.state).transition(disconnectedState, connectedState) {
 		log.Errorf("failed to reregister/transition to a connected state")
+	}
+	k.initialRegistration.Do(k.onInitialRegistration)
+}
+
+func (k *KubernetesExecutor) onInitialRegistration() {
+	// emit an empty update to allow the mesos "source" to be marked as seen
+	k.updateChan <- kubelet.PodUpdate{
+		Pods:   []api.Pod{},
+		Op:     kubelet.SET,
+		Source: k.sourcename,
 	}
 }
 
@@ -211,15 +223,22 @@ func (k *KubernetesExecutor) LaunchTask(driver bindings.ExecutorDriver, taskInfo
 	log.Infof("Launch task %v\n", taskInfo)
 
 	if !k.isConnected() {
-		log.Warningf("Ignore launch task because the executor is disconnected\n")
+		log.Errorf("Ignore launch task because the executor is disconnected\n")
 		k.sendStatus(driver, newStatus(taskInfo.GetTaskId(), mesos.TaskState_TASK_FAILED,
 			messages.ExecutorUnregistered))
 		return
 	}
 
-	var pod api.BoundPod
-	if err := yaml.Unmarshal(taskInfo.GetData(), &pod); err != nil {
-		log.Warningf("Failed to extract yaml data from the taskInfo.data %v\n", err)
+	obj, err := api.Codec.Decode(taskInfo.GetData())
+	if err != nil {
+		log.Errorf("failed to extract yaml data from the taskInfo.data %v", err)
+		k.sendStatus(driver, newStatus(taskInfo.GetTaskId(), mesos.TaskState_TASK_FAILED,
+			messages.UnmarshalTaskDataFailure))
+		return
+	}
+	pod, ok := obj.(*api.Pod)
+	if !ok {
+		log.Errorf("expected *api.Pod instead of %T: %+v", pod, pod)
 		k.sendStatus(driver, newStatus(taskInfo.GetTaskId(), mesos.TaskState_TASK_FAILED,
 			messages.UnmarshalTaskDataFailure))
 		return
@@ -230,7 +249,7 @@ func (k *KubernetesExecutor) LaunchTask(driver bindings.ExecutorDriver, taskInfo
 
 	taskId := taskInfo.GetTaskId().GetValue()
 	if _, found := k.tasks[taskId]; found {
-		log.Warningf("task already launched\n")
+		log.Errorf("task already launched\n")
 		// Not to send back TASK_RUNNING here, because
 		// may be duplicated messages or duplicated task id.
 		return
@@ -244,7 +263,7 @@ func (k *KubernetesExecutor) LaunchTask(driver bindings.ExecutorDriver, taskInfo
 	}
 	k.resetSuicideWatch(driver)
 
-	go k.launchTask(driver, taskId, &pod)
+	go k.launchTask(driver, taskId, pod)
 }
 
 // TODO(jdef) add metrics for this?
@@ -345,23 +364,26 @@ func (k *KubernetesExecutor) attemptSuicide(driver bindings.ExecutorDriver, abor
 }
 
 func (k *KubernetesExecutor) getPidInfo(name string) (api.PodStatus, error) {
-	return k.kl.GetPodStatus(name, "")
+	return k.kl.GetPodStatus(name)
 }
 
 // async continuation of LaunchTask
-func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId string, pod *api.BoundPod) {
+func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId string, pod *api.Pod) {
 
 	//HACK(jdef): cloned binding construction from k8s plugin/pkg/scheduler/scheduler.go
 	binding := &api.Binding{
 		ObjectMeta: api.ObjectMeta{
 			Namespace:   pod.Namespace,
+			Name:        pod.Name,
 			Annotations: make(map[string]string),
 		},
-		PodID: pod.Name,
-		Host:  pod.Annotations[meta.BindingHostKey],
+		Target: api.ObjectReference{
+			Kind: "Node",
+			Name: pod.Annotations[meta.BindingHostKey],
+		},
 	}
 
-	// forward the bindings that the scheduler wants to apply
+	// forward the annotations that the scheduler wants to apply
 	for k, v := range pod.Annotations {
 		binding.Annotations[k] = v
 	}
@@ -373,8 +395,10 @@ func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId s
 		k.resetSuicideWatch(driver)
 	}
 
-	log.Infof("Binding '%v' to '%v' with annotations %+v...", binding.PodID, binding.Host, binding.Annotations)
-	ctx := api.WithNamespace(api.NewDefaultContext(), binding.Namespace)
+	log.Infof("Binding '%v/%v' to '%v' with annotations %+v...", pod.Namespace, pod.Name, binding.Target.Name, binding.Annotations)
+	ctx := api.WithNamespace(api.NewContext(), binding.Namespace)
+	// TODO(k8s): use Pods interface for binding once clusters are upgraded
+	// return b.Pods(binding.Namespace).Bind(binding)
 	err := k.client.Post().Namespace(api.NamespaceValue(ctx)).Resource("bindings").Body(binding).Do().Error()
 	if err != nil {
 		deleteTask()
@@ -383,13 +407,7 @@ func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId s
 		return
 	}
 
-	podFullName := kubelet.GetPodFullName(&api.BoundPod{
-		ObjectMeta: api.ObjectMeta{
-			Name:        pod.Name,
-			Namespace:   pod.Namespace,
-			Annotations: map[string]string{kubelet.ConfigSourceAnnotationKey: k.sourcename},
-		},
-	})
+	podFullName := container.GetPodFullName(pod)
 
 	// allow a recently failed-over scheduler the chance to recover the task/pod binding:
 	// it may have failed and recovered before the apiserver is able to report the updated
@@ -419,6 +437,8 @@ func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId s
 		k.reportLostTask(driver, taskId, messages.LaunchTaskFailed)
 		return
 	}
+
+	//TODO(jdef) check for duplicate pod name, if found send TASK_ERROR
 
 	// from here on, we need to delete containers associated with the task
 	// upon it going into a terminal state

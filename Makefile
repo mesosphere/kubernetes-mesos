@@ -22,7 +22,7 @@ LIB_DIRS := $(shell cd $(current_dir) && find ./pkg -type f -name '*.go'|sort|wh
 
 FRAMEWORK_LIB	:= ${LIB_DIRS:%=${K8SM_GO_PACKAGE}/%}
 TESTS_LOGV	?= 2
-TESTS		?= $(LIB_DIRS)
+TESTS		?= $(LIB_DIRS) $(CMD_DIRS)
 TESTS_VV        = $(shell for pkg in $(TESTS); do ls $$pkg/*.go | while read -r f; do basename "$$f"|egrep -v -e '_test.go$$'|grep -v -e '^doc\.go'|sed -e 's/\.go$$/=$(TESTS_LOGV)/g'; done; done | xargs echo -n | tr ' ' ',')
 
 GIT_VERSION_FILE := $(current_dir)/.kube-version
@@ -42,9 +42,11 @@ DESTDIR		?= /target
 TAGS		?=
 
 BUILDDIR	?= $(current_dir)/_build
-GOPATH		:= $(shell uname | grep -e ^CYGWIN >/dev/null && cygpath --mixed "$(BUILDDIR)" || echo -E "$(BUILDDIR)")
+_GOPATH		:= $(shell uname | grep -e ^CYGWIN >/dev/null && cygpath --mixed "$(BUILDDIR)" || echo -E "$(BUILDDIR)")
 
-.PHONY: all error require-godep require-vendor install info bootstrap format test patch version test.v test.vv clean lint vet fix prepare
+TEST_OBJ	:= $(subst /,___,$(TESTS))
+
+.PHONY: all error require-godep require-vendor install info bootstrap format test patch.v patch version test.v test.vv test.cover clean lint vet fix prepare update $(TEST_OBJ)
 
 # FRAMEWORK_FLAGS := -v -x -tags '$(TAGS)'
 FRAMEWORK_FLAGS := -tags '$(TAGS)'
@@ -58,8 +60,8 @@ export KUBE_GO_PACKAGE
 export K8SM_GO_PACKAGE
 
 all: patch version
-	env GOPATH=$(GOPATH) go install $(K8S_CMD)
-	env GOPATH=$(GOPATH) go install -ldflags "$(shell cat $(GIT_VERSION_FILE))" $(FRAMEWORK_FLAGS) $(FRAMEWORK_CMD)
+	env GOPATH=$(_GOPATH) go install $(K8S_CMD)
+	env GOPATH=$(_GOPATH) go install -ldflags "$(shell cat $(GIT_VERSION_FILE))" $(FRAMEWORK_FLAGS) $(FRAMEWORK_CMD)
 
 error:
 	echo -E "$@: ${MSG}" >&2
@@ -75,22 +77,29 @@ clean:
 	test -n "$(BUILDDIR)" && rm -rf $(BUILDDIR)/*
 
 format:
-	env GOPATH=$(GOPATH) go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
+	env GOPATH=$(_GOPATH) go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
 
 lint:
-	for pkg in $(FRAMEWORK_CMD) $(FRAMEWORK_LIB); do env GOPATH=$(GOPATH) go$@ $$pkg; done
+	for pkg in $(FRAMEWORK_CMD) $(FRAMEWORK_LIB); do env GOPATH=$(_GOPATH) go$@ $$pkg; done
 
 vet fix:
-	env GOPATH=$(GOPATH) go $@ $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
+	env GOPATH=$(_GOPATH) go $@ $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
 
-test test.v:
+test test.v: patch
 	test "$@" = "test.v" && args="-test.v" || args=""; \
 		test -n "$(WITH_RACE)" && args="$$args -race" || true; \
-		env GOPATH=$(GOPATH) go test $$args -tags unit_test $(TESTS:%=${K8SM_GO_PACKAGE}/%)
+		env GOPATH=$(_GOPATH) go test $$args -tags unit_test $(TESTS:%=${K8SM_GO_PACKAGE}/%)
 
 test.vv:
 	test -n "$(WITH_RACE)" && args="$$args -race" || args=""; \
-		env GOPATH=$(GOPATH) go test -test.v $$args -tags unit_test $(TESTS:%=${K8SM_GO_PACKAGE}/%) -logtostderr=true -vmodule=$(TESTS_VV)
+		env GOPATH=$(_GOPATH) go test -test.v $$args -tags unit_test $(TESTS:%=${K8SM_GO_PACKAGE}/%) -logtostderr=true -vmodule=$(TESTS_VV)
+
+test.cover: $(TEST_OBJ)
+	@(echo "mode: count" && (cat .*.coverage.out|sed -e '/^mode/d')) >all.coverage.out
+
+$(TEST_OBJ):
+	@test -n "$(WITH_RACE)" && args="$$args -race" || args=""; \
+		env GOPATH=$(_GOPATH) go test -v $$args -covermode=count -coverprofile=.$@.coverage.out -tags unit_test $(K8SM_GO_PACKAGE)/$(subst ___,/,$@)
 
 install: all
 	mkdir -p $(DESTDIR)
@@ -104,7 +113,8 @@ info:
 	@echo FRAMEWORK_LIB=$(FRAMEWORK_LIB)
 	@echo CMD_DIRS=$(CMD_DIRS)
 	@echo FRAMEWORK_CMD=$(FRAMEWORK_CMD)
-	@echo GOPATH=$(GOPATH)
+	@echo GOPATH=$(_GOPATH)
+	@echo TEST_OBJ=$(TEST_OBJ)
 
 # noop for now; may be needed if vendoring, dep mgmt tooling changes
 bootstrap:
@@ -114,8 +124,8 @@ prepare:
 	rsync -au $(current_dir)/Godeps/_workspace/ $(BUILDDIR)
 	(xdir=$$(dirname $(BUILDDIR)/src/$(K8SM_GO_PACKAGE)); mkdir -p $$xdir && cd $$xdir && ln -s $(current_dir) $$(basename $(K8SM_GO_PACKAGE)))
 
-patch: prepare $(PATCH_SCRIPT)
-	env GOPATH=$(GOPATH) USR_LOCAL_BASH=$(ALT_BASH_SHELL) $(PATCH_SCRIPT)
+patch patch.v: prepare $(PATCH_SCRIPT)
+	env GOPATH=$(_GOPATH) USR_LOCAL_BASH=$(ALT_BASH_SHELL) PATCH_TARGET=$@ $(PATCH_SCRIPT)
 
 version: $(GIT_VERSION_FILE)
 
@@ -126,3 +136,7 @@ $(GIT_VERSION_FILE):
 
 $(PATCH_SCRIPT):
 	test -x $@ || chmod +x $@
+
+update:
+	@egrep -e 'code.google.com|github.com|bitbucket.org' $(current_dir)/Godeps/Godeps.json | grep -v -e '$(K8SM_GO_PACKAGE)' | \
+		sed -e 's/^.*Path": "\(.*\)",/\1/g' | cut -f1-3 -d/|sort|uniq|xargs -t -I{} godep update {}/...

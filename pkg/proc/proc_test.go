@@ -1,6 +1,7 @@
 package proc
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -127,5 +128,178 @@ func TestProc_goodLifecycle(t *testing.T) {
 	p := New()
 	p.Begin()
 	p.End()
+	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
+}
+
+func TestProc_doWithDeadProc(t *testing.T) {
+	p := New()
+	p.Begin()
+	p.End()
+
+	errUnexpected := fmt.Errorf("unexpected execution of delegated action")
+	decorated := DoWith(p, DoerFunc(func(_ Action) <-chan error {
+		return ErrorChan(errUnexpected)
+	}))
+
+	decorated.Do(func() {})
+	fatalAfter(t, decorated.Done(), 1*time.Second, "timed out waiting for process death")
+}
+
+func TestProc_doWith(t *testing.T) {
+	p := New()
+	p.Begin()
+
+	delegated := false
+	decorated := DoWith(p, DoerFunc(func(a Action) <-chan error {
+		delegated = true
+		a()
+		return nil
+	}))
+
+	executed := make(chan struct{})
+	err := decorated.Do(func() {
+		defer close(executed)
+		if !delegated {
+			t.Fatalf("expected delegated execution")
+		}
+	})
+	if err == nil {
+		t.Fatalf("expected !nil error chan")
+	}
+
+	fatalAfter(t, executed, 1*time.Second, "timed out waiting deferred execution")
+	fatalAfter(t, decorated.OnError(err, func(e error) {
+		t.Fatalf("unexpected error: %v", err)
+	}), 1*time.Second, "timed out waiting for doer result")
+
+	decorated.End()
+	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
+}
+
+func TestProc_doWithNestedTwice(t *testing.T) {
+	p := New()
+	p.Begin()
+
+	delegated := false
+	decorated := DoWith(p, DoerFunc(func(a Action) <-chan error {
+		a()
+		return nil
+	}))
+
+	decorated2 := DoWith(decorated, DoerFunc(func(a Action) <-chan error {
+		delegated = true
+		a()
+		return nil
+	}))
+
+	executed := make(chan struct{})
+	err := decorated2.Do(func() {
+		defer close(executed)
+		if !delegated {
+			t.Fatalf("expected delegated execution")
+		}
+	})
+	if err == nil {
+		t.Fatalf("expected !nil error chan")
+	}
+
+	fatalAfter(t, executed, 1*time.Second, "timed out waiting deferred execution")
+	fatalAfter(t, decorated2.OnError(err, func(e error) {
+		t.Fatalf("unexpected error: %v", err)
+	}), 1*time.Second, "timed out waiting for doer result")
+
+	decorated2.End()
+	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
+}
+
+func TestProc_doWithNestedErrorPropagation(t *testing.T) {
+	p := New()
+	p.Begin()
+
+	delegated := false
+	decorated := DoWith(p, DoerFunc(func(a Action) <-chan error {
+		a()
+		return nil
+	}))
+
+	expectedErr := fmt.Errorf("expecting this")
+	errOnce := NewErrorOnce(p.Done())
+	decorated2 := DoWith(decorated, DoerFunc(func(a Action) <-chan error {
+		delegated = true
+		a()
+		errOnce.Report(fmt.Errorf("unexpected error in decorator2"))
+		return ErrorChan(fmt.Errorf("another unexpected error in decorator2"))
+	}))
+
+	executed := make(chan struct{})
+	err := decorated2.Do(func() {
+		defer close(executed)
+		if !delegated {
+			t.Fatalf("expected delegated execution")
+		}
+		errOnce.Report(expectedErr)
+	})
+	if err == nil {
+		t.Fatalf("expected !nil error chan")
+	}
+	go errOnce.Forward(err)
+
+	foundError := false
+	fatalAfter(t, executed, 1*time.Second, "timed out waiting deferred execution")
+	fatalAfter(t, decorated2.OnError(errOnce.Err(), func(e error) {
+		if e != expectedErr {
+			t.Fatalf("unexpected error: %v", err)
+		} else {
+			foundError = true
+		}
+	}), 1*time.Second, "timed out waiting for doer result")
+
+	if !foundError {
+		t.Fatalf("expected a propagated error")
+	}
+
+	decorated2.End()
+	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
+}
+
+func TestProc_doWithNestedX(t *testing.T) {
+	p := New()
+	p.Begin()
+
+	var decorated Process
+	decorated = p
+
+	const DEPTH = 100
+	var wg sync.WaitGroup
+	wg.Add(DEPTH)
+	y := 0
+
+	for x := 1; x <= DEPTH; x++ {
+		nextp := DoWith(decorated, DoerFunc(func(a Action) <-chan error {
+			y++
+			defer wg.Done()
+			a()
+			return nil
+		}))
+		decorated = nextp
+	}
+
+	executed := make(chan struct{})
+	err := decorated.Do(func() {
+		defer close(executed)
+		if y != DEPTH {
+			t.Fatalf("expected delegated execution")
+		}
+	})
+	if err == nil {
+		t.Fatalf("expected !nil error chan")
+	}
+
+	fatalAfter(t, executed, 1*time.Second, "timed out waiting deferred execution")
+	fatalAfter(t, decorated.OnError(err, func(e error) {
+		t.Fatalf("unexpected error: %v", err)
+	}), 1*time.Second, "timed out waiting for doer result")
+
+	decorated.End()
 	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
 }

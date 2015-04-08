@@ -5,6 +5,11 @@ test -x "$KUBECFG" || {
     exit 1
 }
 
+test -n "$KUBERNETES_MASTER" || {
+    echo "error: missing KUBERNETES_MASTER env variable" >&2
+    exit 1
+}
+
 test -n "$servicehost" || servicehost=$(hostname -i|cut -f1 -d' ')
 test -n "$servicehost" || {
     echo "failed to determine service host" >&2
@@ -14,9 +19,11 @@ test -n "$servicehost" || {
 ts=$(date +'%Y%m%d%H%M%S')
 
 for prof in heap block; do
-    curl http://${servicehost}:10251/debug/pprof/$prof >framework.$ts.$prof
+    curl -f http://${servicehost}:10251/debug/pprof/$prof >framework.$ts.$prof
+    curl -f $KUBERNETES_MASTER/debug/pprof/$prof >apiserver.$ts.$prof
+
     minions=$($KUBECFG get nodes|sed -e '1d' -e '/^$/d' -e 's/[ \t]\+.*$//g')
     for m in $minions; do
-        curl http://${m}:10250/debug/pprof/$prof >minion.${m}.$ts.$prof
+        curl -f http://${m}:10250/debug/pprof/$prof >minion.${m}.$ts.$prof
     done
 done

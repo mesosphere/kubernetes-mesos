@@ -21,6 +21,8 @@ import (
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/resource"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/conversion"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 
 	"github.com/davecgh/go-spew/spew"
@@ -60,6 +62,15 @@ var Semantic = conversion.EqualitiesOrDie(
 		}
 		return a.Amount.Cmp(b.Amount) == 0
 	},
+	func(a, b util.Time) bool {
+		return a.UTC() == b.UTC()
+	},
+	func(a, b labels.Selector) bool {
+		return a.String() == b.String()
+	},
+	func(a, b fields.Selector) bool {
+		return a.String() == b.String()
+	},
 )
 
 var standardResources = util.NewStringSet(
@@ -68,8 +79,35 @@ var standardResources = util.NewStringSet(
 	string(ResourcePods),
 	string(ResourceQuotas),
 	string(ResourceServices),
-	string(ResourceReplicationControllers))
+	string(ResourceReplicationControllers),
+	string(ResourceStorage))
 
 func IsStandardResourceName(str string) bool {
 	return standardResources.Has(str)
+}
+
+// NewDeleteOptions returns a DeleteOptions indicating the resource should
+// be deleted within the specified grace period. Use zero to indicate
+// immediate deletion. If you would prefer to use the default grace period,
+// use &api.DeleteOptions{} directly.
+func NewDeleteOptions(grace int64) *DeleteOptions {
+	return &DeleteOptions{GracePeriodSeconds: &grace}
+}
+
+// this function aims to check if the service portal IP is set or not
+// the objective is not to perform validation here
+func IsServiceIPSet(service *Service) bool {
+	return service.Spec.PortalIP != PortalIPNone && service.Spec.PortalIP != ""
+}
+
+// this function aims to check if the service portal IP is requested or not
+func IsServiceIPRequested(service *Service) bool {
+	return service.Spec.PortalIP == ""
+}
+
+var standardFinalizers = util.NewStringSet(
+	string(FinalizerKubernetes))
+
+func IsStandardFinalizerName(str string) bool {
+	return standardFinalizers.Has(str)
 }

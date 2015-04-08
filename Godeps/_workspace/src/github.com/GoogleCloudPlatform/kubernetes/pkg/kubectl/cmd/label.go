@@ -22,91 +22,66 @@ import (
 	"strings"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/meta"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubectl/cmd/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubectl/resource"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	"github.com/spf13/cobra"
 )
 
-func (f *Factory) NewCmdLabel(out io.Writer) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "label [--overwrite] <resource> <name> <key-1>=<val-1> ... <key-n>=<val-n> [--resource-version=<version>]",
-		Short: "Update the labels on a resource",
-		Long: `Update the labels on a resource.
+const (
+	label_long = `Update the labels on a resource.
 
 If --overwrite is true, then existing labels can be overwritten, otherwise attempting to overwrite a label will result in an error.
-If --resource-version is specified, then updates will use this resource version, otherwise the existing resource-version will be used.
+If --resource-version is specified, then updates will use this resource version, otherwise the existing resource-version will be used.`
+	label_example = `// Update pod 'foo' with the label 'unhealthy' and the value 'true'.
+$ kubectl label pods foo unhealthy=true
 
-Examples:
-  // Update pod 'foo' with the label 'unhealthy' and the value 'true'.
-  $ kubectl label pods foo unhealthy=true
+// Update pod 'foo' with the label 'status' and the value 'unhealthy', overwriting any existing value.
+$ kubectl label --overwrite pods foo status=unhealthy
 
-  // Update pod 'foo' with the label 'status' and the value 'unhealthy', overwriting any existing value.
-  $ kubectl label --overwrite pods foo status=unhealthy
-  
-  // Update pod 'foo' only if the resource is unchanged from version 1.
-  $ kubectl label pods foo status=unhealthy --resource-version=1
-  
-  // Update pod 'foo' by removing a label named 'bar' if it exists.
-  // Does not require the --overwrite flag.
-  $ kubectl label pods foo bar-`,
+// Update all pods in the namespace
+$ kubectl label pods --all status=unhealthy
+
+// Update pod 'foo' only if the resource is unchanged from version 1.
+$ kubectl label pods foo status=unhealthy --resource-version=1
+
+// Update pod 'foo' by removing a label named 'bar' if it exists.
+// Does not require the --overwrite flag.
+$ kubectl label pods foo bar-`
+)
+
+func (f *Factory) NewCmdLabel(out io.Writer) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "label [--overwrite] RESOURCE NAME KEY_1=VAL_1 ... KEY_N=VAL_N [--resource-version=version]",
+		Short:   "Update the labels on a resource",
+		Long:    label_long,
+		Example: label_example,
 		Run: func(cmd *cobra.Command, args []string) {
-			if len(args) < 2 {
-				usageError(cmd, "<resource> <name> is required")
-			}
-			if len(args) < 3 {
-				usageError(cmd, "at least one label update is required.")
-			}
-			res := args[:2]
-			cmdNamespace, err := f.DefaultNamespace(cmd)
-			checkErr(err)
-
-			mapper, _ := f.Object(cmd)
-			mapping, namespace, name := util.ResourceFromArgs(cmd, res, mapper, cmdNamespace)
-			client, err := f.RESTClient(cmd, mapping)
-			checkErr(err)
-
-			labels, remove, err := parseLabels(args[2:])
-			checkErr(err)
-			overwrite := util.GetFlagBool(cmd, "overwrite")
-			resourceVersion := util.GetFlagString(cmd, "resource-version")
-
-			obj, err := updateObject(client, mapping, namespace, name, func(obj runtime.Object) runtime.Object {
-				outObj, err := labelFunc(obj, overwrite, resourceVersion, labels, remove)
-				checkErr(err)
-				return outObj
-			})
-			checkErr(err)
-
-			printer, err := f.PrinterForMapping(cmd, mapping)
-			checkErr(err)
-
-			printer.PrintObj(obj, out)
+			err := RunLabel(f, out, cmd, args)
+			util.CheckErr(err)
 		},
 	}
 	util.AddPrinterFlags(cmd)
 	cmd.Flags().Bool("overwrite", false, "If true, allow labels to be overwritten, otherwise reject label updates that overwrite existing labels.")
-	cmd.Flags().String("resource-version", "", "If non-empty, the labels update will only succeed if this is the current resource-version for the object.")
+	cmd.Flags().StringP("selector", "l", "", "Selector (label query) to filter on")
+	cmd.Flags().Bool("all", false, "select all resources in the namespace of the specified resource types")
+	cmd.Flags().String("resource-version", "", "If non-empty, the labels update will only succeed if this is the current resource-version for the object. Only valid when specifying a single resource.")
 	return cmd
 }
 
-func updateObject(client resource.RESTClient, mapping *meta.RESTMapping, namespace, name string, updateFn func(runtime.Object) runtime.Object) (runtime.Object, error) {
-	helper := resource.NewHelper(client, mapping)
+func updateObject(info *resource.Info, updateFn func(runtime.Object) (runtime.Object, error)) (runtime.Object, error) {
+	helper := resource.NewHelper(info.Client, info.Mapping)
 
-	obj, err := helper.Get(namespace, name)
+	obj, err := updateFn(info.Object)
 	if err != nil {
 		return nil, err
 	}
-
-	obj = updateFn(obj)
-
 	data, err := helper.Codec.Encode(obj)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = helper.Update(namespace, name, true, data)
+	_, err = helper.Update(info.Namespace, info.Name, true, data)
 	if err != nil {
 		return nil, err
 	}
@@ -157,6 +132,10 @@ func labelFunc(obj runtime.Object, overwrite bool, resourceVersion string, label
 		}
 	}
 
+	if meta.Labels == nil {
+		meta.Labels = make(map[string]string)
+	}
+
 	for key, value := range labels {
 		meta.Labels[key] = value
 	}
@@ -168,4 +147,83 @@ func labelFunc(obj runtime.Object, overwrite bool, resourceVersion string, label
 		meta.ResourceVersion = resourceVersion
 	}
 	return obj, nil
+}
+
+func RunLabel(f *Factory, out io.Writer, cmd *cobra.Command, args []string) error {
+	resources, labelArgs := []string{}, []string{}
+	first := true
+	for _, s := range args {
+		isLabel := strings.Contains(s, "=") || strings.HasSuffix(s, "-")
+		switch {
+		case first && isLabel:
+			first = false
+			fallthrough
+		case !first && isLabel:
+			labelArgs = append(labelArgs, s)
+		case first && !isLabel:
+			resources = append(resources, s)
+		case !first && !isLabel:
+			return util.UsageError(cmd, "all resources must be specified before label changes: %s", s)
+		}
+	}
+	if len(resources) < 1 {
+		return util.UsageError(cmd, "one or more resources must be specified as <resource> <name> or <resource>/<name>")
+	}
+	if len(labelArgs) < 1 {
+		return util.UsageError(cmd, "at least one label update is required")
+	}
+
+	selector := util.GetFlagString(cmd, "selector")
+	all := util.GetFlagBool(cmd, "all")
+	overwrite := util.GetFlagBool(cmd, "overwrite")
+	resourceVersion := util.GetFlagString(cmd, "resource-version")
+
+	cmdNamespace, err := f.DefaultNamespace()
+	if err != nil {
+		return err
+	}
+
+	labels, remove, err := parseLabels(labelArgs)
+	if err != nil {
+		return err
+	}
+
+	mapper, typer := f.Object()
+	b := resource.NewBuilder(mapper, typer, f.ClientMapperForCommand()).
+		ContinueOnError().
+		NamespaceParam(cmdNamespace).DefaultNamespace().
+		SelectorParam(selector).
+		ResourceTypeOrNameArgs(all, resources...).
+		Flatten().
+		Latest()
+
+	one := false
+	r := b.Do().IntoSingular(&one)
+	if err := r.Err(); err != nil {
+		return err
+	}
+	// only apply resource version locking on a single resource
+	if !one && len(resourceVersion) > 0 {
+		return util.UsageError(cmd, "--resource-version may only be used with a single resource")
+	}
+
+	// TODO: support bulk generic output a la Get
+	return r.Visit(func(info *resource.Info) error {
+		obj, err := updateObject(info, func(obj runtime.Object) (runtime.Object, error) {
+			outObj, err := labelFunc(obj, overwrite, resourceVersion, labels, remove)
+			if err != nil {
+				return nil, err
+			}
+			return outObj, nil
+		})
+		if err != nil {
+			return err
+		}
+
+		printer, err := f.PrinterForMapping(cmd, info.Mapping)
+		if err != nil {
+			return err
+		}
+		return printer.PrintObj(obj, out)
+	})
 }

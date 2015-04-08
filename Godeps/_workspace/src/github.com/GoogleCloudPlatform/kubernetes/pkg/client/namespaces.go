@@ -17,10 +17,10 @@ limitations under the License.
 package client
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 )
@@ -32,10 +32,12 @@ type NamespacesInterface interface {
 type NamespaceInterface interface {
 	Create(item *api.Namespace) (*api.Namespace, error)
 	Get(name string) (result *api.Namespace, err error)
-	List(selector labels.Selector) (*api.NamespaceList, error)
+	List(label labels.Selector, field fields.Selector) (*api.NamespaceList, error)
 	Delete(name string) error
 	Update(item *api.Namespace) (*api.Namespace, error)
-	Watch(label, field labels.Selector, resourceVersion string) (watch.Interface, error)
+	Watch(label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error)
+	Finalize(item *api.Namespace) (*api.Namespace, error)
+	Status(item *api.Namespace) (*api.Namespace, error)
 }
 
 // namespaces implements NamespacesInterface
@@ -56,9 +58,13 @@ func (c *namespaces) Create(namespace *api.Namespace) (*api.Namespace, error) {
 }
 
 // List lists all the namespaces in the cluster.
-func (c *namespaces) List(selector labels.Selector) (*api.NamespaceList, error) {
+func (c *namespaces) List(label labels.Selector, field fields.Selector) (*api.NamespaceList, error) {
 	result := &api.NamespaceList{}
-	err := c.r.Get().Resource("namespaces").SelectorParam("labels", selector).Do().Into(result)
+	err := c.r.Get().
+		Resource("namespaces").
+		LabelsSelectorParam(api.LabelSelectorQueryParam(c.r.APIVersion()), label).
+		FieldsSelectorParam(api.FieldSelectorQueryParam(c.r.APIVersion()), field).
+		Do().Into(result)
 	return result, err
 }
 
@@ -73,12 +79,30 @@ func (c *namespaces) Update(namespace *api.Namespace) (result *api.Namespace, er
 	return
 }
 
+// Finalize takes the representation of a namespace to update.  Returns the server's representation of the namespace, and an error, if it occurs.
+func (c *namespaces) Finalize(namespace *api.Namespace) (result *api.Namespace, err error) {
+	result = &api.Namespace{}
+	if len(namespace.ResourceVersion) == 0 {
+		err = fmt.Errorf("invalid update object, missing resource version: %v", namespace)
+		return
+	}
+	err = c.r.Put().Resource("namespaces").Name(namespace.Name).SubResource("finalize").Body(namespace).Do().Into(result)
+	return
+}
+
+// Status takes the representation of a namespace to update.  Returns the server's representation of the namespace, and an error, if it occurs.
+func (c *namespaces) Status(namespace *api.Namespace) (result *api.Namespace, err error) {
+	result = &api.Namespace{}
+	if len(namespace.ResourceVersion) == 0 {
+		err = fmt.Errorf("invalid update object, missing resource version: %v", namespace)
+		return
+	}
+	err = c.r.Put().Resource("namespaces").Name(namespace.Name).SubResource("status").Body(namespace).Do().Into(result)
+	return
+}
+
 // Get gets an existing namespace
 func (c *namespaces) Get(name string) (*api.Namespace, error) {
-	if len(name) == 0 {
-		return nil, errors.New("name is required parameter to Get")
-	}
-
 	result := &api.Namespace{}
 	err := c.r.Get().Resource("namespaces").Name(name).Do().Into(result)
 	return result, err
@@ -90,12 +114,12 @@ func (c *namespaces) Delete(name string) error {
 }
 
 // Watch returns a watch.Interface that watches the requested namespaces.
-func (c *namespaces) Watch(label, field labels.Selector, resourceVersion string) (watch.Interface, error) {
+func (c *namespaces) Watch(label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error) {
 	return c.r.Get().
 		Prefix("watch").
 		Resource("namespaces").
 		Param("resourceVersion", resourceVersion).
-		SelectorParam("labels", label).
-		SelectorParam("fields", field).
+		LabelsSelectorParam(api.LabelSelectorQueryParam(c.r.APIVersion()), label).
+		FieldsSelectorParam(api.FieldSelectorQueryParam(c.r.APIVersion()), field).
 		Watch()
 }

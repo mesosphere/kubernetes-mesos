@@ -6,7 +6,6 @@
 # Folders
 _obj
 _test
-third_party
 bin
 _build
 .vagrant
@@ -20,6 +19,7 @@ _build
 _cgo_defun.c
 _cgo_gotypes.go
 _cgo_export.*
+*.coverage.out
 
 _testmain.go
 
