@@ -29,53 +29,44 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/GoogleCloudPlatform/kubernetes/cmd/kube-controller-manager/app"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/resource"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
 	nodeControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider/controller"
 	replicationControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/controller"
-	server "github.com/GoogleCloudPlatform/kubernetes/pkg/controllermanager"
-	_ "github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/hyperkube"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/namespace"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/resourcequota"
 	kendpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/golang/glog"
 
+	"github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
+	"github.com/mesosphere/kubernetes-mesos/pkg/profile"
 	kmendpoint "github.com/mesosphere/kubernetes-mesos/pkg/service"
 	"github.com/spf13/pflag"
 )
 
 // CMServer is the mail context object for the controller manager.
 type CMServer struct {
-	*server.CMServer
+	*app.CMServer
 	UseHostPortEndpoints bool
 }
 
 // NewCMServer creates a new CMServer with a default config.
 func NewCMServer() *CMServer {
 	s := &CMServer{
-		CMServer: server.NewCMServer(),
+		CMServer: app.NewCMServer(),
 	}
-	s.CloudProvider = "mesos"
+	s.CloudProvider = mesos.PluginName
 	s.UseHostPortEndpoints = true
 	s.MinionRegexp = "^.*$"
+	// if the kubelet isn't running on a slave we don't want the resources to show up on the node
+	s.NodeMilliCPU = 0
+	s.NodeMemory = *resource.NewQuantity(0, resource.BinarySI)
 	return s
-}
-
-// NewHyperkubeServer creates a new hyperkube Server object that includes the
-// description and flags.
-func NewHyperkubeServer() *hyperkube.Server {
-	s := NewCMServer()
-
-	hks := hyperkube.Server{
-		SimpleUsage: "controller-manager",
-		Long:        "A server that runs a set of active components. This includes replication controllers, service endpoints and nodes.",
-		Run: func(_ *hyperkube.Server, args []string) error {
-			return s.Run(args)
-		},
-	}
-	s.AddFlags(hks.Flags())
-	return &hks
 }
 
 // AddFlags adds flags for a specific CMServer to the specified FlagSet
@@ -102,7 +93,7 @@ func (s *CMServer) verifyMinionFlags() {
 func (s *CMServer) Run(_ []string) error {
 	s.verifyMinionFlags()
 	if len(s.ClientConfig.Host) == 0 {
-		glog.Fatal("usage: controller-manager -master <master>")
+		glog.Fatal("usage: controller-manager --master <master>")
 	}
 
 	kubeClient, err := client.New(&s.ClientConfig)
@@ -110,13 +101,19 @@ func (s *CMServer) Run(_ []string) error {
 		glog.Fatalf("Invalid API configuration: %v", err)
 	}
 
-	go http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), nil)
+	go func() {
+		mux := http.NewServeMux()
+		if s.EnableProfiling {
+			profile.InstallHandler(mux)
+		}
+		util.Forever(func() { http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), mux) }, 5*time.Second)
+	}()
 
 	endpoints := s.createEndpointController(kubeClient)
 	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, time.Second*10)
 
 	controllerManager := replicationControllerPkg.NewReplicationManager(kubeClient)
-	controllerManager.Run(10 * time.Second)
+	controllerManager.Run(replicationControllerPkg.DefaultSyncPeriod)
 
 	kubeletClient, err := client.NewKubeletClient(&s.KubeletConfig)
 	if err != nil {
@@ -124,17 +121,29 @@ func (s *CMServer) Run(_ []string) error {
 	}
 
 	//TODO(jdef) should eventually support more cloud providers here
-	if s.CloudProvider != "mesos" {
+	if s.CloudProvider != mesos.PluginName {
 		glog.Fatalf("Unsupported cloud provider: %v", s.CloudProvider)
 	}
 	cloud := cloudprovider.InitCloudProvider(s.CloudProvider, s.CloudConfigFile)
 
-	nodeController := nodeControllerPkg.NewNodeController(cloud, s.MinionRegexp, s.MachineList,
-		nil, kubeClient, kubeletClient, s.RegisterRetryCount, s.PodEvictionTimeout)
-	nodeController.Run(s.NodeSyncPeriod, s.SyncNodeList)
+	//this is the default "static" capacity reported when there's no kubelet running on a slave
+	nodeResources := &api.NodeResources{
+		Capacity: api.ResourceList{
+			api.ResourceCPU:    *resource.NewMilliQuantity(s.NodeMilliCPU, resource.DecimalSI),
+			api.ResourceMemory: s.NodeMemory,
+		},
+	}
+
+	nodeController := nodeControllerPkg.NewNodeController(cloud, s.MinionRegexp, s.MachineList, nodeResources,
+		kubeClient, kubeletClient, record.FromSource(api.EventSource{Component: "controllermanager"}),
+		s.RegisterRetryCount, s.PodEvictionTimeout)
+	nodeController.Run(s.NodeSyncPeriod, s.SyncNodeList, s.SyncNodeStatus)
 
 	resourceQuotaManager := resourcequota.NewResourceQuotaManager(kubeClient)
 	resourceQuotaManager.Run(s.ResourceQuotaSyncPeriod)
+
+	namespaceManager := namespace.NewNamespaceManager(kubeClient)
+	namespaceManager.Run(s.NamespaceSyncPeriod)
 
 	select {}
 }

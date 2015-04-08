@@ -21,13 +21,23 @@ limitations under the License.
 package main
 
 import (
+	"fmt"
+	"os"
+	"runtime"
+
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/mesosphere/kubernetes-mesos/pkg/controllermanager"
 	"github.com/mesosphere/kubernetes-mesos/pkg/version/verflag"
 	"github.com/spf13/pflag"
 )
 
+func init() {
+	healthz.DefaultHealthz()
+}
+
 func main() {
+	runtime.GOMAXPROCS(runtime.NumCPU())
 	s := controllermanager.NewCMServer()
 	s.AddFlags(pflag.CommandLine)
 
@@ -37,5 +47,8 @@ func main() {
 
 	verflag.PrintAndExitIfRequested()
 
-	s.Run(pflag.CommandLine.Args())
+	if err := s.Run(pflag.CommandLine.Args()); err != nil {
+		fmt.Fprintf(os.Stderr, err.Error())
+		os.Exit(1)
+	}
 }

@@ -26,6 +26,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/v1beta2"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/v1beta3"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 )
 
 // Version is the string that represents the current external default version.
@@ -49,11 +50,6 @@ var Codec = v1beta1.Codec
 
 // accessor is the shared static metadata accessor for the API.
 var accessor = meta.NewAccessor()
-
-// ResourceVersioner describes a default versioner that can handle all types
-// of versioning.
-// TODO: when versioning changes, make this part of each API definition.
-var ResourceVersioner = runtime.ResourceVersioner(accessor)
 
 // SelfLinker can set or get the SelfLink field of all API types.
 // TODO: when versioning changes, make this part of each API definition.
@@ -122,14 +118,21 @@ func init() {
 	// the list of kinds that are scoped at the root of the api hierarchy
 	// if a kind is not enumerated here, it is assumed to have a namespace scope
 	kindToRootScope := map[string]bool{
-		"Node":      true,
-		"Minion":    true,
-		"Namespace": true,
+		"Node":             true,
+		"Minion":           true,
+		"Namespace":        true,
+		"PersistentVolume": true,
 	}
+
+	// these kinds should be excluded from the list of resources
+	ignoredKinds := util.NewStringSet("ListOptions", "DeleteOptions", "Status", "ContainerManifest")
 
 	// enumerate all supported versions, get the kinds, and register with the mapper how to address our resources
 	for _, version := range versions {
 		for kind := range api.Scheme.KnownTypes(version) {
+			if ignoredKinds.Has(kind) {
+				continue
+			}
 			mixedCase, found := versionMixedCase[version]
 			if !found {
 				mixedCase = false

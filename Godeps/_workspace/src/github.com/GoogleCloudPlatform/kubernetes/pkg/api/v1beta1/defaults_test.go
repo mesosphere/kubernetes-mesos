@@ -51,44 +51,100 @@ func TestSetDefaultService(t *testing.T) {
 	}
 }
 
-func TestSetDefaulPodSpec(t *testing.T) {
-	bp := &current.BoundPod{}
-	bp.Spec.Volumes = []current.Volume{{}}
+func TestSetDefaultSecret(t *testing.T) {
+	s := &current.Secret{}
+	obj2 := roundTrip(t, runtime.Object(s))
+	s2 := obj2.(*current.Secret)
 
-	obj2 := roundTrip(t, runtime.Object(bp))
-	bp2 := obj2.(*current.BoundPod)
-	if bp2.Spec.DNSPolicy != current.DNSClusterFirst {
-		t.Errorf("Expected default dns policy :%s, got: %s", current.DNSClusterFirst, bp2.Spec.DNSPolicy)
-	}
-	policy := bp2.Spec.RestartPolicy
-	if policy.Never != nil || policy.OnFailure != nil || policy.Always == nil {
-		t.Errorf("Expected only policy.Always is set, got: %s", policy)
-	}
-	vsource := bp2.Spec.Volumes[0].Source
-	if vsource.EmptyDir == nil {
-		t.Errorf("Expected non-empty volume is set, got: %s", vsource.EmptyDir)
+	if s2.Type != current.SecretTypeOpaque {
+		t.Errorf("Expected secret type %v, got %v", current.SecretTypeOpaque, s2.Type)
 	}
 }
 
-func TestSetDefaultContainer(t *testing.T) {
-	bp := &current.BoundPod{}
-	bp.Spec.Containers = []current.Container{{}}
-	bp.Spec.Containers[0].Ports = []current.Port{{}}
-
-	obj2 := roundTrip(t, runtime.Object(bp))
-	bp2 := obj2.(*current.BoundPod)
-
-	container := bp2.Spec.Containers[0]
-	if container.TerminationMessagePath != current.TerminationMessagePathDefault {
-		t.Errorf("Expected termination message path: %s, got: %s",
-			current.TerminationMessagePathDefault, container.TerminationMessagePath)
+// Test that we use "legacy" fields if "modern" fields are not provided.
+func TestSetDefaulEndpointsLegacy(t *testing.T) {
+	in := &current.Endpoints{
+		Protocol:   "UDP",
+		Endpoints:  []string{"1.2.3.4:93", "5.6.7.8:76"},
+		TargetRefs: []current.EndpointObjectReference{{Endpoint: "1.2.3.4:93", ObjectReference: current.ObjectReference{ID: "foo"}}},
 	}
-	if container.ImagePullPolicy != current.PullIfNotPresent {
-		t.Errorf("Expected image pull policy: %s, got: %s",
-			current.PullIfNotPresent, container.ImagePullPolicy)
+	obj := roundTrip(t, runtime.Object(in))
+	out := obj.(*current.Endpoints)
+
+	if len(out.Subsets) != 2 {
+		t.Errorf("Expected 2 EndpointSubsets, got %d (%#v)", len(out.Subsets), out.Subsets)
 	}
-	if container.Ports[0].Protocol != current.ProtocolTCP {
-		t.Errorf("Expected protocol: %s, got: %s",
-			current.ProtocolTCP, container.Ports[0].Protocol)
+	expected := []current.EndpointSubset{
+		{
+			Addresses: []current.EndpointAddress{{IP: "1.2.3.4", TargetRef: &current.ObjectReference{ID: "foo"}}},
+			Ports:     []current.EndpointPort{{Protocol: current.ProtocolUDP, Port: 93}},
+		},
+		{
+			Addresses: []current.EndpointAddress{{IP: "5.6.7.8"}},
+			Ports:     []current.EndpointPort{{Protocol: current.ProtocolUDP, Port: 76}},
+		},
+	}
+	if !reflect.DeepEqual(out.Subsets, expected) {
+		t.Errorf("Expected %#v, got %#v", expected, out.Subsets)
+	}
+}
+
+func TestSetDefaulEndpointsProtocol(t *testing.T) {
+	in := &current.Endpoints{Subsets: []current.EndpointSubset{
+		{Ports: []current.EndpointPort{{}, {Protocol: "UDP"}, {}}},
+	}}
+	obj := roundTrip(t, runtime.Object(in))
+	out := obj.(*current.Endpoints)
+
+	if out.Protocol != current.ProtocolTCP {
+		t.Errorf("Expected protocol %s, got %s", current.ProtocolTCP, out.Protocol)
+	}
+	for i := range out.Subsets {
+		for j := range out.Subsets[i].Ports {
+			if in.Subsets[i].Ports[j].Protocol == "" {
+				if out.Subsets[i].Ports[j].Protocol != current.ProtocolTCP {
+					t.Errorf("Expected protocol %s, got %s", current.ProtocolTCP, out.Subsets[i].Ports[j].Protocol)
+				}
+			} else {
+				if out.Subsets[i].Ports[j].Protocol != in.Subsets[i].Ports[j].Protocol {
+					t.Errorf("Expected protocol %s, got %s", in.Subsets[i].Ports[j].Protocol, out.Subsets[i].Ports[j].Protocol)
+				}
+			}
+		}
+	}
+}
+
+func TestSetDefaultNamespace(t *testing.T) {
+	s := &current.Namespace{}
+	obj2 := roundTrip(t, runtime.Object(s))
+	s2 := obj2.(*current.Namespace)
+
+	if s2.Status.Phase != current.NamespaceActive {
+		t.Errorf("Expected phase %v, got %v", current.NamespaceActive, s2.Status.Phase)
+	}
+}
+
+func TestSetDefaultContainerManifestHostNetwork(t *testing.T) {
+	portNum := 8080
+	s := current.ContainerManifest{}
+	s.HostNetwork = true
+	s.Containers = []current.Container{
+		{
+			Ports: []current.ContainerPort{
+				{
+					ContainerPort: portNum,
+				},
+			},
+		},
+	}
+	obj2 := roundTrip(t, runtime.Object(&current.ContainerManifestList{
+		Items: []current.ContainerManifest{s},
+	}))
+	sList2 := obj2.(*current.ContainerManifestList)
+	s2 := sList2.Items[0]
+
+	hostPortNum := s2.Containers[0].Ports[0].HostPort
+	if hostPortNum != portNum {
+		t.Errorf("Expected container port to be defaulted, was made %d instead of %d", hostPortNum, portNum)
 	}
 }

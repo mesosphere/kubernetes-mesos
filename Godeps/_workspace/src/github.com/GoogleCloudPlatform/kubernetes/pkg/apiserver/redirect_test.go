@@ -22,6 +22,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/rest"
 )
 
 func TestRedirect(t *testing.T) {
@@ -29,9 +31,7 @@ func TestRedirect(t *testing.T) {
 		errors: map[string]error{},
 		expectedResourceNamespace: "default",
 	}
-	handler := Handle(map[string]RESTStorage{
-		"foo": simpleStorage,
-	}, codec, "/prefix", "version", selfLinker, admissionControl, requestContextMapper, mapper)
+	handler := handle(map[string]rest.Storage{"foo": simpleStorage})
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -53,8 +53,8 @@ func TestRedirect(t *testing.T) {
 
 	for _, item := range table {
 		simpleStorage.errors["resourceLocation"] = item.err
-		simpleStorage.resourceLocation = item.id
-		resp, err := client.Get(server.URL + "/prefix/version/redirect/foo/" + item.id)
+		simpleStorage.resourceLocation = &url.URL{Host: item.id}
+		resp, err := client.Get(server.URL + "/api/version/redirect/foo/" + item.id)
 		if resp == nil {
 			t.Fatalf("Unexpected nil resp")
 		}
@@ -71,7 +71,7 @@ func TestRedirect(t *testing.T) {
 		if err == nil || err.(*url.Error).Err != dontFollow {
 			t.Errorf("Unexpected err %#v", err)
 		}
-		if e, a := item.id, resp.Header.Get("Location"); e != a {
+		if e, a := "http://"+item.id, resp.Header.Get("Location"); e != a {
 			t.Errorf("Expected %v, got %v", e, a)
 		}
 	}
@@ -82,9 +82,7 @@ func TestRedirectWithNamespaces(t *testing.T) {
 		errors: map[string]error{},
 		expectedResourceNamespace: "other",
 	}
-	handler := Handle(map[string]RESTStorage{
-		"foo": simpleStorage,
-	}, codec, "/prefix", "version", selfLinker, admissionControl, requestContextMapper, namespaceMapper)
+	handler := handleNamespaced(map[string]rest.Storage{"foo": simpleStorage})
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -106,8 +104,8 @@ func TestRedirectWithNamespaces(t *testing.T) {
 
 	for _, item := range table {
 		simpleStorage.errors["resourceLocation"] = item.err
-		simpleStorage.resourceLocation = item.id
-		resp, err := client.Get(server.URL + "/prefix/version/redirect/namespaces/other/foo/" + item.id)
+		simpleStorage.resourceLocation = &url.URL{Host: item.id}
+		resp, err := client.Get(server.URL + "/api/version2/redirect/namespaces/other/foo/" + item.id)
 		if resp == nil {
 			t.Fatalf("Unexpected nil resp")
 		}
@@ -124,7 +122,7 @@ func TestRedirectWithNamespaces(t *testing.T) {
 		if err == nil || err.(*url.Error).Err != dontFollow {
 			t.Errorf("Unexpected err %#v", err)
 		}
-		if e, a := item.id, resp.Header.Get("Location"); e != a {
+		if e, a := "http://"+item.id, resp.Header.Get("Location"); e != a {
 			t.Errorf("Expected %v, got %v", e, a)
 		}
 	}

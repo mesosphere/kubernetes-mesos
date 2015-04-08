@@ -18,7 +18,7 @@ package service
 
 import (
 	"net"
-	"strconv"
+	"reflect"
 	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
@@ -32,23 +32,25 @@ const (
 	SCHEDULER_SERVICE_NAME = "k8sm-scheduler"
 )
 
-func (m *SchedulerServer) serviceWriterLoop(stop <-chan struct{}) {
-	for {
-		// Update service & endpoint records.
-		// TODO(k8s): when it becomes possible to change this stuff,
-		// stop polling and start watching.
-		if err := m.createSchedulerServiceIfNeeded(SCHEDULER_SERVICE_NAME, ports.SchedulerPort); err != nil {
-			glog.Errorf("Can't create scheduler service: %v", err)
-		}
+func (m *SchedulerServer) newServiceWriter(stop <-chan struct{}) func() {
+	return func() {
+		for {
+			// Update service & endpoint records.
+			// TODO(k8s): when it becomes possible to change this stuff,
+			// stop polling and start watching.
+			if err := m.createSchedulerServiceIfNeeded(SCHEDULER_SERVICE_NAME, ports.SchedulerPort); err != nil {
+				glog.Errorf("Can't create scheduler service: %v", err)
+			}
 
-		if err := m.ensureEndpointsContain(SCHEDULER_SERVICE_NAME, net.JoinHostPort(m.Address.String(), strconv.Itoa(m.Port))); err != nil {
-			glog.Errorf("Can't create scheduler endpoints: %v", err)
-		}
+			if err := m.setEndpoints(SCHEDULER_SERVICE_NAME, net.IP(m.Address), m.Port); err != nil {
+				glog.Errorf("Can't create scheduler endpoints: %v", err)
+			}
 
-		select {
-		case <-stop:
-			return
-		case <-time.After(10 * time.Second):
+			select {
+			case <-stop:
+				return
+			case <-time.After(10 * time.Second):
+			}
 		}
 	}
 }
@@ -82,45 +84,36 @@ func (m *SchedulerServer) createSchedulerServiceIfNeeded(serviceName string, ser
 	return err
 }
 
-// ensureEndpointsContain sets the endpoints for the given service. Also removes
-// excess endpoints (as determined by m.masterCount). Extra endpoints could appear
-// in the list if, for example, the master starts running on a different machine,
-// changing IP addresses.
-func (m *SchedulerServer) ensureEndpointsContain(serviceName string, endpoint string) error {
+// setEndpoints sets the endpoints for the given service.
+// in a multi-master scenario only the master will be publishing an endpoint.
+// see SchedulerServer.bootstrap.
+func (m *SchedulerServer) setEndpoints(serviceName string, ip net.IP, port int) error {
+	// The setting we want to find.
+	want := []api.EndpointSubset{{
+		Addresses: []api.EndpointAddress{{IP: ip.String()}},
+		Ports:     []api.EndpointPort{{Port: port, Protocol: api.ProtocolTCP}},
+	}}
+
 	ctx := api.NewDefaultContext()
 	e, err := m.client.Endpoints(api.NamespaceValue(ctx)).Get(serviceName)
+	createOrUpdate := m.client.Endpoints(api.NamespaceValue(ctx)).Update
 	if err != nil {
+		if errors.IsNotFound(err) {
+			createOrUpdate = m.client.Endpoints(api.NamespaceValue(ctx)).Create
+		}
 		e = &api.Endpoints{
 			ObjectMeta: api.ObjectMeta{
 				Name:      serviceName,
 				Namespace: api.NamespaceDefault,
 			},
 		}
-		if _, err := m.client.Endpoints(api.NamespaceValue(ctx)).Create(e); err == nil {
-			return nil
-		}
 	}
-	found := false
-	for i := range e.Endpoints {
-		if e.Endpoints[i] == endpoint {
-			found = true
-			break
-		}
+	if !reflect.DeepEqual(e.Subsets, want) {
+		e.Subsets = want
+		glog.Infof("setting endpoints for master service %q to %+v", serviceName, e)
+		_, err = createOrUpdate(e)
+		return err
 	}
-	if !found {
-		e.Endpoints = append(e.Endpoints, endpoint)
-	}
-	//TODO(jdef) we have no good way to specify the expected master count, so just hardcode this to
-	// 2 for now (minimal required for hot-failover).
-	const MASTER_COUNT = 2
-	if len(e.Endpoints) > MASTER_COUNT {
-		// We append to the end and remove from the beginning, so this should
-		// converge rapidly with all masters performing this operation.
-		e.Endpoints = e.Endpoints[len(e.Endpoints)-MASTER_COUNT:]
-	} else if found {
-		// We didn't make any changes, no need to actually call update.
-		return nil
-	}
-	_, err = m.client.Endpoints(api.NamespaceValue(ctx)).Update(e)
-	return err
+	// We didn't make any changes, no need to actually call update.
+	return nil
 }

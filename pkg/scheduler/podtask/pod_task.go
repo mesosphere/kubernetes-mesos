@@ -2,6 +2,7 @@ package podtask
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"code.google.com/p/go-uuid/uuid"
@@ -153,6 +154,25 @@ func (t *T) FillFromDetails(details *mesos.Offer) error {
 		t.Spec.PortMap = mapping
 		t.Spec.Ports = ports
 	}
+
+	// hostname needs of the executor needs to match that of the offer, otherwise
+	// the kubelet node status checker/updater is very unhappy
+	const HOSTNAME_OVERRIDE_FLAG = "--hostname_override="
+	hostname := details.GetHostname() // required field, non-empty
+	hostnameOverride := HOSTNAME_OVERRIDE_FLAG + hostname
+
+	argv := t.executor.Command.Arguments
+	overwrite := false
+	for i, arg := range argv {
+		if strings.HasPrefix(arg, HOSTNAME_OVERRIDE_FLAG) {
+			overwrite = true
+			argv[i] = hostnameOverride
+			break
+		}
+	}
+	if !overwrite {
+		t.executor.Command.Arguments = append(argv, hostnameOverride)
+	}
 	return nil
 }
 
@@ -224,7 +244,7 @@ func New(ctx api.Context, id string, pod api.Pod, executor *mesos.ExecutorInfo) 
 		podKey:   key,
 		mapper:   defaultHostPortMapping,
 		Flags:    make(map[FlagType]struct{}),
-		executor: executor,
+		executor: proto.Clone(executor).(*mesos.ExecutorInfo),
 	}
 	task.CreateTime = time.Now()
 	return task, nil

@@ -3,6 +3,7 @@ package offers
 import (
 	"fmt"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -48,6 +49,9 @@ type Registry interface {
 	// invalidate one or all (when offerId="") offers; offers are not declined,
 	// but are simply flagged as expired in the offer history
 	Invalidate(offerId string)
+
+	// invalidate all offers associated with the slave identified by slaveId.
+	InvalidateForSlave(slaveId string)
 }
 
 // callback that is invoked during a walk through a series of live offers,
@@ -67,6 +71,7 @@ type offerStorage struct {
 	offers    *cache.FIFO       // collection of Perishable, both live and expired
 	listeners *queue.DelayFIFO  // collection of *offerListener
 	delayed   *queue.DelayQueue // deadline-oriented offer-event queue
+	slaves    *slaveStorage     // slave to offer mappings
 }
 
 type liveOffer struct {
@@ -136,6 +141,7 @@ func (e *expiredOffer) Release() {}
 func (e *expiredOffer) age(s *offerStorage) {
 	log.V(3).Infof("Delete lingering offer: %v", e.id)
 	s.offers.Delete(e.id)
+	s.slaves.deleteOffer(e.id)
 }
 
 // return the time left to linger
@@ -198,6 +204,7 @@ func CreateRegistry(c RegistryConfig) Registry {
 		})),
 		listeners: queue.NewDelayFIFO(),
 		delayed:   queue.NewDelayQueue(),
+		slaves:    newSlaveStorage(),
 	}
 }
 
@@ -227,6 +234,7 @@ func (s *offerStorage) Add(offers []*mesos.Offer) {
 		log.V(3).Infof("Receiving offer %v", timed.Id())
 		s.offers.Add(timed)
 		s.delayed.Add(timed)
+		s.slaves.add(offer.SlaveId.GetValue(), timed.Id())
 		metrics.OffersReceived.WithLabelValues(timed.Host()).Inc()
 	}
 }
@@ -271,7 +279,14 @@ func (s *offerStorage) Delete(offerId string, reason metrics.OfferDeclinedReason
 	} // else, ignore offers not in the history
 }
 
-// expire all known, live offers
+func (s *offerStorage) InvalidateForSlave(slaveId string) {
+	offerIds := s.slaves.deleteSlave(slaveId)
+	for oid := range offerIds {
+		s.invalidateOne(oid)
+	}
+}
+
+// if offerId == "" then expire all known, live offers, otherwise only the offer indicated
 func (s *offerStorage) Invalidate(offerId string) {
 	if offerId != "" {
 		s.invalidateOne(offerId)
@@ -340,6 +355,7 @@ func (s *offerStorage) expireOffer(offer Perishable) {
 		} else {
 			log.V(3).Infof("Permanently deleting offer %v", offerId)
 			s.offers.Delete(offerId)
+			s.slaves.deleteOffer(offerId)
 		}
 	} // else, it's still lingering...
 }
@@ -494,4 +510,43 @@ func (c *stringsCache) Strings() (util.StringSet, uint64) {
 		}
 	}
 	return c.cached, c.version
+}
+
+type slaveStorage struct {
+	sync.Mutex
+	index map[string]string // map offerId to slaveId
+}
+
+func newSlaveStorage() *slaveStorage {
+	return &slaveStorage{
+		index: make(map[string]string),
+	}
+}
+
+// create a mapping between a slave and an offer
+func (self *slaveStorage) add(slaveId, offerId string) {
+	self.Lock()
+	defer self.Unlock()
+	self.index[offerId] = slaveId
+}
+
+// delete the slave-offer mappings for slaveId, returns the IDs of the offers that were unmapped
+func (self *slaveStorage) deleteSlave(slaveId string) util.StringSet {
+	offerIds := util.NewStringSet()
+	self.Lock()
+	defer self.Unlock()
+	for oid, sid := range self.index {
+		if sid == slaveId {
+			offerIds.Insert(oid)
+			delete(self.index, oid)
+		}
+	}
+	return offerIds
+}
+
+// delete the slave-offer mappings for offerId
+func (self *slaveStorage) deleteOffer(offerId string) {
+	self.Lock()
+	defer self.Unlock()
+	delete(self.index, offerId)
 }

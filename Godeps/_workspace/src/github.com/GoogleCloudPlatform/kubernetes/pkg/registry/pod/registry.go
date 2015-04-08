@@ -18,9 +18,9 @@ package pod
 
 import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/apiserver"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/rest"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 )
 
@@ -29,7 +29,7 @@ type Registry interface {
 	// ListPods obtains a list of pods having labels which match selector.
 	ListPods(ctx api.Context, selector labels.Selector) (*api.PodList, error)
 	// Watch for new/changed/deleted pods
-	WatchPods(ctx api.Context, label, field labels.Selector, resourceVersion string) (watch.Interface, error)
+	WatchPods(ctx api.Context, label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error)
 	// Get a specific pod
 	GetPod(ctx api.Context, podID string) (*api.Pod, error)
 	// Create a pod based on a specification.
@@ -40,38 +40,26 @@ type Registry interface {
 	DeletePod(ctx api.Context, podID string) error
 }
 
-// Storage is an interface for a standard REST Storage backend
-// TODO: move me somewhere common
-type Storage interface {
-	apiserver.RESTDeleter
-	apiserver.RESTLister
-	apiserver.RESTGetter
-	apiserver.ResourceWatcher
-
-	Create(ctx api.Context, obj runtime.Object) (runtime.Object, error)
-	Update(ctx api.Context, obj runtime.Object) (runtime.Object, bool, error)
-}
-
 // storage puts strong typing around storage calls
 type storage struct {
-	Storage
+	rest.StandardStorage
 }
 
 // NewRegistry returns a new Registry interface for the given Storage. Any mismatched
 // types will panic.
-func NewRegistry(s Storage) Registry {
+func NewRegistry(s rest.StandardStorage) Registry {
 	return &storage{s}
 }
 
 func (s *storage) ListPods(ctx api.Context, label labels.Selector) (*api.PodList, error) {
-	obj, err := s.List(ctx, label, labels.Everything())
+	obj, err := s.List(ctx, label, fields.Everything())
 	if err != nil {
 		return nil, err
 	}
 	return obj.(*api.PodList), nil
 }
 
-func (s *storage) WatchPods(ctx api.Context, label, field labels.Selector, resourceVersion string) (watch.Interface, error) {
+func (s *storage) WatchPods(ctx api.Context, label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error) {
 	return s.Watch(ctx, label, field, resourceVersion)
 }
 
@@ -94,6 +82,6 @@ func (s *storage) UpdatePod(ctx api.Context, pod *api.Pod) error {
 }
 
 func (s *storage) DeletePod(ctx api.Context, podID string) error {
-	_, err := s.Delete(ctx, podID)
+	_, err := s.Delete(ctx, podID, nil)
 	return err
 }

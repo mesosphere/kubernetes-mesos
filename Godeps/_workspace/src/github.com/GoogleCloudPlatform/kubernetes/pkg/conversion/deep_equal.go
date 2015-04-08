@@ -19,6 +19,7 @@ package conversion
 import (
 	"fmt"
 	"reflect"
+	"strings"
 )
 
 // Equalities is a map from type to a function comparing two values of
@@ -99,10 +100,36 @@ type visit struct {
 	typ reflect.Type
 }
 
+// unexportedTypePanic is thrown when you use this DeepEqual on something that has an
+// unexported type. It indicates a programmer error, so should not occur at runtime,
+// which is why it's not public and thus impossible to catch.
+type unexportedTypePanic []reflect.Type
+
+func (u unexportedTypePanic) Error() string { return u.String() }
+func (u unexportedTypePanic) String() string {
+	strs := make([]string, len(u))
+	for i, t := range u {
+		strs[i] = fmt.Sprintf("%v", t)
+	}
+	return "an unexported field was encountered, nested like this: " + strings.Join(strs, " -> ")
+}
+
+func makeUsefulPanic(v reflect.Value) {
+	if x := recover(); x != nil {
+		if u, ok := x.(unexportedTypePanic); ok {
+			u = append(unexportedTypePanic{v.Type()}, u...)
+			x = u
+		}
+		panic(x)
+	}
+}
+
 // Tests for deep equality using reflected types. The map argument tracks
 // comparisons that have already been seen, which allows short circuiting on
 // recursive types.
 func (e Equalities) deepValueEqual(v1, v2 reflect.Value, visited map[visit]bool, depth int) bool {
+	defer makeUsefulPanic(v1)
+
 	if !v1.IsValid() || !v2.IsValid() {
 		return v1.IsValid() == v2.IsValid()
 	}
@@ -147,6 +174,8 @@ func (e Equalities) deepValueEqual(v1, v2 reflect.Value, visited map[visit]bool,
 
 	switch v1.Kind() {
 	case reflect.Array:
+		// We don't need to check length here because length is part of
+		// an array's type, which has already been filtered for.
 		for i := 0; i < v1.Len(); i++ {
 			if !e.deepValueEqual(v1.Index(i), v2.Index(i), visited, depth+1) {
 				return false
@@ -159,6 +188,9 @@ func (e Equalities) deepValueEqual(v1, v2 reflect.Value, visited map[visit]bool,
 		}
 		if v1.IsNil() || v1.Len() == 0 {
 			return true
+		}
+		if v1.Len() != v2.Len() {
+			return false
 		}
 		if v1.Pointer() == v2.Pointer() {
 			return true
@@ -190,6 +222,9 @@ func (e Equalities) deepValueEqual(v1, v2 reflect.Value, visited map[visit]bool,
 		if v1.IsNil() || v1.Len() == 0 {
 			return true
 		}
+		if v1.Len() != v2.Len() {
+			return false
+		}
 		if v1.Pointer() == v2.Pointer() {
 			return true
 		}
@@ -207,10 +242,10 @@ func (e Equalities) deepValueEqual(v1, v2 reflect.Value, visited map[visit]bool,
 		return false
 	default:
 		// Normal equality suffices
-		if v1.CanInterface() && v2.CanInterface() {
-			return v1.Interface() == v2.Interface()
+		if !v1.CanInterface() || !v2.CanInterface() {
+			panic(unexportedTypePanic{})
 		}
-		return v1.CanInterface() == v2.CanInterface()
+		return v1.Interface() == v2.Interface()
 	}
 }
 
@@ -221,7 +256,8 @@ func (e Equalities) deepValueEqual(v1, v2 reflect.Value, visited map[visit]bool,
 //
 // An empty slice *is* equal to a nil slice for our purposes; same for maps.
 //
-// Unexported field members are not compared.
+// Unexported field members cannot be compared and will cause an imformative panic; you must add an Equality
+// function for these types.
 func (e Equalities) DeepEqual(a1, a2 interface{}) bool {
 	if a1 == nil || a2 == nil {
 		return a1 == a2
@@ -235,6 +271,8 @@ func (e Equalities) DeepEqual(a1, a2 interface{}) bool {
 }
 
 func (e Equalities) deepValueDerive(v1, v2 reflect.Value, visited map[visit]bool, depth int) bool {
+	defer makeUsefulPanic(v1)
+
 	if !v1.IsValid() || !v2.IsValid() {
 		return v1.IsValid() == v2.IsValid()
 	}
@@ -279,6 +317,8 @@ func (e Equalities) deepValueDerive(v1, v2 reflect.Value, visited map[visit]bool
 
 	switch v1.Kind() {
 	case reflect.Array:
+		// We don't need to check length here because length is part of
+		// an array's type, which has already been filtered for.
 		for i := 0; i < v1.Len(); i++ {
 			if !e.deepValueDerive(v1.Index(i), v2.Index(i), visited, depth+1) {
 				return false
@@ -286,11 +326,11 @@ func (e Equalities) deepValueDerive(v1, v2 reflect.Value, visited map[visit]bool
 		}
 		return true
 	case reflect.Slice:
-		if (v1.IsNil() || v1.Len() == 0) != (v2.IsNil() || v2.Len() == 0) {
-			return false
-		}
 		if v1.IsNil() || v1.Len() == 0 {
 			return true
+		}
+		if v1.Len() > v2.Len() {
+			return false
 		}
 		if v1.Pointer() == v2.Pointer() {
 			return true
@@ -304,6 +344,9 @@ func (e Equalities) deepValueDerive(v1, v2 reflect.Value, visited map[visit]bool
 	case reflect.String:
 		if v1.Len() == 0 {
 			return true
+		}
+		if v1.Len() > v2.Len() {
+			return false
 		}
 		return v1.String() == v2.String()
 	case reflect.Interface:
@@ -324,11 +367,11 @@ func (e Equalities) deepValueDerive(v1, v2 reflect.Value, visited map[visit]bool
 		}
 		return true
 	case reflect.Map:
-		if (v1.IsNil() || v1.Len() == 0) != (v2.IsNil() || v2.Len() == 0) {
-			return false
-		}
 		if v1.IsNil() || v1.Len() == 0 {
 			return true
+		}
+		if v1.Len() > v2.Len() {
+			return false
 		}
 		if v1.Pointer() == v2.Pointer() {
 			return true
@@ -347,15 +390,15 @@ func (e Equalities) deepValueDerive(v1, v2 reflect.Value, visited map[visit]bool
 		return false
 	default:
 		// Normal equality suffices
-		if v1.CanInterface() && v2.CanInterface() {
-			return v1.Interface() == v2.Interface()
+		if !v1.CanInterface() || !v2.CanInterface() {
+			panic(unexportedTypePanic{})
 		}
-		return v1.CanInterface() == v2.CanInterface()
+		return v1.Interface() == v2.Interface()
 	}
 }
 
 // DeepDerivative is similar to DeepEqual except that unset fields in a1 are
-// ignored (not compared). This allows we to focus on the fields that matter to
+// ignored (not compared). This allows us to focus on the fields that matter to
 // the semantic comparison.
 //
 // The unset fields include a nil pointer and an empty string.

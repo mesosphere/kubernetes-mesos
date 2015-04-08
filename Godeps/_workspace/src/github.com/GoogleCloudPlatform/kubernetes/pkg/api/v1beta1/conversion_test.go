@@ -29,6 +29,17 @@ import (
 
 var Convert = newer.Scheme.Convert
 
+func TestEmptyObjectConversion(t *testing.T) {
+	s, err := current.Codec.Encode(&current.LimitRange{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// DeletionTimestamp is not included, while CreationTimestamp is (would always be set)
+	if string(s) != `{"kind":"LimitRange","creationTimestamp":null,"apiVersion":"v1beta1","spec":{"limits":null}}` {
+		t.Errorf("unexpected empty object: %s", string(s))
+	}
+}
+
 func TestNodeConversion(t *testing.T) {
 	version, kind, err := newer.Scheme.ObjectVersionAndKind(&current.Minion{})
 	if err != nil {
@@ -380,5 +391,171 @@ func TestContainerConversion(t *testing.T) {
 		if memory := got.Resources.Limits.Memory(); memory.Value() != memoryLimit.Value() {
 			t.Errorf("[Case: %d] Expected memory: %v, got: %v", i, memoryLimit, *memory)
 		}
+	}
+}
+
+func TestEndpointsConversion(t *testing.T) {
+	testCases := []struct {
+		given    current.Endpoints
+		expected newer.Endpoints
+	}{
+		{
+			given: current.Endpoints{
+				TypeMeta: current.TypeMeta{
+					ID: "empty",
+				},
+				Protocol:  current.ProtocolTCP,
+				Endpoints: []string{},
+			},
+			expected: newer.Endpoints{
+				Subsets: []newer.EndpointSubset{},
+			},
+		},
+		{
+			given: current.Endpoints{
+				TypeMeta: current.TypeMeta{
+					ID: "one legacy",
+				},
+				Protocol:  current.ProtocolTCP,
+				Endpoints: []string{"1.2.3.4:88"},
+			},
+			expected: newer.Endpoints{
+				Subsets: []newer.EndpointSubset{{
+					Ports:     []newer.EndpointPort{{Name: "", Port: 88, Protocol: newer.ProtocolTCP}},
+					Addresses: []newer.EndpointAddress{{IP: "1.2.3.4"}},
+				}},
+			},
+		},
+		{
+			given: current.Endpoints{
+				TypeMeta: current.TypeMeta{
+					ID: "several legacy",
+				},
+				Protocol:  current.ProtocolUDP,
+				Endpoints: []string{"1.2.3.4:88", "1.2.3.4:89", "1.2.3.4:90"},
+			},
+			expected: newer.Endpoints{
+				Subsets: []newer.EndpointSubset{
+					{
+						Ports:     []newer.EndpointPort{{Name: "", Port: 88, Protocol: newer.ProtocolUDP}},
+						Addresses: []newer.EndpointAddress{{IP: "1.2.3.4"}},
+					},
+					{
+						Ports:     []newer.EndpointPort{{Name: "", Port: 89, Protocol: newer.ProtocolUDP}},
+						Addresses: []newer.EndpointAddress{{IP: "1.2.3.4"}},
+					},
+					{
+						Ports:     []newer.EndpointPort{{Name: "", Port: 90, Protocol: newer.ProtocolUDP}},
+						Addresses: []newer.EndpointAddress{{IP: "1.2.3.4"}},
+					},
+				}},
+		},
+		{
+			given: current.Endpoints{
+				TypeMeta: current.TypeMeta{
+					ID: "one subset",
+				},
+				Protocol:  current.ProtocolTCP,
+				Endpoints: []string{"1.2.3.4:88"},
+				Subsets: []current.EndpointSubset{{
+					Ports:     []current.EndpointPort{{Name: "", Port: 88, Protocol: current.ProtocolTCP}},
+					Addresses: []current.EndpointAddress{{IP: "1.2.3.4"}},
+				}},
+			},
+			expected: newer.Endpoints{
+				Subsets: []newer.EndpointSubset{{
+					Ports:     []newer.EndpointPort{{Name: "", Port: 88, Protocol: newer.ProtocolTCP}},
+					Addresses: []newer.EndpointAddress{{IP: "1.2.3.4"}},
+				}},
+			},
+		},
+		{
+			given: current.Endpoints{
+				TypeMeta: current.TypeMeta{
+					ID: "several subset",
+				},
+				Protocol:  current.ProtocolUDP,
+				Endpoints: []string{"1.2.3.4:88", "5.6.7.8:88", "1.2.3.4:89", "5.6.7.8:89"},
+				Subsets: []current.EndpointSubset{
+					{
+						Ports:     []current.EndpointPort{{Name: "", Port: 88, Protocol: current.ProtocolUDP}},
+						Addresses: []current.EndpointAddress{{IP: "1.2.3.4"}, {IP: "5.6.7.8"}},
+					},
+					{
+						Ports:     []current.EndpointPort{{Name: "", Port: 89, Protocol: current.ProtocolUDP}},
+						Addresses: []current.EndpointAddress{{IP: "1.2.3.4"}, {IP: "5.6.7.8"}},
+					},
+					{
+						Ports:     []current.EndpointPort{{Name: "named", Port: 90, Protocol: current.ProtocolUDP}},
+						Addresses: []current.EndpointAddress{{IP: "1.2.3.4"}, {IP: "5.6.7.8"}},
+					},
+				},
+			},
+			expected: newer.Endpoints{
+				Subsets: []newer.EndpointSubset{
+					{
+						Ports:     []newer.EndpointPort{{Name: "", Port: 88, Protocol: newer.ProtocolUDP}},
+						Addresses: []newer.EndpointAddress{{IP: "1.2.3.4"}, {IP: "5.6.7.8"}},
+					},
+					{
+						Ports:     []newer.EndpointPort{{Name: "", Port: 89, Protocol: newer.ProtocolUDP}},
+						Addresses: []newer.EndpointAddress{{IP: "1.2.3.4"}, {IP: "5.6.7.8"}},
+					},
+					{
+						Ports:     []newer.EndpointPort{{Name: "named", Port: 90, Protocol: newer.ProtocolUDP}},
+						Addresses: []newer.EndpointAddress{{IP: "1.2.3.4"}, {IP: "5.6.7.8"}},
+					},
+				}},
+		},
+	}
+
+	for i, tc := range testCases {
+		// Convert versioned -> internal.
+		got := newer.Endpoints{}
+		if err := Convert(&tc.given, &got); err != nil {
+			t.Errorf("[Case: %d] Unexpected error: %v", i, err)
+			continue
+		}
+		if !newer.Semantic.DeepEqual(got.Subsets, tc.expected.Subsets) {
+			t.Errorf("[Case: %d] Expected %#v, got %#v", i, tc.expected.Subsets, got.Subsets)
+		}
+
+		// Convert internal -> versioned.
+		got2 := current.Endpoints{}
+		if err := Convert(&got, &got2); err != nil {
+			t.Errorf("[Case: %d] Unexpected error: %v", i, err)
+			continue
+		}
+		if got2.Protocol != tc.given.Protocol || !newer.Semantic.DeepEqual(got2.Endpoints, tc.given.Endpoints) {
+			t.Errorf("[Case: %d] Expected %#v, got %#v", i, tc.given.Endpoints, got2.Endpoints)
+		}
+	}
+}
+
+func TestSecretVolumeSourceConversion(t *testing.T) {
+	given := current.SecretVolumeSource{
+		Target: current.ObjectReference{
+			ID: "foo",
+		},
+	}
+
+	expected := newer.SecretVolumeSource{
+		SecretName: "foo",
+	}
+
+	got := newer.SecretVolumeSource{}
+	if err := Convert(&given, &got); err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if got.SecretName != expected.SecretName {
+		t.Errorf("Expected %v; got %v", expected, got)
+	}
+
+	got2 := current.SecretVolumeSource{}
+	if err := Convert(&got, &got2); err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if got2.Target.ID != given.Target.ID {
+		t.Errorf("Expected %v; got %v", given, got2)
 	}
 }

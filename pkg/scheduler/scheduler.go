@@ -12,7 +12,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/container"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
@@ -48,13 +48,11 @@ const (
 
 type Slave struct {
 	HostName string
-	Offers   map[string]empty
 }
 
 func newSlave(hostName string) *Slave {
 	return &Slave{
 		HostName: hostName,
-		Offers:   make(map[string]empty),
 	}
 }
 
@@ -84,7 +82,7 @@ type KubernetesScheduler struct {
 	executorGroup     uint64
 	scheduleFunc      PodScheduleFunc
 	client            *client.Client
-	etcdClient        tools.EtcdClient
+	etcdClient        tools.EtcdGetSet
 	failoverTimeout   float64 // in seconds
 	reconcileInterval int64
 
@@ -117,7 +115,7 @@ type Config struct {
 	Executor          *mesos.ExecutorInfo
 	ScheduleFunc      PodScheduleFunc
 	Client            *client.Client
-	EtcdClient        tools.EtcdClient
+	EtcdClient        tools.EtcdGetSet
 	FailoverTimeout   float64
 	ReconcileInterval int64
 	ReconcileCooldown time.Duration
@@ -148,19 +146,16 @@ func New(config Config) *KubernetesScheduler {
 				return true
 			},
 			DeclineOffer: func(id string) error {
-				ch := make(chan error, 1)
-				err := k.asRegisteredMaster.Do(func() {
+				errOnce := proc.NewErrorOnce(k.terminate)
+				errOuter := k.asRegisteredMaster.Do(func() {
 					var err error
-					defer func() { ch <- err }()
-
+					defer errOnce.Report(err)
 					offerId := mutil.NewOfferID(id)
 					filters := &mesos.Filters{}
 					_, err = k.driver.DeclineOffer(offerId, filters)
 				})
-				if err != nil {
-					return err
-				}
-				return <-ch
+				go errOnce.Forward(errOuter)
+				return <-errOnce.Err()
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
 			LingerTTL:     defaultOfferLingerTTL * time.Second,
@@ -172,27 +167,27 @@ func New(config Config) *KubernetesScheduler {
 		taskRegistry:      podtask.NewInMemoryRegistry(),
 		reconcileCooldown: config.ReconcileCooldown,
 		registration:      make(chan struct{}),
-		asRegisteredMaster: proc.DoerFunc(func(proc.Action) error {
-			return fmt.Errorf("cannot execute action with unregistered scheduler")
+		asRegisteredMaster: proc.DoerFunc(func(proc.Action) <-chan error {
+			return proc.ErrorChan(fmt.Errorf("cannot execute action with unregistered scheduler"))
 		}),
 	}
 	return k
 }
 
-func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterface) error {
+func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterface, mux *http.ServeMux) error {
 	log.V(1).Infoln("initializing kubernetes mesos scheduler")
 
 	//TODO(jdef) watch electedMaster.Done() to figure out when background jobs should be shut down
-	k.asRegisteredMaster = proc.DoerFunc(func(a proc.Action) error {
+	k.asRegisteredMaster = proc.DoerFunc(func(a proc.Action) <-chan error {
 		if !k.registered {
-			return fmt.Errorf("failed to execute registered action, scheduler is disconnected")
+			return proc.ErrorChan(fmt.Errorf("failed to execute registered action, scheduler is disconnected"))
 		}
 		return electedMaster.Do(a)
 	})
 	k.terminate = electedMaster.Done()
 	k.plugin = pl
 	k.offers.Init(k.terminate)
-	k.InstallDebugHandlers()
+	k.InstallDebugHandlers(mux)
 	return k.recoverTasks()
 }
 
@@ -202,35 +197,40 @@ func (k *KubernetesScheduler) asMaster() proc.Doer {
 	return k.asRegisteredMaster
 }
 
-func (k *KubernetesScheduler) InstallDebugHandlers() {
-	requestReconciliation := func(uri string, requestAction func()) {
-		http.HandleFunc(uri, func(w http.ResponseWriter, r *http.Request) {
+func (k *KubernetesScheduler) InstallDebugHandlers(mux *http.ServeMux) {
+	wrappedHandler := func(uri string, h http.Handler) {
+		mux.HandleFunc(uri, func(w http.ResponseWriter, r *http.Request) {
 			ch := make(chan struct{})
-			err := k.asMaster().Do(func() {
-				defer close(ch)
-				requestAction()
-				w.WriteHeader(http.StatusNoContent)
-			})
-			if err != nil {
+			closer := runtime.Closer(ch)
+			proc.OnError(k.asMaster().Do(func() {
+				defer closer()
+				h.ServeHTTP(w, r)
+			}), func(err error) {
+				defer closer()
+				log.Warningf("failed HTTP request for %s: %v", uri, err)
 				w.WriteHeader(http.StatusServiceUnavailable)
-				return
-			}
+			}, k.terminate)
 			select {
 			case <-time.After(defaultHttpHandlerTimeout):
-				log.Warningf("timed out waiting for reconciliation request to be accepted")
+				log.Warningf("timed out waiting for request to be processed")
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
 			case <-ch: // noop
 			}
 		})
 	}
-
+	requestReconciliation := func(uri string, requestAction func()) {
+		wrappedHandler(uri, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestAction()
+			w.WriteHeader(http.StatusNoContent)
+		}))
+	}
 	requestReconciliation("/debug/actions/requestExplicit", k.reconciler.RequestExplicit)
 	requestReconciliation("/debug/actions/requestImplicit", k.reconciler.RequestImplicit)
 
-	http.HandleFunc("/debug/actions/kamikaze", func(w http.ResponseWriter, r *http.Request) {
+	wrappedHandler("/debug/actions/kamikaze", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ids := make(chan []string, 1)
-		err := k.asMaster().Do(func() {
+		func() {
 			k.Lock()
 			defer k.Unlock()
 			slaves := []string{}
@@ -238,31 +238,21 @@ func (k *KubernetesScheduler) InstallDebugHandlers() {
 				slaves = append(slaves, slaveId)
 			}
 			ids <- slaves
-		})
-		if err != nil {
-			log.Errorf("cannot execute kamikaze request: %v", err)
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		select {
-		case <-time.After(defaultHttpHandlerTimeout):
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		case slaves := <-ids:
-			for _, slaveId := range slaves {
-				_, err := k.driver.SendFrameworkMessage(
-					k.executor.ExecutorId,
-					mutil.NewSlaveID(slaveId),
-					messages.Kamikaze)
-				if err != nil {
-					log.Warningf("failed to send kamikaze message to slave %s: %v", slaveId, err)
-				} else {
-					io.WriteString(w, fmt.Sprintf("kamikaze slave %s\n", slaveId))
-				}
+		}()
+		slaves := <-ids
+		for _, slaveId := range slaves {
+			_, err := k.driver.SendFrameworkMessage(
+				k.executor.ExecutorId,
+				mutil.NewSlaveID(slaveId),
+				messages.Kamikaze)
+			if err != nil {
+				log.Warningf("failed to send kamikaze message to slave %s: %v", slaveId, err)
+			} else {
+				io.WriteString(w, fmt.Sprintf("kamikaze slave %s\n", slaveId))
 			}
-			io.WriteString(w, "OK")
 		}
-	})
+		io.WriteString(w, "OK")
+	}))
 }
 
 func (k *KubernetesScheduler) Registration() <-chan struct{} {
@@ -347,15 +337,12 @@ func (k *KubernetesScheduler) ResourceOffers(driver bindings.SchedulerDriver, of
 	// Record the offers in the global offer map as well as each slave's offer map.
 	k.offers.Add(offers)
 	for _, offer := range offers {
-		offerId := offer.GetId().GetValue()
 		slaveId := offer.GetSlaveId().GetValue()
-
 		slave, exists := k.slaves[slaveId]
 		if !exists {
 			k.slaves[slaveId] = newSlave(offer.GetHostname())
 			slave = k.slaves[slaveId]
 		}
-		slave.Offers[offerId] = empty{}
 		k.slaveIDs[slave.HostName] = slaveId
 	}
 }
@@ -365,21 +352,7 @@ func (k *KubernetesScheduler) OfferRescinded(driver bindings.SchedulerDriver, of
 	log.Infof("Offer rescinded %v\n", offerId)
 
 	oid := offerId.GetValue()
-	if offer, ok := k.offers.Get(oid); ok {
-		k.offers.Delete(oid, offerMetrics.OfferRescinded)
-		if details := offer.Details(); details != nil {
-			k.Lock()
-			defer k.Unlock()
-
-			slaveId := details.GetSlaveId().GetValue()
-
-			if slave, found := k.slaves[slaveId]; !found {
-				log.Infof("No slave for id %s associated with offer id %s", slaveId, oid)
-			} else {
-				delete(slave.Offers, oid)
-			}
-		} // else, offer already expired / lingering
-	}
+	k.offers.Delete(oid, offerMetrics.OfferRescinded)
 }
 
 // StatusUpdate is called when a status update message is sent to the scheduler.
@@ -484,7 +457,7 @@ func (k *KubernetesScheduler) reconcileTerminalTask(driver bindings.SchedulerDri
 func (k *KubernetesScheduler) reconcileNonTerminalTask(driver bindings.SchedulerDriver, taskStatus *mesos.TaskStatus) {
 	// attempt to recover task from pod info:
 	// - task data may contain an api.PodStatusResult; if status.reason == REASON_RECONCILIATION then status.data == nil
-	// - the Name can be parsed by kubelet.ParseFullName() to yield a pod Name and Namespace
+	// - the Name can be parsed by container.ParseFullName() to yield a pod Name and Namespace
 	// - pull the pod metadata down from the api server
 	// - perform task recovery based on pod metadata
 	taskId := taskStatus.TaskId.GetValue()
@@ -506,9 +479,10 @@ func (k *KubernetesScheduler) reconcileNonTerminalTask(driver bindings.Scheduler
 	} else if podStatus, err := podtask.ParsePodStatusResult(taskStatus); err != nil {
 		// possible rogue pod exists at this point because we can't identify it; should kill the task
 		log.Errorf("possible rogue pod; illegal task status data for task %v, expected an api.PodStatusResult: %v", taskId, err)
-	} else if name, namespace, _ := kubelet.ParsePodFullName(podStatus.Name); name == "" || namespace == "" {
+	} else if name, namespace, err := container.ParsePodFullName(podStatus.Name); err != nil {
 		// possible rogue pod exists at this point because we can't identify it; should kill the task
-		log.Errorf("possible rogue pod; illegal api.PodStatusResult, unable to parse full pod name from: '%v' for task %v", podStatus.Name, taskId)
+		log.Errorf("possible rogue pod; illegal api.PodStatusResult, unable to parse full pod name from: '%v' for task %v: %v",
+			podStatus.Name, taskId, err)
 	} else if pod, err := k.client.Pods(namespace).Get(name); err == nil {
 		if t, ok, err := podtask.RecoverFrom(*pod); ok {
 			log.Infof("recovered task %v from metadata in pod %v/%v", taskId, namespace, name)
@@ -561,15 +535,8 @@ func (k *KubernetesScheduler) FrameworkMessage(driver bindings.SchedulerDriver,
 func (k *KubernetesScheduler) SlaveLost(driver bindings.SchedulerDriver, slaveId *mesos.SlaveID) {
 	log.Infof("Slave %v is lost\n", slaveId)
 
-	k.Lock()
-	defer k.Unlock()
-
-	// invalidate all offers mapped to that slave
-	if slave, ok := k.slaves[slaveId.GetValue()]; ok {
-		for offerId := range slave.Offers {
-			k.offers.Invalidate(offerId)
-		}
-	}
+	sid := slaveId.GetValue()
+	k.offers.InvalidateForSlave(sid)
 
 	// TODO(jdef): delete slave from our internal list? probably not since we may need to reconcile
 	// tasks. it would be nice to somehow flag the slave as lost so that, perhaps, we can periodically
@@ -745,16 +712,18 @@ func newReconciler(doer proc.Doer, action ReconcilerAction, cooldown time.Durati
 			// but it could take a while and the scheduler needs to be able to
 			// process updates, the callbacks for which ALSO execute in the SAME
 			// deferred execution context -- so the action MUST be executed async.
-			ch := make(chan error, 1)
-			err := doer.Do(func() {
+			errOnce := proc.NewErrorOnce(done)
+			errCh := doer.Do(func() {
 				// only triggers the action if we're the currently elected,
 				// registered master and runs the action async.
-				go func() { ch <- action(driver, cancel) }()
+				go func() {
+					var err error
+					defer errOnce.Report(err)
+					err = action(driver, cancel)
+				}()
 			})
-			if err != nil {
-				return err
-			}
-			return <-ch
+			go errOnce.Forward(errCh)
+			return <-errOnce.Err()
 		},
 	}
 }
@@ -803,15 +772,19 @@ requestLoop:
 						continue requestLoop
 					}
 				}
-				err := r.Do(func() {
+				errOnce := proc.NewErrorOnce(r.done)
+				errCh := r.Do(func() {
+					var err error
+					defer errOnce.Report(err)
 					log.Infoln("implicit reconcile tasks")
 					metrics.ReconciliationExecuted.WithLabelValues("implicit").Inc()
-					if _, err := driver.ReconcileTasks([]*mesos.TaskStatus{}); err != nil {
-						log.Errorf("failed to request implicit reconciliation from mesos: %v", err)
+					if _, err = driver.ReconcileTasks([]*mesos.TaskStatus{}); err != nil {
+						log.V(1).Infof("failed to request implicit reconciliation from mesos: %v", err)
 					}
 				})
-				if err != nil {
-					log.Warningf("failed to run implicit reconciliation: %v", err)
+				go errOnce.Forward(errCh)
+				if err := <-errOnce.Err(); err != nil {
+					log.Errorf("failed to run implicit reconciliation: %v", err)
 				}
 				goto slowdown
 			}
@@ -884,7 +857,6 @@ func (ks *KubernetesScheduler) recoverTasks() error {
 			slave = newSlave(t.Offer.Host())
 			ks.slaves[slaveId] = slave
 		}
-		slave.Offers[t.Offer.Id()] = empty{}
 		ks.slaveIDs[slave.HostName] = slaveId
 	}
 	for _, pod := range podList.Items {

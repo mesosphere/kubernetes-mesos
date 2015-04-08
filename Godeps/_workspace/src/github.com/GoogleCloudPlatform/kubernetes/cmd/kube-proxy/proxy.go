@@ -17,15 +17,25 @@ limitations under the License.
 package main
 
 import (
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/proxy/server"
+	"fmt"
+	"os"
+	"runtime"
+
+	"github.com/GoogleCloudPlatform/kubernetes/cmd/kube-proxy/app"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/version/verflag"
 
 	"github.com/spf13/pflag"
 )
 
+func init() {
+	healthz.DefaultHealthz()
+}
+
 func main() {
-	s := server.NewProxyServer()
+	runtime.GOMAXPROCS(runtime.NumCPU())
+	s := app.NewProxyServer()
 	s.AddFlags(pflag.CommandLine)
 
 	util.InitFlags()
@@ -34,5 +44,8 @@ func main() {
 
 	verflag.PrintAndExitIfRequested()
 
-	s.Run(pflag.CommandLine.Args())
+	if err := s.Run(pflag.CommandLine.Args()); err != nil {
+		fmt.Fprint(os.Stderr, err.Error)
+		os.Exit(1)
+	}
 }

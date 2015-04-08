@@ -16,23 +16,16 @@ type Doer interface {
 	// errors are generated if the action cannot be executed (not by the execution
 	// of the action) and should be testable with the error API of this package,
 	// for example, IsProcessTerminated.
-	Do(Action) error
+	Do(Action) <-chan error
 }
 
 // adapter func for Doer interface
-type DoerFunc func(Action) error
-
-// invoke the f on action a. returns an illegal state error if f is nil.
-func (f DoerFunc) Do(a Action) error {
-	if f != nil {
-		return f(a)
-	}
-	return errIllegalState
-}
+type DoerFunc func(Action) <-chan error
 
 type Process interface {
 	Context
 	Doer
+	OnError(<-chan error, func(error)) <-chan struct{}
 }
 
 type ProcessInit interface {
@@ -40,4 +33,14 @@ type ProcessInit interface {
 
 	// begin process accounting and spawn requisite background routines
 	Begin()
+}
+
+type ErrorOnce interface {
+	// return a chan that only ever sends one error, either obtained via Report() or Forward()
+	Err() <-chan error
+	// reports the given error via Err(), but only if no other errors have been reported or forwarded
+	Report(error)
+	// waits for an error on the incoming chan, the result of which is later obtained via Err() (if no
+	// other errors have been reported or forwarded)
+	Forward(<-chan error)
 }

@@ -19,8 +19,11 @@ package dockertools
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"sync"
+	"time"
 
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/container"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/fsouza/go-dockerclient"
 )
@@ -61,6 +64,23 @@ func (f *FakeDockerClient) AssertCalls(calls []string) (err error) {
 		err = fmt.Errorf("expected %#v, got %#v", calls, f.called)
 	}
 
+	return
+}
+
+func (f *FakeDockerClient) AssertUnorderedCalls(calls []string) (err error) {
+	f.Lock()
+	defer f.Unlock()
+
+	var actual, expected []string
+	copy(actual, calls)
+	copy(expected, f.called)
+
+	sort.StringSlice(actual).Sort()
+	sort.StringSlice(expected).Sort()
+
+	if !reflect.DeepEqual(actual, expected) {
+		err = fmt.Errorf("expected(sorted) %#v, got(sorted) %#v", expected, actual)
+	}
 	return
 }
 
@@ -121,7 +141,11 @@ func (f *FakeDockerClient) StartContainer(id string, hostConfig *docker.HostConf
 		Name:       id, // For testing purpose, we set name to id
 		Config:     &docker.Config{Image: "testimage"},
 		HostConfig: hostConfig,
-		State:      docker.State{Running: true},
+		State: docker.State{
+			Running: true,
+			Pid:     42,
+		},
+		NetworkSettings: &docker.NetworkSettings{IPAddress: "1.2.3.4"},
 	}
 	return f.Err
 }
@@ -166,7 +190,11 @@ func (f *FakeDockerClient) PullImage(opts docker.PullImageOptions, auth docker.A
 	f.Lock()
 	defer f.Unlock()
 	f.called = append(f.called, "pull")
-	f.pulled = append(f.pulled, fmt.Sprintf("%s/%s:%s", opts.Repository, opts.Registry, opts.Tag))
+	registry := opts.Registry
+	if len(registry) != 0 {
+		registry = registry + "/"
+	}
+	f.pulled = append(f.pulled, fmt.Sprintf("%s%s:%s", registry, opts.Repository, opts.Tag))
 	return f.Err
 }
 
@@ -228,4 +256,22 @@ func (f *FakeDockerPuller) IsImagePresent(name string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+type FakeDockerCache struct {
+	client DockerInterface
+}
+
+func NewFakeDockerCache(client DockerInterface) DockerCache {
+	return &FakeDockerCache{
+		client: client,
+	}
+}
+
+func (f *FakeDockerCache) GetPods() ([]*container.Pod, error) {
+	return GetPods(f.client, false)
+}
+
+func (f *FakeDockerCache) ForceUpdateIfOlder(time.Time) error {
+	return nil
 }

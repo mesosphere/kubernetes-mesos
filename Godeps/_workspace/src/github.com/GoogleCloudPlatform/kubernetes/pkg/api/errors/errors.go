@@ -23,6 +23,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util/errors"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util/fielderrors"
 )
 
 // HTTP Status codes not in the golang http package.
@@ -104,6 +105,21 @@ func NewAlreadyExists(kind, name string) error {
 	}}
 }
 
+// NewUnauthorized returns an error indicating the client is not authorized to perform the requested
+// action.
+func NewUnauthorized(reason string) error {
+	message := reason
+	if len(message) == 0 {
+		message = "not authorized"
+	}
+	return &StatusError{api.Status{
+		Status:  api.StatusFailure,
+		Code:    http.StatusUnauthorized,
+		Reason:  api.StatusReasonUnauthorized,
+		Message: message,
+	}}
+}
+
 // NewForbidden returns an error indicating the requested action was forbidden
 func NewForbidden(kind, name string, err error) error {
 	return &StatusError{api.Status{
@@ -133,10 +149,10 @@ func NewConflict(kind, name string, err error) error {
 }
 
 // NewInvalid returns an error indicating the item is invalid and cannot be processed.
-func NewInvalid(kind, name string, errs ValidationErrorList) error {
+func NewInvalid(kind, name string, errs fielderrors.ValidationErrorList) error {
 	causes := make([]api.StatusCause, 0, len(errs))
 	for i := range errs {
-		if err, ok := errs[i].(*ValidationError); ok {
+		if err, ok := errs[i].(*fielderrors.ValidationError); ok {
 			causes = append(causes, api.StatusCause{
 				Type:    api.CauseType(err.Type),
 				Message: err.Error(),
@@ -182,14 +198,15 @@ func NewMethodNotSupported(kind, action string) error {
 
 // NewServerTimeout returns an error indicating the requested action could not be completed due to a
 // transient error, and the client should try again.
-func NewServerTimeout(kind, operation string) error {
+func NewServerTimeout(kind, operation string, retryAfterSeconds int) error {
 	return &StatusError{api.Status{
 		Status: api.StatusFailure,
 		Code:   http.StatusInternalServerError,
 		Reason: api.StatusReasonServerTimeout,
 		Details: &api.StatusDetails{
-			Kind: kind,
-			ID:   operation,
+			Kind:              kind,
+			ID:                operation,
+			RetryAfterSeconds: retryAfterSeconds,
 		},
 		Message: fmt.Sprintf("The %s operation against %s could not be completed at this time, please try again.", operation, kind),
 	}}
@@ -210,12 +227,15 @@ func NewInternalError(err error) error {
 
 // NewTimeoutError returns an error indicating that a timeout occurred before the request
 // could be completed.  Clients may retry, but the operation may still complete.
-func NewTimeoutError(message string) error {
+func NewTimeoutError(message string, retryAfterSeconds int) error {
 	return &StatusError{api.Status{
 		Status:  api.StatusFailure,
 		Code:    StatusServerTimeout,
 		Reason:  api.StatusReasonTimeout,
 		Message: fmt.Sprintf("Timeout: %s", message),
+		Details: &api.StatusDetails{
+			RetryAfterSeconds: retryAfterSeconds,
+		},
 	}}
 }
 
@@ -250,6 +270,12 @@ func IsBadRequest(err error) bool {
 	return reasonForError(err) == api.StatusReasonBadRequest
 }
 
+// IsUnauthorized determines if err is an error which indicates that the request is unauthorized and
+// requires authentication by the user.
+func IsUnauthorized(err error) bool {
+	return reasonForError(err) == api.StatusReasonUnauthorized
+}
+
 // IsForbidden determines if err is an error which indicates that the request is forbidden and cannot
 // be completed as requested.
 func IsForbidden(err error) bool {
@@ -260,6 +286,33 @@ func IsForbidden(err error) bool {
 // by the client.
 func IsServerTimeout(err error) bool {
 	return reasonForError(err) == api.StatusReasonServerTimeout
+}
+
+// IsStatusError determines if err is an API Status error received from the master.
+func IsStatusError(err error) bool {
+	_, ok := err.(*StatusError)
+	return ok
+}
+
+// IsUnexpectedObjectError determines if err is due to an unexpected object from the master.
+func IsUnexpectedObjectError(err error) bool {
+	_, ok := err.(*UnexpectedObjectError)
+	return ok
+}
+
+// SuggestsClientDelay returns true if this error suggests a client delay as well as the
+// suggested seconds to wait, or false if the error does not imply a wait.
+func SuggestsClientDelay(err error) (int, bool) {
+	switch t := err.(type) {
+	case *StatusError:
+		if t.Status().Details != nil {
+			switch t.Status().Reason {
+			case api.StatusReasonServerTimeout, api.StatusReasonTimeout:
+				return t.Status().Details.RetryAfterSeconds, true
+			}
+		}
+	}
+	return 0, false
 }
 
 func reasonForError(err error) api.StatusReason {

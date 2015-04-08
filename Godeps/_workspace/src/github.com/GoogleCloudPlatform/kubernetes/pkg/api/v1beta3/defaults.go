@@ -26,13 +26,13 @@ import (
 func init() {
 	api.Scheme.AddDefaultingFuncs(
 		func(obj *Volume) {
-			if util.AllPtrFieldsNil(&obj.Source) {
-				obj.Source = VolumeSource{
-					EmptyDir: &EmptyDir{},
+			if util.AllPtrFieldsNil(&obj.VolumeSource) {
+				obj.VolumeSource = VolumeSource{
+					EmptyDir: &EmptyDirVolumeSource{},
 				}
 			}
 		},
-		func(obj *Port) {
+		func(obj *ContainerPort) {
 			if obj.Protocol == "" {
 				obj.Protocol = ProtocolTCP
 			}
@@ -52,11 +52,6 @@ func init() {
 				obj.TerminationMessagePath = TerminationMessagePathDefault
 			}
 		},
-		func(obj *RestartPolicy) {
-			if util.AllPtrFieldsNil(obj) {
-				obj.Always = &RestartPolicyAlways{}
-			}
-		},
 		func(obj *Service) {
 			if obj.Spec.Protocol == "" {
 				obj.Spec.Protocol = ProtocolTCP
@@ -69,11 +64,60 @@ func init() {
 			if obj.DNSPolicy == "" {
 				obj.DNSPolicy = DNSClusterFirst
 			}
+			if obj.RestartPolicy == "" {
+				obj.RestartPolicy = RestartPolicyAlways
+			}
+			if obj.HostNetwork {
+				defaultHostNetworkPorts(&obj.Containers)
+			}
 		},
 		func(obj *Probe) {
 			if obj.TimeoutSeconds == 0 {
 				obj.TimeoutSeconds = 1
 			}
 		},
+		func(obj *Secret) {
+			if obj.Type == "" {
+				obj.Type = SecretTypeOpaque
+			}
+		},
+		func(obj *Endpoints) {
+			for i := range obj.Subsets {
+				ss := &obj.Subsets[i]
+				for i := range ss.Ports {
+					ep := &ss.Ports[i]
+					if ep.Protocol == "" {
+						ep.Protocol = ProtocolTCP
+					}
+				}
+			}
+		},
+		func(obj *HTTPGetAction) {
+			if obj.Path == "" {
+				obj.Path = "/"
+			}
+		},
+		func(obj *ServiceSpec) {
+			if obj.TargetPort.Kind == util.IntstrInt && obj.TargetPort.IntVal == 0 ||
+				obj.TargetPort.Kind == util.IntstrString && obj.TargetPort.StrVal == "" {
+				obj.TargetPort = util.NewIntOrStringFromInt(obj.Port)
+			}
+		},
+		func(obj *NamespaceStatus) {
+			if obj.Phase == "" {
+				obj.Phase = NamespaceActive
+			}
+		},
 	)
+}
+
+// With host networking default all container ports to host ports.
+func defaultHostNetworkPorts(containers *[]Container) {
+	for i := range *containers {
+		for j := range (*containers)[i].Ports {
+			if (*containers)[i].Ports[j].HostPort == 0 {
+				(*containers)[i].Ports[j].HostPort = (*containers)[i].Ports[j].ContainerPort
+			}
+		}
+	}
 }

@@ -22,9 +22,9 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util/yaml"
 	"github.com/emicklei/go-restful/swagger"
 	"github.com/golang/glog"
-	"gopkg.in/yaml.v2"
 )
 
 type InvalidTypeError struct {
@@ -65,11 +65,15 @@ func NewSwaggerSchemaFromBytes(data []byte) (Schema, error) {
 
 func (s *SwaggerSchema) ValidateBytes(data []byte) error {
 	var obj interface{}
-	err := yaml.Unmarshal(data, &obj)
+	out, err := yaml.ToJSON(data)
 	if err != nil {
 		return err
 	}
-	fields := obj.(map[interface{}]interface{})
+	data = out
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	fields := obj.(map[string]interface{})
 	apiVersion := fields["apiVersion"].(string)
 	kind := fields["kind"].(string)
 	return s.ValidateObject(obj, apiVersion, "", apiVersion+"."+kind)
@@ -84,12 +88,12 @@ func (s *SwaggerSchema) ValidateObject(obj interface{}, apiVersion, fieldName, t
 		return nil
 	}
 	properties := model.Properties
-	fields := obj.(map[interface{}]interface{})
+	fields := obj.(map[string]interface{})
 	if len(fieldName) > 0 {
 		fieldName = fieldName + "."
 	}
 	for key, value := range fields {
-		details, ok := properties[key.(string)]
+		details, ok := properties[key]
 		if !ok {
 			glog.V(2).Infof("couldn't find properties for %s, skipping", key)
 			continue
@@ -99,7 +103,7 @@ func (s *SwaggerSchema) ValidateObject(obj interface{}, apiVersion, fieldName, t
 			glog.V(2).Infof("Skipping nil field: %s", key)
 			continue
 		}
-		err := s.validateField(value, apiVersion, fieldName+key.(string), fieldType, &details)
+		err := s.validateField(value, apiVersion, fieldName+key, fieldType, &details)
 		if err != nil {
 			glog.Errorf("Validation failed for: %s, %v", key, value)
 			return err
@@ -126,7 +130,7 @@ func (s *SwaggerSchema) validateField(value interface{}, apiVersion, fieldName, 
 		if !ok {
 			return NewInvalidTypeError(reflect.Array, reflect.TypeOf(value).Kind(), fieldName)
 		}
-		arrType := *fieldDetails.Items[0].Ref
+		arrType := *fieldDetails.Items.Ref
 		for ix := range arr {
 			err := s.validateField(arr[ix], apiVersion, fmt.Sprintf("%s[%d]", fieldName, ix), arrType, nil)
 			if err != nil {

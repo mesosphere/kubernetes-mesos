@@ -21,7 +21,6 @@ import (
 	"io/ioutil"
 	"os"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -32,54 +31,9 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/types"
 )
 
-func ExampleManifestAndPod(id string) (v1beta1.ContainerManifest, api.BoundPod) {
-	manifest := v1beta1.ContainerManifest{
-		ID:   id,
-		UUID: types.UID(id),
-		Containers: []v1beta1.Container{
-			{
-				Name:  "c" + id,
-				Image: "foo",
-				TerminationMessagePath: "/somepath",
-			},
-		},
-		Volumes: []v1beta1.Volume{
-			{
-				Name: "host-dir",
-				Source: v1beta1.VolumeSource{
-					HostDir: &v1beta1.HostPath{"/dir/path"},
-				},
-			},
-		},
-	}
-	expectedPod := api.BoundPod{
-		ObjectMeta: api.ObjectMeta{
-			Name: id,
-			UID:  types.UID(id),
-		},
-		Spec: api.PodSpec{
-			Containers: []api.Container{
-				{
-					Name:  "c" + id,
-					Image: "foo",
-				},
-			},
-			Volumes: []api.Volume{
-				{
-					Name: "host-dir",
-					Source: api.VolumeSource{
-						HostPath: &api.HostPath{"/dir/path"},
-					},
-				},
-			},
-		},
-	}
-	return manifest, expectedPod
-}
-
 func TestExtractFromNonExistentFile(t *testing.T) {
 	ch := make(chan interface{}, 1)
-	c := sourceFile{"/some/fake/file", ch}
+	c := sourceFile{"/some/fake/file", "localhost", ch}
 	err := c.extractFromPath()
 	if err == nil {
 		t.Errorf("Expected error")
@@ -88,7 +42,7 @@ func TestExtractFromNonExistentFile(t *testing.T) {
 
 func TestUpdateOnNonExistentFile(t *testing.T) {
 	ch := make(chan interface{})
-	NewSourceFile("random_non_existent_path", time.Millisecond, ch)
+	NewSourceFile("random_non_existent_path", "localhost", time.Millisecond, ch)
 	select {
 	case got := <-ch:
 		update := got.(kubelet.PodUpdate)
@@ -115,145 +69,225 @@ func writeTestFile(t *testing.T, dir, name string, contents string) *os.File {
 }
 
 func TestReadFromFile(t *testing.T) {
-	file := writeTestFile(t, os.TempDir(), "test_pod_config",
-		`{
-			"version": "v1beta1",
-			"uuid": "12345",
-			"id": "test",
-			"containers": [{ "image": "test/image", imagePullPolicy: "PullAlways"}]
-		}`)
-	defer os.Remove(file.Name())
+	hostname := "random-test-hostname"
+	var testCases = []struct {
+		desc         string
+		fileContents string
+		expected     kubelet.PodUpdate
+	}{
+		{
+			desc: "Manifest",
+			fileContents: `{
+					"version": "v1beta1",
+					"uuid": "12345",
+					"id": "test",
+					"containers": [{ "name": "image", "image": "test/image", "imagePullPolicy": "PullAlways"}]
+				}`,
+			expected: CreatePodUpdate(kubelet.SET, kubelet.FileSource, api.Pod{
+				ObjectMeta: api.ObjectMeta{
+					Name:      "test-" + hostname,
+					UID:       "12345",
+					Namespace: kubelet.NamespaceDefault,
+					SelfLink:  "/api/v1beta2/pods/test-" + hostname + "?namespace=default",
+				},
+				Spec: api.PodSpec{
+					RestartPolicy: api.RestartPolicyAlways,
+					DNSPolicy:     api.DNSClusterFirst,
+					Containers: []api.Container{{
+						Name:  "image",
+						Image: "test/image",
+						TerminationMessagePath: "/dev/termination-log",
+						ImagePullPolicy:        "Always"}},
+				},
+			}),
+		},
+		{
+			desc: "Manifest without ID",
+			fileContents: `{
+					"version": "v1beta1",
+					"uuid": "12345",
+					"containers": [{ "name": "image", "image": "test/image", "imagePullPolicy": "PullAlways"}]
+				}`,
+			expected: CreatePodUpdate(kubelet.SET, kubelet.FileSource, api.Pod{
+				ObjectMeta: api.ObjectMeta{
+					Name:      "12345-" + hostname,
+					UID:       "12345",
+					Namespace: kubelet.NamespaceDefault,
+					SelfLink:  "/api/v1beta2/pods/12345-" + hostname + "?namespace=default",
+				},
+				Spec: api.PodSpec{
+					RestartPolicy: api.RestartPolicyAlways,
+					DNSPolicy:     api.DNSClusterFirst,
+					Containers: []api.Container{{
+						Name:  "image",
+						Image: "test/image",
+						TerminationMessagePath: "/dev/termination-log",
+						ImagePullPolicy:        "Always"}},
+				},
+			}),
+		},
+		{
+			desc: "Manifest v1beta2",
+			fileContents: `{
+					"version": "v1beta2",
+					"uuid": "12345",
+					"id": "test",
+					"containers": [{ "name": "image", "image": "test/image", "imagePullPolicy": "PullAlways"}]
+				}`,
+			expected: CreatePodUpdate(kubelet.SET, kubelet.FileSource, api.Pod{
+				ObjectMeta: api.ObjectMeta{
+					Name:      "test-" + hostname,
+					UID:       "12345",
+					Namespace: kubelet.NamespaceDefault,
+					SelfLink:  "/api/v1beta2/pods/test-" + hostname + "?namespace=default",
+				},
+				Spec: api.PodSpec{
+					RestartPolicy: api.RestartPolicyAlways,
+					DNSPolicy:     api.DNSClusterFirst,
+					Containers: []api.Container{{
+						Name:  "image",
+						Image: "test/image",
+						TerminationMessagePath: "/dev/termination-log",
+						ImagePullPolicy:        "Always"}},
+				},
+			}),
+		},
+		{
+			desc: "Simple pod",
+			fileContents: `{
+					"kind": "Pod",
+					"apiVersion": "v1beta1",
+					"uid": "12345",
+					"id": "test",
+					"namespace": "mynamespace",
+					"desiredState": {
+						"manifest": {
+							"containers": [{ "name": "image", "image": "test/image" }]
+						}
+					}
+				}`,
+			expected: CreatePodUpdate(kubelet.SET, kubelet.FileSource, api.Pod{
+				ObjectMeta: api.ObjectMeta{
+					Name:      "test-" + hostname,
+					UID:       "12345",
+					Namespace: "mynamespace",
+					SelfLink:  "/api/v1beta2/pods/test-" + hostname + "?namespace=mynamespace",
+				},
+				Spec: api.PodSpec{
+					RestartPolicy: api.RestartPolicyAlways,
+					DNSPolicy:     api.DNSClusterFirst,
+					Containers: []api.Container{{
+						Name:  "image",
+						Image: "test/image",
+						TerminationMessagePath: "/dev/termination-log",
+						ImagePullPolicy:        "IfNotPresent"}},
+				},
+			}),
+		},
+		{
+			desc: "Pod without ID",
+			fileContents: `{
+					"kind": "Pod",
+					"apiversion": "v1beta1",
+					"uid": "12345",
+					"desiredState": {
+						"manifest": {
+							"containers": [{ "name": "image", "image": "test/image" }]
+						}
+					}
+				}`,
+			expected: CreatePodUpdate(kubelet.SET, kubelet.FileSource, api.Pod{
+				ObjectMeta: api.ObjectMeta{
+					Name:      "12345-" + hostname,
+					UID:       "12345",
+					Namespace: kubelet.NamespaceDefault,
+					SelfLink:  "/api/v1beta2/pods/12345-" + hostname + "?namespace=default",
+				},
+				Spec: api.PodSpec{
+					RestartPolicy: api.RestartPolicyAlways,
+					DNSPolicy:     api.DNSClusterFirst,
+					Containers: []api.Container{{
+						Name:  "image",
+						Image: "test/image",
+						TerminationMessagePath: "/dev/termination-log",
+						ImagePullPolicy:        "IfNotPresent"}},
+				},
+			}),
+		},
+		{
+			desc: "Pod v1beta3",
+			fileContents: `{
+					"kind": "Pod",
+					"apiversion": "v1beta3",
+					"metadata": {
+						"uid": "12345",
+						"name": "test"
+					},
+					"spec": {
+						"containers": [{ "name": "image", "image": "test/image" }]
+					}
+				}`,
+			expected: CreatePodUpdate(kubelet.SET, kubelet.FileSource, api.Pod{
+				ObjectMeta: api.ObjectMeta{
+					Name:      "test-" + hostname,
+					UID:       "12345",
+					Namespace: kubelet.NamespaceDefault,
+					SelfLink:  "/api/v1beta2/pods/test-" + hostname + "?namespace=default",
+				},
+				Spec: api.PodSpec{
+					RestartPolicy: api.RestartPolicyAlways,
+					DNSPolicy:     api.DNSClusterFirst,
+					Containers: []api.Container{{
+						Name:  "image",
+						Image: "test/image",
+						TerminationMessagePath: "/dev/termination-log",
+						ImagePullPolicy:        "IfNotPresent"}},
+				},
+			}),
+		},
+	}
 
-	ch := make(chan interface{})
-	NewSourceFile(file.Name(), time.Millisecond, ch)
-	select {
-	case got := <-ch:
-		update := got.(kubelet.PodUpdate)
-		expected := CreatePodUpdate(kubelet.SET, kubelet.FileSource, api.BoundPod{
-			ObjectMeta: api.ObjectMeta{
-				Name:      "test",
-				UID:       "12345",
-				Namespace: "",
-				SelfLink:  "",
-			},
-			Spec: api.PodSpec{Containers: []api.Container{{Image: "test/image"}}},
-		})
+	for _, testCase := range testCases {
+		func() {
+			file := writeTestFile(t, os.TempDir(), "test_pod_config", testCase.fileContents)
+			defer os.Remove(file.Name())
 
-		// There's no way to provide namespace in ContainerManifest, so
-		// it will be defaulted.
-		if !strings.HasPrefix(update.Pods[0].ObjectMeta.Namespace, "file-") {
-			t.Errorf("Unexpected namespace: %s", update.Pods[0].ObjectMeta.Namespace)
-		}
-		update.Pods[0].ObjectMeta.Namespace = ""
-
-		// SelfLink depends on namespace.
-		if !strings.HasPrefix(update.Pods[0].ObjectMeta.SelfLink, "/api/") {
-			t.Errorf("Unexpected selflink: %s", update.Pods[0].ObjectMeta.SelfLink)
-		}
-		update.Pods[0].ObjectMeta.SelfLink = ""
-
-		if !api.Semantic.DeepDerivative(expected, update) {
-			t.Fatalf("Expected %#v, Got %#v", expected, update)
-		}
-
-	case <-time.After(time.Second):
-		t.Errorf("Expected update, timeout instead")
+			ch := make(chan interface{})
+			NewSourceFile(file.Name(), hostname, time.Millisecond, ch)
+			select {
+			case got := <-ch:
+				update := got.(kubelet.PodUpdate)
+				for _, pod := range update.Pods {
+					if errs := validation.ValidatePod(&pod); len(errs) > 0 {
+						t.Errorf("%s: Invalid pod %#v, %#v", testCase.desc, pod, errs)
+					}
+				}
+				if !api.Semantic.DeepEqual(testCase.expected, update) {
+					t.Errorf("%s: Expected %#v, Got %#v", testCase.desc, testCase.expected, update)
+				}
+			case <-time.After(time.Second):
+				t.Errorf("%s: Expected update, timeout instead", testCase.desc)
+			}
+		}()
 	}
 }
 
-func TestReadFromFileWithoutID(t *testing.T) {
-	file := writeTestFile(t, os.TempDir(), "test_pod_config",
-		`{
-			"version": "v1beta1",
-			"uuid": "12345",
-			"containers": [{ "image": "test/image", imagePullPolicy: "PullAlways"}]
-		}`)
-	defer os.Remove(file.Name())
-
-	ch := make(chan interface{})
-	NewSourceFile(file.Name(), time.Millisecond, ch)
-	select {
-	case got := <-ch:
-		update := got.(kubelet.PodUpdate)
-		expected := CreatePodUpdate(kubelet.SET, kubelet.FileSource, api.BoundPod{
-			ObjectMeta: api.ObjectMeta{
-				Name:      "",
-				UID:       "12345",
-				Namespace: "",
-				SelfLink:  "",
-			},
-			Spec: api.PodSpec{Containers: []api.Container{{Image: "test/image"}}},
-		})
-
-		if len(update.Pods[0].ObjectMeta.Name) == 0 {
-			t.Errorf("Name did not get defaulted")
-		}
-		update.Pods[0].ObjectMeta.Name = ""
-		update.Pods[0].ObjectMeta.Namespace = ""
-		update.Pods[0].ObjectMeta.SelfLink = ""
-
-		if !api.Semantic.DeepDerivative(expected, update) {
-			t.Fatalf("Expected %#v, Got %#v", expected, update)
-		}
-
-	case <-time.After(time.Second):
-		t.Errorf("Expected update, timeout instead")
-	}
-}
-
-func TestReadV1Beta2FromFile(t *testing.T) {
-	file := writeTestFile(t, os.TempDir(), "test_pod_config",
-		`{
-			"version": "v1beta2",
-			"uuid": "12345",
-			"id": "test",
-			"containers": [{ "image": "test/image", imagePullPolicy: "PullAlways"}]
-		}`)
-	defer os.Remove(file.Name())
-
-	ch := make(chan interface{})
-	NewSourceFile(file.Name(), time.Millisecond, ch)
-	select {
-	case got := <-ch:
-		update := got.(kubelet.PodUpdate)
-		expected := CreatePodUpdate(kubelet.SET, kubelet.FileSource, api.BoundPod{
-			ObjectMeta: api.ObjectMeta{
-				Name:      "test",
-				UID:       "12345",
-				Namespace: "",
-				SelfLink:  "",
-			},
-			Spec: api.PodSpec{Containers: []api.Container{{Image: "test/image"}}},
-		})
-
-		update.Pods[0].ObjectMeta.Namespace = ""
-		update.Pods[0].ObjectMeta.SelfLink = ""
-
-		if !api.Semantic.DeepDerivative(expected, update) {
-			t.Fatalf("Expected %#v, Got %#v", expected, update)
-		}
-
-	case <-time.After(time.Second):
-		t.Errorf("Expected update, timeout instead")
-	}
-}
-
-func TestReadFromFileWithDefaults(t *testing.T) {
+func TestReadManifestFromFileWithDefaults(t *testing.T) {
 	file := writeTestFile(t, os.TempDir(), "test_pod_config",
 		`{
 			"version": "v1beta1",
 			"id": "test",
-			"containers": [{ "image": "test/image" }]
+			"containers": [{ "name": "image", "image": "test/image" }]
 		}`)
 	defer os.Remove(file.Name())
 
 	ch := make(chan interface{})
-	NewSourceFile(file.Name(), time.Millisecond, ch)
+	NewSourceFile(file.Name(), "localhost", time.Millisecond, ch)
 	select {
 	case got := <-ch:
 		update := got.(kubelet.PodUpdate)
-		if update.Pods[0].ObjectMeta.UID == "" {
-			t.Errorf("Unexpected UID: %s", update.Pods[0].ObjectMeta.UID)
+		if update.Pods[0].UID == "" {
+			t.Errorf("Unexpected UID: %s", update.Pods[0].UID)
 		}
 
 	case <-time.After(time.Second):
@@ -266,7 +300,7 @@ func TestExtractFromBadDataFile(t *testing.T) {
 	defer os.Remove(file.Name())
 
 	ch := make(chan interface{}, 1)
-	c := sourceFile{file.Name(), ch}
+	c := sourceFile{file.Name(), "localhost", ch}
 	err := c.extractFromPath()
 	if err == nil {
 		t.Fatalf("Expected error")
@@ -282,7 +316,7 @@ func TestExtractFromEmptyDir(t *testing.T) {
 	defer os.RemoveAll(dirName)
 
 	ch := make(chan interface{}, 1)
-	c := sourceFile{dirName, ch}
+	c := sourceFile{dirName, "localhost", ch}
 	err = c.extractFromPath()
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
@@ -290,9 +324,59 @@ func TestExtractFromEmptyDir(t *testing.T) {
 
 	update := (<-ch).(kubelet.PodUpdate)
 	expected := CreatePodUpdate(kubelet.SET, kubelet.FileSource)
-	if !api.Semantic.DeepDerivative(expected, update) {
+	if !api.Semantic.DeepEqual(expected, update) {
 		t.Errorf("Expected %#v, Got %#v", expected, update)
 	}
+}
+
+func ExampleManifestAndPod(id string) (v1beta1.ContainerManifest, api.Pod) {
+	hostname := "an-example-host"
+
+	manifest := v1beta1.ContainerManifest{
+		Version: "v1beta1",
+		ID:      id,
+		UUID:    types.UID(id),
+		Containers: []v1beta1.Container{
+			{
+				Name:  "c" + id,
+				Image: "foo",
+				TerminationMessagePath: "/somepath",
+			},
+		},
+		Volumes: []v1beta1.Volume{
+			{
+				Name: "host-dir",
+				Source: v1beta1.VolumeSource{
+					HostDir: &v1beta1.HostPathVolumeSource{"/dir/path"},
+				},
+			},
+		},
+	}
+	expectedPod := api.Pod{
+		ObjectMeta: api.ObjectMeta{
+			Name:      id + "-" + hostname,
+			UID:       types.UID(id),
+			Namespace: kubelet.NamespaceDefault,
+			SelfLink:  "/api/v1beta2/pods/" + id + "-" + hostname + "?namespace=default",
+		},
+		Spec: api.PodSpec{
+			Containers: []api.Container{
+				{
+					Name:  "c" + id,
+					Image: "foo",
+				},
+			},
+			Volumes: []api.Volume{
+				{
+					Name: "host-dir",
+					VolumeSource: api.VolumeSource{
+						HostPath: &api.HostPathVolumeSource{"/dir/path"},
+					},
+				},
+			},
+		},
+	}
+	return manifest, expectedPod
 }
 
 func TestExtractFromDir(t *testing.T) {
@@ -300,7 +384,7 @@ func TestExtractFromDir(t *testing.T) {
 	manifest2, expectedPod2 := ExampleManifestAndPod("2")
 
 	manifests := []v1beta1.ContainerManifest{manifest, manifest2}
-	pods := []api.BoundPod{expectedPod, expectedPod2}
+	pods := []api.Pod{expectedPod, expectedPod2}
 	files := make([]*os.File, len(manifests))
 
 	dirName, err := ioutil.TempDir("", "foo")
@@ -329,29 +413,22 @@ func TestExtractFromDir(t *testing.T) {
 	}
 
 	ch := make(chan interface{}, 1)
-	c := sourceFile{dirName, ch}
+	c := sourceFile{dirName, "an-example-host", ch}
 	err = c.extractFromPath()
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
 	update := (<-ch).(kubelet.PodUpdate)
-	for i := range update.Pods {
-		update.Pods[i].Namespace = "foobar"
-		update.Pods[i].SelfLink = ""
-	}
 	expected := CreatePodUpdate(kubelet.SET, kubelet.FileSource, pods...)
-	for i := range expected.Pods {
-		expected.Pods[i].Namespace = "foobar"
-	}
 	sort.Sort(sortedPods(update.Pods))
 	sort.Sort(sortedPods(expected.Pods))
 	if !api.Semantic.DeepDerivative(expected, update) {
 		t.Fatalf("Expected %#v, Got %#v", expected, update)
 	}
 	for i := range update.Pods {
-		if errs := validation.ValidateBoundPod(&update.Pods[i]); len(errs) != 0 {
-			t.Errorf("Expected no validation errors on %#v, Got %#v", update.Pods[i], errs)
+		if errs := validation.ValidatePod(&update.Pods[i]); len(errs) != 0 {
+			t.Errorf("Expected no validation errors on %#v, Got %q", update.Pods[i], errs)
 		}
 	}
 }

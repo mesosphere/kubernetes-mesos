@@ -18,7 +18,7 @@ package client
 
 import (
 	"fmt"
-	"io/ioutil"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -26,6 +26,7 @@ import (
 	"reflect"
 	gruntime "runtime"
 	"strings"
+	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/latest"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
@@ -85,6 +86,9 @@ type KubeletConfig struct {
 
 	// TLSClientConfig contains settings to enable transport layer security
 	TLSClientConfig
+
+	// HTTPTimeout is used by the client to timeout http requests to Kubelet.
+	HTTPTimeout time.Duration
 }
 
 // TLSClientConfig contains settings to enable transport layer security
@@ -228,6 +232,12 @@ func TransportFor(config *Config) (http.RoundTripper, error) {
 		if tlsConfig != nil {
 			transport = &http.Transport{
 				TLSClientConfig: tlsConfig,
+				Proxy:           http.ProxyFromEnvironment,
+				Dial: (&net.Dialer{
+					Timeout:   30 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).Dial,
+				TLSHandshakeTimeout: 10 * time.Second,
 			}
 		} else {
 			transport = http.DefaultTransport
@@ -264,19 +274,6 @@ func HTTPWrappersForConfig(config *Config, rt http.RoundTripper) (http.RoundTrip
 		rt = NewUserAgentRoundTripper(config.UserAgent, rt)
 	}
 	return rt, nil
-}
-
-// dataFromSliceOrFile returns data from the slice (if non-empty), or from the file,
-// or an error if an error occurred reading the file
-func dataFromSliceOrFile(data []byte, file string) ([]byte, error) {
-	if len(data) > 0 {
-		return data, nil
-	}
-	fileData, err := ioutil.ReadFile(file)
-	if err != nil {
-		return []byte{}, err
-	}
-	return fileData, nil
 }
 
 // DefaultServerURL converts a host, host:port, or URL string to the default base server API path
@@ -346,7 +343,9 @@ func IsConfigTransportTLS(config Config) bool {
 func defaultServerUrlFor(config *Config) (*url.URL, error) {
 	// TODO: move the default to secure when the apiserver supports TLS by default
 	// config.Insecure is taken to mean "I want HTTPS but don't bother checking the certs against a CA."
-	defaultTLS := config.CertFile != "" || config.Insecure
+	hasCA := len(config.CAFile) != 0 || len(config.CAData) != 0
+	hasCert := len(config.CertFile) != 0 || len(config.CertData) != 0
+	defaultTLS := hasCA || hasCert || config.Insecure
 	host := config.Host
 	if host == "" {
 		host = "localhost"

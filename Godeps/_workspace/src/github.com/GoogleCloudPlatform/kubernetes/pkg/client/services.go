@@ -17,13 +17,17 @@ limitations under the License.
 package client
 
 import (
-	"errors"
-	"fmt"
+	"time"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 )
+
+// TODO(a-robinson): Remove this explicit timeout and the calls to
+// request.Timeout() that use it once #5180 is in.
+const extendedTimeout = 4 * time.Minute
 
 // ServicesNamespacer has methods to work with Service resources in a namespace
 type ServicesNamespacer interface {
@@ -37,7 +41,7 @@ type ServiceInterface interface {
 	Create(srv *api.Service) (*api.Service, error)
 	Update(srv *api.Service) (*api.Service, error)
 	Delete(name string) error
-	Watch(label, field labels.Selector, resourceVersion string) (watch.Interface, error)
+	Watch(label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error)
 }
 
 // services implements PodsNamespacer interface
@@ -54,16 +58,17 @@ func newServices(c *Client, namespace string) *services {
 // List takes a selector, and returns the list of services that match that selector
 func (c *services) List(selector labels.Selector) (result *api.ServiceList, err error) {
 	result = &api.ServiceList{}
-	err = c.r.Get().Namespace(c.ns).Resource("services").SelectorParam("labels", selector).Do().Into(result)
+	err = c.r.Get().
+		Namespace(c.ns).
+		Resource("services").
+		LabelsSelectorParam(api.LabelSelectorQueryParam(c.r.APIVersion()), selector).
+		Do().
+		Into(result)
 	return
 }
 
 // Get returns information about a particular service.
 func (c *services) Get(name string) (result *api.Service, err error) {
-	if len(name) == 0 {
-		return nil, errors.New("name is required parameter to Get")
-	}
-
 	result = &api.Service{}
 	err = c.r.Get().Namespace(c.ns).Resource("services").Name(name).Do().Into(result)
 	return
@@ -72,34 +77,30 @@ func (c *services) Get(name string) (result *api.Service, err error) {
 // Create creates a new service.
 func (c *services) Create(svc *api.Service) (result *api.Service, err error) {
 	result = &api.Service{}
-	err = c.r.Post().Namespace(c.ns).Resource("services").Body(svc).Do().Into(result)
+	err = c.r.Post().Timeout(extendedTimeout).Namespace(c.ns).Resource("services").Body(svc).Do().Into(result)
 	return
 }
 
 // Update updates an existing service.
 func (c *services) Update(svc *api.Service) (result *api.Service, err error) {
 	result = &api.Service{}
-	if len(svc.ResourceVersion) == 0 {
-		err = fmt.Errorf("invalid update object, missing resource version: %v", svc)
-		return
-	}
-	err = c.r.Put().Namespace(c.ns).Resource("services").Name(svc.Name).Body(svc).Do().Into(result)
+	err = c.r.Put().Timeout(extendedTimeout).Timeout(extendedTimeout).Namespace(c.ns).Resource("services").Name(svc.Name).Body(svc).Do().Into(result)
 	return
 }
 
 // Delete deletes an existing service.
 func (c *services) Delete(name string) error {
-	return c.r.Delete().Namespace(c.ns).Resource("services").Name(name).Do().Error()
+	return c.r.Delete().Timeout(extendedTimeout).Namespace(c.ns).Resource("services").Name(name).Do().Error()
 }
 
 // Watch returns a watch.Interface that watches the requested services.
-func (c *services) Watch(label, field labels.Selector, resourceVersion string) (watch.Interface, error) {
+func (c *services) Watch(label labels.Selector, field fields.Selector, resourceVersion string) (watch.Interface, error) {
 	return c.r.Get().
 		Prefix("watch").
 		Namespace(c.ns).
 		Resource("services").
 		Param("resourceVersion", resourceVersion).
-		SelectorParam("labels", label).
-		SelectorParam("fields", field).
+		LabelsSelectorParam(api.LabelSelectorQueryParam(c.r.APIVersion()), label).
+		FieldsSelectorParam(api.FieldSelectorQueryParam(c.r.APIVersion()), field).
 		Watch()
 }

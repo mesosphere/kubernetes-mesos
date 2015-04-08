@@ -56,10 +56,8 @@ The command line parameters that affect the hash calculation are listed below.
 - `--api_servers`
 - `--auth_path`
 - `--cluster_*`
-- `--docker_endpoint`
-- `--etcd_*`
 - `--executor_*`
+- `--kubelet_*`
 - `--km_path`
-- `--pod_infra_container_image`
+- `--profiling`
 - `--proxy_path`
-- `--root_dir`

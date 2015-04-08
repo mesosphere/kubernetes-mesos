@@ -11,12 +11,10 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/errors"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/envvars"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
-	k8s "github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/fields"
 	algorithm "github.com/GoogleCloudPlatform/kubernetes/pkg/scheduler"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 	plugin "github.com/GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler"
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
@@ -27,7 +25,6 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 	annotation "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
-	"gopkg.in/v2/yaml"
 )
 
 const (
@@ -99,30 +96,7 @@ func (k *k8smScheduler) launchTask(task *podtask.T) error {
 }
 
 type binder struct {
-	api      schedulerInterface
-	client   *client.Client
-	rw       sync.RWMutex
-	services []*api.Service
-}
-
-// callback target of UndeltaStore, updates our copy of the list of running services
-func (b *binder) updateServices(snapshot []interface{}) {
-	b.rw.Lock()
-	defer b.rw.Unlock()
-	sz := len(snapshot)
-	if sz != 0 {
-		var ok bool
-		b.services = make([]*api.Service, sz, sz)
-		for i, v := range snapshot {
-			b.services[i], ok = v.(*api.Service)
-			if !ok {
-				log.Errorf("expected api.Service not %T", v)
-				break
-			}
-		}
-		return
-	}
-	b.services = nil
+	api schedulerInterface
 }
 
 // implements binding.Registry, launches the pod-associated-task in mesos
@@ -130,8 +104,8 @@ func (b *binder) Bind(binding *api.Binding) error {
 
 	ctx := api.WithNamespace(api.NewContext(), binding.Namespace)
 
-	// default upstream scheduler passes pod.Name as binding.PodID
-	podKey, err := podtask.MakePodKey(ctx, binding.PodID)
+	// default upstream scheduler passes pod.Name as binding.Name
+	podKey, err := podtask.MakePodKey(ctx, binding.Name)
 	if err != nil {
 		return err
 	}
@@ -175,8 +149,9 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *podtask.T) (e
 		return b.rollback(task, fmt.Errorf("failed prior to launchTask due to expired offer for task %v", task.ID))
 	}
 
-	if err = b.prepareTaskForLaunch(ctx, binding.Host, task, offerId); err == nil {
-		log.V(2).Infof("launching task: %v on slave %v for pod %v/%v", task.ID, task.Spec.SlaveID, task.Pod.Namespace, task.Pod.Name)
+	if err = b.prepareTaskForLaunch(ctx, binding.Target.Name, task, offerId); err == nil {
+		log.V(2).Infof("launching task: %q on target %q slave %q for pod \"%v/%v\"",
+			task.ID, binding.Target.Name, task.Spec.SlaveID, task.Pod.Namespace, task.Pod.Name)
 		if err = b.api.launchTask(task); err == nil {
 			b.api.offers().Invalidate(offerId)
 			task.Set(podtask.Launched)
@@ -191,38 +166,27 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *podtask.T) (e
 	return b.rollback(task, fmt.Errorf("Failed to launch task %v: %v", task.ID, err))
 }
 
+//TODO(jdef) unit test this, ensure that task's copy of api.Pod is not modified
 func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *podtask.T, offerId string) error {
-	pod, err := b.client.Pods(api.NamespaceValue(ctx)).Get(task.Pod.Name)
-	if err != nil {
-		return err
-	}
+	pod := task.Pod
 
-	//HACK(jdef): adapted from https://github.com/GoogleCloudPlatform/kubernetes/blob/release-0.6/pkg/registry/pod/bound_pod_factory.go
-	envVars, err := b.getServiceEnvironmentVariables(ctx)
-	if err != nil {
-		return err
-	}
+	// we make an effort here to avoid making changes to the task's copy of the pod, since
+	// we want that to reflect the initial user spec, and not the modified spec that we
+	// build for the executor to consume.
+	oemCt := pod.Spec.Containers
+	pod.Spec.Containers = append([]api.Container{}, oemCt...) // (shallow) clone before mod
 
-	// as of k8s release-0.8 the conversion from api.Pod to api.BoundPod preserves the following
-	// - Name (same as api.Binding.PodID)
-	// - Namespace
-	// - UID
-	boundPod := &api.BoundPod{}
-	if err := api.Scheme.Convert(pod, boundPod); err != nil {
-		return err
+	if pod.Annotations == nil {
+		pod.Annotations = make(map[string]string)
+	} else {
+		oemAnn := pod.Annotations
+		pod.Annotations = make(map[string]string)
+		for k, v := range oemAnn {
+			pod.Annotations[k] = v
+		}
 	}
-	for ix, container := range boundPod.Spec.Containers {
-		boundPod.Spec.Containers[ix].Env = append(container.Env, envVars...)
-	}
-
-	// Make a dummy self link so that references to this bound pod will work.
-	boundPod.SelfLink = "/api/v1beta1/boundPods/" + boundPod.Name
-
-	if boundPod.Annotations == nil {
-		boundPod.Annotations = make(map[string]string)
-	}
-	boundPod.Annotations[annotation.BindingHostKey] = machine
-	task.SaveRecoveryInfo(boundPod.Annotations)
+	pod.Annotations[annotation.BindingHostKey] = machine
+	task.SaveRecoveryInfo(pod.Annotations)
 
 	//TODO(jdef) using anything other than the default k8s host-port mapping may
 	//confuse k8s pod rectification loops. in the future this point may become
@@ -232,33 +196,22 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *pod
 	//rectification. And BTW we probably want to store this information, somehow,
 	//in the binding annotations.
 	for _, entry := range task.Spec.PortMap {
-		port := &(boundPod.Spec.Containers[entry.ContainerIdx].Ports[entry.PortIdx])
-		port.HostPort = int(entry.OfferPort)
+		oemPorts := pod.Spec.Containers[entry.ContainerIdx].Ports
+		ports := append([]api.ContainerPort{}, oemPorts...)
+		ports[entry.PortIdx].HostPort = int(entry.OfferPort)
+		pod.Spec.Containers[entry.ContainerIdx].Ports = ports
 	}
 
-	// the kubelet-executor uses this boundPod to instantiate the pod
-	task.Spec.Data, err = yaml.Marshal(&boundPod)
+	// the kubelet-executor uses this to instantiate the pod
+	log.V(2).Infof("prepared pod spec: %+v", pod) // TODO(jdef) debug!! too verbose
+
+	data, err := api.Codec.Encode(&pod)
 	if err != nil {
-		log.V(2).Infof("Failed to marshal the updated boundPod")
+		log.V(2).Infof("Failed to marshal the pod spec: %v", err)
 		return err
 	}
+	task.Spec.Data = data
 	return nil
-}
-
-// getServiceEnvironmentVariables populates a list of environment variables that are use
-// in the container environment to get access to services.
-// HACK(jdef): adapted from https://github.com/GoogleCloudPlatform/kubernetes/blob/release-0.6/pkg/registry/pod/bound_pod_factory.go
-func (b *binder) getServiceEnvironmentVariables(ctx api.Context) ([]api.EnvVar, error) {
-	f := func() *api.ServiceList {
-		services := api.ServiceList{}
-		b.rw.RLock()
-		defer b.rw.RUnlock()
-		for _, s := range b.services {
-			services.Items = append(services.Items, *s)
-		}
-		return &services
-	}
-	return envvars.FromServices(f()), nil
 }
 
 type kubeScheduler struct {
@@ -385,15 +338,15 @@ func newQueuer(store queue.FIFO) *queuer {
 	return q
 }
 
-func (q *queuer) installDebugHandlers() {
-	http.HandleFunc("/debug/scheduler/podqueue", func(w http.ResponseWriter, r *http.Request) {
+func (q *queuer) installDebugHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("/debug/scheduler/podqueue", func(w http.ResponseWriter, r *http.Request) {
 		for _, x := range q.podQueue.List() {
 			if _, err := io.WriteString(w, fmt.Sprintf("%+v\n", x)); err != nil {
 				break
 			}
 		}
 	})
-	http.HandleFunc("/debug/scheduler/podstore", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/debug/scheduler/podstore", func(w http.ResponseWriter, r *http.Request) {
 		for _, x := range q.podUpdates.List() {
 			if _, err := io.WriteString(w, fmt.Sprintf("%+v\n", x)); err != nil {
 				break
@@ -664,12 +617,12 @@ func (k *deleter) deleteOne(pod *Pod) error {
 }
 
 // Create creates a scheduler plugin and all supporting background functions.
-func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}) *PluginConfig {
+func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}, mux *http.ServeMux) *PluginConfig {
 
 	// Watch and queue pods that need scheduling.
 	updates := make(chan queue.Entry, defaultUpdatesBacklog)
 	podUpdates := &podStoreAdapter{queue.NewHistorical(updates)}
-	reflector := cache.NewReflector(createAllPodsLW(k.client), &api.Pod{}, podUpdates)
+	reflector := cache.NewReflector(createAllPodsLW(k.client), &api.Pod{}, podUpdates, 0)
 
 	// lock that guards critial sections that involve transferring pods from
 	// the store (cache) to the scheduling queue; its purpose is to maintain
@@ -685,22 +638,14 @@ func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}) *Plugin
 		backoff: backoff.New(defaultInitialPodBackoff, defaultMaxPodBackoff),
 		qr:      q,
 	}
-	bind := &binder{
-		api:    kapi,
-		client: k.client,
-	}
-	serviceSnapshots := cache.NewUndeltaStore(bind.updateServices, cache.MetaNamespaceKeyFunc)
-	serviceWatcher := cache.NewReflector(createServiceLW(k.client), &api.Service{}, serviceSnapshots)
-
 	startLatch := make(chan struct{})
 	runtime.On(startLatch, func() {
-		reflector.Run()      // TODO(jdef) should listen for termination
-		serviceWatcher.Run() //TODO(jdef) should listen for termination
+		reflector.Run() // TODO(jdef) should listen for termination
 		podDeleter.Run(updates, terminate)
 		q.Run(terminate)
 
-		q.installDebugHandlers()
-		podtask.InstallDebugHandlers(k.taskRegistry)
+		q.installDebugHandlers(mux)
+		podtask.InstallDebugHandlers(k.taskRegistry, mux)
 	})
 	return &PluginConfig{
 		Config: &plugin.Config{
@@ -709,9 +654,10 @@ func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}) *Plugin
 				api:        kapi,
 				podUpdates: podUpdates,
 			},
-			Binder:  bind,
-			NextPod: q.yield,
-			Error:   eh.handleSchedulingError,
+			Binder:   &binder{api: kapi},
+			NextPod:  q.yield,
+			Error:    eh.handleSchedulingError,
+			Recorder: record.FromSource(api.EventSource{Component: "scheduler"}),
 		},
 		api:      kapi,
 		client:   k.client,
@@ -732,17 +678,17 @@ type PluginConfig struct {
 
 func NewPlugin(c *PluginConfig) PluginInterface {
 	return &schedulingPlugin{
-		Scheduler: plugin.New(c.Config),
-		api:       c.api,
-		client:    c.client,
-		qr:        c.qr,
-		deleter:   c.deleter,
-		starting:  c.starting,
+		config:   c.Config,
+		api:      c.api,
+		client:   c.client,
+		qr:       c.qr,
+		deleter:  c.deleter,
+		starting: c.starting,
 	}
 }
 
 type schedulingPlugin struct {
-	*plugin.Scheduler
+	config   *plugin.Config
 	api      schedulerInterface
 	client   *client.Client
 	qr       *queuer
@@ -752,7 +698,35 @@ type schedulingPlugin struct {
 
 func (s *schedulingPlugin) Run() {
 	close(s.starting)
-	s.Scheduler.Run()
+	go runtime.Until(s.scheduleOne, 100*time.Millisecond, nil) // TODO(jdef) extract constant, provide stop chan
+}
+
+// hacked from GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler/scheduler.go,
+// with the Modeler stuff removed since we don't use it because we have mesos.
+func (s *schedulingPlugin) scheduleOne() {
+	pod := s.config.NextPod()
+	log.V(3).Infof("Attempting to schedule: %v", pod)
+	dest, err := s.config.Algorithm.Schedule(*pod, s.config.MinionLister)
+	if err != nil {
+		log.V(1).Infof("Failed to schedule: %v", pod)
+		s.config.Recorder.Eventf(pod, "failedScheduling", "Error scheduling: %v", err)
+		s.config.Error(pod, err)
+		return
+	}
+	b := &api.Binding{
+		ObjectMeta: api.ObjectMeta{Namespace: pod.Namespace, Name: pod.Name},
+		Target: api.ObjectReference{
+			Kind: "Node",
+			Name: dest,
+		},
+	}
+	if err := s.config.Binder.Bind(b); err != nil {
+		log.V(1).Infof("Failed to bind pod: %v", err)
+		s.config.Recorder.Eventf(pod, "failedScheduling", "Binding rejected: %v", err)
+		s.config.Error(pod, err)
+		return
+	}
+	s.config.Recorder.Eventf(pod, "scheduled", "Successfully assigned %v to %v", pod.Name, dest)
 }
 
 // this pod may be out of sync with respect to the API server registry:
@@ -824,46 +798,17 @@ func (s *schedulingPlugin) reconcilePod(oldPod api.Pod) {
 	}
 }
 
-type listWatch struct {
-	client        *client.Client
-	fieldSelector labels.Selector
-	resource      string
-}
-
-func (lw *listWatch) List() (k8s.Object, error) {
-	return lw.client.
-		Get().
-		Resource(lw.resource).
-		SelectorParam("fields", lw.fieldSelector).
-		Do().
-		Get()
-}
-
-func (lw *listWatch) Watch(resourceVersion string) (watch.Interface, error) {
-	return lw.client.
-		Get().
-		Prefix("watch").
-		Resource(lw.resource).
-		SelectorParam("fields", lw.fieldSelector).
-		Param("resourceVersion", resourceVersion).
-		Watch()
+func parseSelectorOrDie(s string) fields.Selector {
+	selector, err := fields.ParseSelector(s)
+	if err != nil {
+		panic(err)
+	}
+	return selector
 }
 
 // createAllPodsLW returns a listWatch that finds all pods
-func createAllPodsLW(cl *client.Client) *listWatch {
-	return &listWatch{
-		client:        cl,
-		fieldSelector: labels.Everything(),
-		resource:      "pods",
-	}
-}
-
-func createServiceLW(cl *client.Client) *listWatch {
-	return &listWatch{
-		client:        cl,
-		fieldSelector: labels.Everything(),
-		resource:      "services",
-	}
+func createAllPodsLW(cl *client.Client) *cache.ListWatch {
+	return cache.NewListWatchFromClient(cl, "pods", api.NamespaceAll, parseSelectorOrDie(""))
 }
 
 // Consumes *api.Pod, produces *Pod; the k8s reflector wants to push *api.Pod

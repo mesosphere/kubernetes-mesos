@@ -11,8 +11,8 @@ import (
 //TODO(jdef) we use a Locker to guard against concurrent task state changes, but it would be
 //really, really nice to avoid doing this. Maybe someday the registry won't return data ptrs
 //but plain structs instead.
-func InstallDebugHandlers(reg Registry) {
-	http.HandleFunc("/debug/registry/tasks", func(w http.ResponseWriter, r *http.Request) {
+func InstallDebugHandlers(reg Registry, mux *http.ServeMux) {
+	mux.HandleFunc("/debug/registry/tasks", func(w http.ResponseWriter, r *http.Request) {
 		//TODO(jdef) support filtering tasks based on status
 		alltasks := reg.List(nil)
 		io.WriteString(w, fmt.Sprintf("task_count=%d\n", len(alltasks)))

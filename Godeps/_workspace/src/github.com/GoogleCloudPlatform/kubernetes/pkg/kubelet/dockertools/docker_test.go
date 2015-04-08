@@ -54,11 +54,11 @@ func TestGetContainerID(t *testing.T) {
 	fakeDocker.ContainerList = []docker.APIContainers{
 		{
 			ID:    "foobar",
-			Names: []string{"/k8s_foo_qux_1234_42"},
+			Names: []string{"/k8s_foo_qux_ns_1234_42"},
 		},
 		{
 			ID:    "barbar",
-			Names: []string{"/k8s_bar_qux_2565_42"},
+			Names: []string{"/k8s_bar_qux_ns_2565_42"},
 		},
 	}
 	fakeDocker.Container = &docker.Container{
@@ -73,7 +73,7 @@ func TestGetContainerID(t *testing.T) {
 		t.Errorf("Expected %#v, Got %#v", fakeDocker.ContainerList, dockerContainers)
 	}
 	verifyCalls(t, fakeDocker, []string{"list"})
-	dockerContainer, found, _ := dockerContainers.FindPodContainer("qux", "", "foo")
+	dockerContainer, found, _ := dockerContainers.FindPodContainer("qux_ns", "", "foo")
 	if dockerContainer == nil || !found {
 		t.Errorf("Failed to find container %#v", dockerContainer)
 	}
@@ -91,11 +91,14 @@ func verifyPackUnpack(t *testing.T, podNamespace, podUID, podName, containerName
 	hasher := adler32.New()
 	util.DeepHashObject(hasher, *container)
 	computedHash := uint64(hasher.Sum32())
-	podFullName := fmt.Sprintf("%s.%s", podName, podNamespace)
-	name := BuildDockerName(types.UID(podUID), podFullName, container)
-	returnedPodFullName, returnedUID, returnedContainerName, hash := ParseDockerName(name)
-	if podFullName != returnedPodFullName || podUID != string(returnedUID) || containerName != returnedContainerName || computedHash != hash {
-		t.Errorf("For (%s, %s, %s, %d), unpacked (%s, %s, %s, %d)", podFullName, podUID, containerName, computedHash, returnedPodFullName, returnedUID, returnedContainerName, hash)
+	podFullName := fmt.Sprintf("%s_%s", podName, podNamespace)
+	name := BuildDockerName(KubeletContainerName{podFullName, types.UID(podUID), container.Name}, container)
+	returned, hash, err := ParseDockerName(name)
+	if err != nil {
+		t.Errorf("Failed to parse Docker container name %q: %v", name, err)
+	}
+	if podFullName != returned.PodFullName || podUID != string(returned.PodUID) || containerName != returned.ContainerName || computedHash != hash {
+		t.Errorf("For (%s, %s, %s, %d), unpacked (%s, %s, %s, %d)", podFullName, podUID, containerName, computedHash, returned.PodFullName, returned.PodUID, returned.ContainerName, hash)
 	}
 }
 
@@ -111,12 +114,15 @@ func TestContainerManifestNaming(t *testing.T) {
 	container := &api.Container{Name: "container"}
 	podName := "foo"
 	podNamespace := "test"
-	name := fmt.Sprintf("k8s_%s_%s.%s_%s_42", container.Name, podName, podNamespace, podUID)
-	podFullName := fmt.Sprintf("%s.%s", podName, podNamespace)
+	name := fmt.Sprintf("k8s_%s_%s_%s_%s_42", container.Name, podName, podNamespace, podUID)
+	podFullName := fmt.Sprintf("%s_%s", podName, podNamespace)
 
-	returnedPodFullName, returnedPodUID, returnedContainerName, hash := ParseDockerName(name)
-	if returnedPodFullName != podFullName || string(returnedPodUID) != podUID || returnedContainerName != container.Name || hash != 0 {
-		t.Errorf("unexpected parse: %s %s %s %d", returnedPodFullName, returnedPodUID, returnedContainerName, hash)
+	returned, hash, err := ParseDockerName(name)
+	if err != nil {
+		t.Errorf("Failed to parse Docker container name %q: %v", name, err)
+	}
+	if returned.PodFullName != podFullName || string(returned.PodUID) != podUID || returned.ContainerName != container.Name || hash != 0 {
+		t.Errorf("unexpected parse: %s %s %s %d", returned.PodFullName, returned.PodUID, returned.ContainerName, hash)
 	}
 }
 
@@ -172,26 +178,63 @@ func TestDockerContainerCommand(t *testing.T) {
 		t.Errorf("unexpected command args: %s", cmd.Args)
 	}
 }
-
-var parseImageNameTests = []struct {
-	imageName string
-	name      string
-	tag       string
-}{
-	{"ubuntu", "ubuntu", ""},
-	{"ubuntu:2342", "ubuntu", "2342"},
-	{"ubuntu:latest", "ubuntu", "latest"},
-	{"foo/bar:445566", "foo/bar", "445566"},
-	{"registry.example.com:5000/foobar", "registry.example.com:5000/foobar", ""},
-	{"registry.example.com:5000/foobar:5342", "registry.example.com:5000/foobar", "5342"},
-	{"registry.example.com:5000/foobar:latest", "registry.example.com:5000/foobar", "latest"},
+func TestParseImageName(t *testing.T) {
+	tests := []struct {
+		imageName string
+		name      string
+		tag       string
+	}{
+		{"ubuntu", "ubuntu", ""},
+		{"ubuntu:2342", "ubuntu", "2342"},
+		{"ubuntu:latest", "ubuntu", "latest"},
+		{"foo/bar:445566", "foo/bar", "445566"},
+		{"registry.example.com:5000/foobar", "registry.example.com:5000/foobar", ""},
+		{"registry.example.com:5000/foobar:5342", "registry.example.com:5000/foobar", "5342"},
+		{"registry.example.com:5000/foobar:latest", "registry.example.com:5000/foobar", "latest"},
+	}
+	for _, test := range tests {
+		name, tag := parseImageName(test.imageName)
+		if name != test.name || tag != test.tag {
+			t.Errorf("Expected name/tag: %s/%s, got %s/%s", test.name, test.tag, name, tag)
+		}
+	}
 }
 
-func TestParseImageName(t *testing.T) {
-	for _, tt := range parseImageNameTests {
-		name, tag := parseImageName(tt.imageName)
-		if name != tt.name || tag != tt.tag {
-			t.Errorf("Expected name/tag: %s/%s, got %s/%s", tt.name, tt.tag, name, tag)
+func TestPull(t *testing.T) {
+	tests := []struct {
+		imageName     string
+		expectedImage string
+	}{
+		{"ubuntu", "ubuntu:latest"},
+		{"ubuntu:2342", "ubuntu:2342"},
+		{"ubuntu:latest", "ubuntu:latest"},
+		{"foo/bar:445566", "foo/bar:445566"},
+		{"registry.example.com:5000/foobar", "registry.example.com:5000/foobar:latest"},
+		{"registry.example.com:5000/foobar:5342", "registry.example.com:5000/foobar:5342"},
+		{"registry.example.com:5000/foobar:latest", "registry.example.com:5000/foobar:latest"},
+	}
+	for _, test := range tests {
+		fakeKeyring := &credentialprovider.FakeKeyring{}
+		fakeClient := &FakeDockerClient{}
+
+		dp := dockerPuller{
+			client:  fakeClient,
+			keyring: fakeKeyring,
+		}
+
+		err := dp.Pull(test.imageName)
+		if err != nil {
+			t.Errorf("unexpected non-nil err: %s", err)
+			continue
+		}
+
+		if e, a := 1, len(fakeClient.pulled); e != a {
+			t.Errorf("%s: expected 1 pulled image, got %d: %v", test.imageName, a, fakeClient.pulled)
+			continue
+		}
+
+		if e, a := test.expectedImage, fakeClient.pulled[0]; e != a {
+			t.Errorf("%s: expected pull of %q, but got %q", test.imageName, e, a)
 		}
 	}
 }
@@ -211,7 +254,7 @@ func TestDockerKeyringLookupFails(t *testing.T) {
 	if err == nil {
 		t.Errorf("unexpected non-error")
 	}
-	msg := "image pull failed for host/repository/image, this may be because there are no credentials on this request.  details: (test error)"
+	msg := "image pull failed for host/repository/image:version, this may be because there are no credentials on this request.  details: (test error)"
 	if err.Error() != msg {
 		t.Errorf("expected: %s, saw: %s", msg, err.Error())
 	}
@@ -447,6 +490,213 @@ func TestGetRunningContainers(t *testing.T) {
 		} else {
 			if err != test.err {
 				t.Errorf("unexpected error: %v", err)
+			}
+		}
+	}
+}
+
+func TestFindContainersByPod(t *testing.T) {
+	tests := []struct {
+		testContainers     DockerContainers
+		inputPodID         types.UID
+		inputPodFullName   string
+		expectedContainers DockerContainers
+	}{
+		{
+			DockerContainers{
+				"foobar": &docker.APIContainers{
+					ID:    "foobar",
+					Names: []string{"/k8s_foo_qux_ns_1234_42"},
+				},
+				"barbar": &docker.APIContainers{
+					ID:    "barbar",
+					Names: []string{"/k8s_foo_qux_ns_1234_42"},
+				},
+				"baz": &docker.APIContainers{
+					ID:    "baz",
+					Names: []string{"/k8s_foo_qux_ns_1234_42"},
+				},
+			},
+			types.UID("1234"),
+			"",
+			DockerContainers{
+				"foobar": &docker.APIContainers{
+					ID:    "foobar",
+					Names: []string{"/k8s_foo_qux_ns_1234_42"},
+				},
+				"barbar": &docker.APIContainers{
+					ID:    "barbar",
+					Names: []string{"/k8s_foo_qux_ns_1234_42"},
+				},
+				"baz": &docker.APIContainers{
+					ID:    "baz",
+					Names: []string{"/k8s_foo_qux_ns_1234_42"},
+				},
+			},
+		},
+		{
+			DockerContainers{
+				"foobar": &docker.APIContainers{
+					ID:    "foobar",
+					Names: []string{"/k8s_foo_qux_ns_1234_42"},
+				},
+				"barbar": &docker.APIContainers{
+					ID:    "barbar",
+					Names: []string{"/k8s_foo_qux_ns_2343_42"},
+				},
+				"baz": &docker.APIContainers{
+					ID:    "baz",
+					Names: []string{"/k8s_foo_qux_ns_1234_42"},
+				},
+			},
+			types.UID("1234"),
+			"",
+			DockerContainers{
+				"foobar": &docker.APIContainers{
+					ID:    "foobar",
+					Names: []string{"/k8s_foo_qux_ns_1234_42"},
+				},
+				"baz": &docker.APIContainers{
+					ID:    "baz",
+					Names: []string{"/k8s_foo_qux_ns_1234_42"},
+				},
+			},
+		},
+		{
+			DockerContainers{
+				"foobar": &docker.APIContainers{
+					ID:    "foobar",
+					Names: []string{"/k8s_foo_qux_ns_1234_42"},
+				},
+				"barbar": &docker.APIContainers{
+					ID:    "barbar",
+					Names: []string{"/k8s_foo_qux_ns_2343_42"},
+				},
+				"baz": &docker.APIContainers{
+					ID:    "baz",
+					Names: []string{"/k8s_foo_qux_ns_1234_42"},
+				},
+			},
+			types.UID("5678"),
+			"",
+			DockerContainers{},
+		},
+		{
+			DockerContainers{
+				"foobar": &docker.APIContainers{
+					ID:    "foobar",
+					Names: []string{"/k8s_foo_qux_ns_1234_42"},
+				},
+				"barbar": &docker.APIContainers{
+					ID:    "barbar",
+					Names: nil,
+				},
+				"baz": &docker.APIContainers{
+					ID:    "baz",
+					Names: []string{"/k8s_foo_qux_ns_5678_42"},
+				},
+			},
+			types.UID("5678"),
+			"",
+			DockerContainers{
+				"baz": &docker.APIContainers{
+					ID:    "baz",
+					Names: []string{"/k8s_foo_qux_ns_5678_42"},
+				},
+			},
+		},
+		{
+			DockerContainers{
+				"foobar": &docker.APIContainers{
+					ID:    "foobar",
+					Names: []string{"/k8s_foo_qux_ns_1234_42"},
+				},
+				"barbar": &docker.APIContainers{
+					ID:    "barbar",
+					Names: []string{"/k8s_foo_abc_ns_5678_42"},
+				},
+				"baz": &docker.APIContainers{
+					ID:    "baz",
+					Names: []string{"/k8s_foo_qux_ns_5678_42"},
+				},
+			},
+			"",
+			"abc_ns",
+			DockerContainers{
+				"barbar": &docker.APIContainers{
+					ID:    "barbar",
+					Names: []string{"/k8s_foo_abc_ns_5678_42"},
+				},
+			},
+		},
+	}
+	for _, test := range tests {
+		result := test.testContainers.FindContainersByPod(test.inputPodID, test.inputPodFullName)
+		if !reflect.DeepEqual(result, test.expectedContainers) {
+			t.Errorf("expected: %v, saw: %v", test.expectedContainers, result)
+		}
+	}
+}
+
+func TestMakePortsAndBindings(t *testing.T) {
+	container := api.Container{
+		Ports: []api.ContainerPort{
+			{
+				ContainerPort: 80,
+				HostPort:      8080,
+				HostIP:        "127.0.0.1",
+			},
+			{
+				ContainerPort: 443,
+				HostPort:      443,
+				Protocol:      "tcp",
+			},
+			{
+				ContainerPort: 444,
+				HostPort:      444,
+				Protocol:      "udp",
+			},
+			{
+				ContainerPort: 445,
+				HostPort:      445,
+				Protocol:      "foobar",
+			},
+		},
+	}
+	exposedPorts, bindings := makePortsAndBindings(&container)
+	if len(container.Ports) != len(exposedPorts) ||
+		len(container.Ports) != len(bindings) {
+		t.Errorf("Unexpected ports and bindings, %#v %#v %#v", container, exposedPorts, bindings)
+	}
+	for key, value := range bindings {
+		switch value[0].HostPort {
+		case "8080":
+			if !reflect.DeepEqual(docker.Port("80/tcp"), key) {
+				t.Errorf("Unexpected docker port: %#v", key)
+			}
+			if value[0].HostIP != "127.0.0.1" {
+				t.Errorf("Unexpected host IP: %s", value[0].HostIP)
+			}
+		case "443":
+			if !reflect.DeepEqual(docker.Port("443/tcp"), key) {
+				t.Errorf("Unexpected docker port: %#v", key)
+			}
+			if value[0].HostIP != "" {
+				t.Errorf("Unexpected host IP: %s", value[0].HostIP)
+			}
+		case "444":
+			if !reflect.DeepEqual(docker.Port("444/udp"), key) {
+				t.Errorf("Unexpected docker port: %#v", key)
+			}
+			if value[0].HostIP != "" {
+				t.Errorf("Unexpected host IP: %s", value[0].HostIP)
+			}
+		case "445":
+			if !reflect.DeepEqual(docker.Port("445/tcp"), key) {
+				t.Errorf("Unexpected docker port: %#v", key)
+			}
+			if value[0].HostIP != "" {
+				t.Errorf("Unexpected host IP: %s", value[0].HostIP)
 			}
 		}
 	}

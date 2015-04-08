@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package cmd_test
+package cmd
 
 import (
 	"bytes"
@@ -30,11 +30,12 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/latest"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch/json"
 )
 
-func testData() (*api.PodList, *api.ServiceList) {
+func testData() (*api.PodList, *api.ServiceList, *api.ReplicationControllerList) {
 	pods := &api.PodList{
 		ListMeta: api.ListMeta{
 			ResourceVersion: "15",
@@ -43,14 +44,14 @@ func testData() (*api.PodList, *api.ServiceList) {
 			{
 				ObjectMeta: api.ObjectMeta{Name: "foo", Namespace: "test", ResourceVersion: "10"},
 				Spec: api.PodSpec{
-					RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
+					RestartPolicy: api.RestartPolicyAlways,
 					DNSPolicy:     api.DNSClusterFirst,
 				},
 			},
 			{
 				ObjectMeta: api.ObjectMeta{Name: "bar", Namespace: "test", ResourceVersion: "11"},
 				Spec: api.PodSpec{
-					RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
+					RestartPolicy: api.RestartPolicyAlways,
 					DNSPolicy:     api.DNSClusterFirst,
 				},
 			},
@@ -70,7 +71,20 @@ func testData() (*api.PodList, *api.ServiceList) {
 			},
 		},
 	}
-	return pods, svc
+	rc := &api.ReplicationControllerList{
+		ListMeta: api.ListMeta{
+			ResourceVersion: "17",
+		},
+		Items: []api.ReplicationController{
+			{
+				ObjectMeta: api.ObjectMeta{Name: "rc1", Namespace: "test", ResourceVersion: "18"},
+				Spec: api.ReplicationControllerSpec{
+					Replicas: 1,
+				},
+			},
+		},
+	}
+	return pods, svc, rc
 }
 
 // Verifies that schemas that are not in the master tree of Kubernetes can be retrieved via Get.
@@ -123,7 +137,7 @@ func TestGetSchemaObject(t *testing.T) {
 }
 
 func TestGetObjects(t *testing.T) {
-	pods, _ := testData()
+	pods, _, _ := testData()
 
 	f, tf, codec := NewAPIFactory()
 	tf.Printer = &testPrinter{}
@@ -149,7 +163,7 @@ func TestGetObjects(t *testing.T) {
 }
 
 func TestGetListObjects(t *testing.T) {
-	pods, _ := testData()
+	pods, _, _ := testData()
 
 	f, tf, codec := NewAPIFactory()
 	tf.Printer = &testPrinter{}
@@ -175,7 +189,7 @@ func TestGetListObjects(t *testing.T) {
 }
 
 func TestGetMultipleTypeObjects(t *testing.T) {
-	pods, svc := testData()
+	pods, svc, _ := testData()
 
 	f, tf, codec := NewAPIFactory()
 	tf.Printer = &testPrinter{}
@@ -211,7 +225,7 @@ func TestGetMultipleTypeObjects(t *testing.T) {
 }
 
 func TestGetMultipleTypeObjectsAsList(t *testing.T) {
-	pods, svc := testData()
+	pods, svc, _ := testData()
 
 	f, tf, codec := NewAPIFactory()
 	tf.Printer = &testPrinter{}
@@ -260,7 +274,7 @@ func TestGetMultipleTypeObjectsAsList(t *testing.T) {
 }
 
 func TestGetMultipleTypeObjectsWithSelector(t *testing.T) {
-	pods, svc := testData()
+	pods, svc, _ := testData()
 
 	f, tf, codec := NewAPIFactory()
 	tf.Printer = &testPrinter{}
@@ -300,6 +314,47 @@ func TestGetMultipleTypeObjectsWithSelector(t *testing.T) {
 	}
 }
 
+func TestGetMultipleTypeObjectsWithDirectReference(t *testing.T) {
+	_, svc, _ := testData()
+	node := &api.Node{
+		ObjectMeta: api.ObjectMeta{
+			Name: "foo",
+		},
+	}
+
+	f, tf, codec := NewAPIFactory()
+	tf.Printer = &testPrinter{}
+	tf.Client = &client.FakeRESTClient{
+		Codec: codec,
+		Client: client.HTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Path {
+			case "/nodes/foo":
+				return &http.Response{StatusCode: 200, Body: objBody(codec, node)}, nil
+			case "/namespaces/test/services/bar":
+				return &http.Response{StatusCode: 200, Body: objBody(codec, &svc.Items[0])}, nil
+			default:
+				t.Fatalf("unexpected request: %#v\n%#v", req.URL, req)
+				return nil, nil
+			}
+		}),
+	}
+	tf.Namespace = "test"
+	buf := bytes.NewBuffer([]byte{})
+
+	cmd := f.NewCmdGet(buf)
+	cmd.SetOutput(buf)
+
+	cmd.Run(cmd, []string{"services/bar", "node/foo"})
+
+	expected := []runtime.Object{&svc.Items[0], node}
+	actual := tf.Printer.(*testPrinter).Objects
+	if !api.Semantic.DeepEqual(expected, actual) {
+		t.Errorf("unexpected object: %s", util.ObjectDiff(expected, actual))
+	}
+	if len(buf.String()) == 0 {
+		t.Errorf("unexpected empty output")
+	}
+}
 func watchTestData() ([]api.Pod, []watch.Event) {
 	pods := []api.Pod{
 		{
@@ -309,7 +364,7 @@ func watchTestData() ([]api.Pod, []watch.Event) {
 				ResourceVersion: "10",
 			},
 			Spec: api.PodSpec{
-				RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
+				RestartPolicy: api.RestartPolicyAlways,
 				DNSPolicy:     api.DNSClusterFirst,
 			},
 		},
@@ -324,7 +379,7 @@ func watchTestData() ([]api.Pod, []watch.Event) {
 					ResourceVersion: "11",
 				},
 				Spec: api.PodSpec{
-					RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
+					RestartPolicy: api.RestartPolicyAlways,
 					DNSPolicy:     api.DNSClusterFirst,
 				},
 			},
@@ -338,7 +393,7 @@ func watchTestData() ([]api.Pod, []watch.Event) {
 					ResourceVersion: "12",
 				},
 				Spec: api.PodSpec{
-					RestartPolicy: api.RestartPolicy{Always: &api.RestartPolicyAlways{}},
+					RestartPolicy: api.RestartPolicyAlways,
 					DNSPolicy:     api.DNSClusterFirst,
 				},
 			},

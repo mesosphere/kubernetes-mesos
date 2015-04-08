@@ -38,6 +38,16 @@ func (a *Assertions) Equal(expected, actual interface{}, msgAndArgs ...interface
 	return Equal(a.t, expected, actual, msgAndArgs...)
 }
 
+// EqualValues asserts that two objects are equal or convertable to the same types
+// and equal.
+//
+//    assert.EqualValues(uint32(123), int32(123), "123 and 123 should be equal")
+//
+// Returns whether the assertion was successful (true) or not (false).
+func (a *Assertions) EqualValues(expected, actual interface{}, msgAndArgs ...interface{}) bool {
+	return EqualValues(a.t, expected, actual, msgAndArgs...)
+}
+
 // Exactly asserts that two objects are equal is value and type.
 //
 //    assert.Exactly(int32(123), int64(123), "123 and 123 should NOT be equal")
@@ -237,8 +247,8 @@ func (a *Assertions) EqualError(theError error, errString string, msgAndArgs ...
 //  assert.Regexp(t, "start...$", "it's not starting")
 //
 // Returns whether the assertion was successful (true) or not (false).
-func (a *Assertions) Regexp(rx interface{}, str interface{}) bool {
-	return Regexp(a.t, rx, str)
+func (a *Assertions) Regexp(rx interface{}, str interface{}, msgAndArgs ...interface{}) bool {
+	return Regexp(a.t, rx, str, msgAndArgs...)
 }
 
 // NotRegexp asserts that a specified regexp does not match a string.
@@ -247,6 +257,6 @@ func (a *Assertions) Regexp(rx interface{}, str interface{}) bool {
 //  assert.NotRegexp(t, "^start", "it's not starting")
 //
 // Returns whether the assertion was successful (true) or not (false).
-func (a *Assertions) NotRegexp(rx interface{}, str interface{}) bool {
-	return NotRegexp(a.t, rx, str)
+func (a *Assertions) NotRegexp(rx interface{}, str interface{}, msgAndArgs ...interface{}) bool {
+	return NotRegexp(a.t, rx, str, msgAndArgs...)
 }
