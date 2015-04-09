@@ -40,35 +40,8 @@ func TestProc_manyEndings(t *testing.T) {
 	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
 }
 
-func TestProc_neverBegun(t *testing.T) {
-	p := New()
-	fatalOn(t, p.Done(), 500*time.Millisecond, "expected to time out waiting for process death")
-}
-
-func TestProc_halflife(t *testing.T) {
-	p := New()
-	p.End()
-	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
-}
-
-func TestProc_beginTwice(t *testing.T) {
-	p := New()
-	p.Begin()
-	func() {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Fatalf("expected panic because Begin() was invoked more than once")
-			}
-		}()
-		p.Begin() // should be ignored
-	}()
-	p.End()
-	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
-}
-
 func TestProc_singleAction(t *testing.T) {
 	p := New()
-	p.Begin()
 	scheduled := make(chan struct{})
 	called := make(chan struct{})
 
@@ -94,7 +67,6 @@ func TestProc_singleAction(t *testing.T) {
 
 func TestProc_multiAction(t *testing.T) {
 	p := New()
-	p.Begin()
 	const COUNT = 10
 	var called sync.WaitGroup
 	called.Add(COUNT)
@@ -126,14 +98,12 @@ func TestProc_multiAction(t *testing.T) {
 
 func TestProc_goodLifecycle(t *testing.T) {
 	p := New()
-	p.Begin()
 	p.End()
 	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
 }
 
 func TestProc_doWithDeadProc(t *testing.T) {
 	p := New()
-	p.Begin()
 	p.End()
 
 	errUnexpected := fmt.Errorf("unexpected execution of delegated action")
@@ -147,7 +117,6 @@ func TestProc_doWithDeadProc(t *testing.T) {
 
 func TestProc_doWith(t *testing.T) {
 	p := New()
-	p.Begin()
 
 	delegated := false
 	decorated := DoWith(p, DoerFunc(func(a Action) <-chan error {
@@ -178,7 +147,6 @@ func TestProc_doWith(t *testing.T) {
 
 func TestProc_doWithNestedTwice(t *testing.T) {
 	p := New()
-	p.Begin()
 
 	delegated := false
 	decorated := DoWith(p, DoerFunc(func(a Action) <-chan error {
@@ -214,7 +182,6 @@ func TestProc_doWithNestedTwice(t *testing.T) {
 
 func TestProc_doWithNestedErrorPropagation(t *testing.T) {
 	p := New()
-	p.Begin()
 
 	delegated := false
 	decorated := DoWith(p, DoerFunc(func(a Action) <-chan error {
@@ -262,10 +229,7 @@ func TestProc_doWithNestedErrorPropagation(t *testing.T) {
 	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
 }
 
-func TestProc_doWithNestedX(t *testing.T) {
-	p := New()
-	p.Begin()
-
+func runDelegationTest(t *testing.T, p Process, name string) {
 	var decorated Process
 	decorated = p
 
@@ -275,8 +239,15 @@ func TestProc_doWithNestedX(t *testing.T) {
 	y := 0
 
 	for x := 1; x <= DEPTH; x++ {
+		x := x
 		nextp := DoWith(decorated, DoerFunc(func(a Action) <-chan error {
+			if x == 1 {
+				t.Logf("delegate chain invoked for " + name)
+			}
 			y++
+			if y != x {
+				t.Fatalf("out of order delegated execution")
+			}
 			defer wg.Done()
 			a()
 			return nil
@@ -290,6 +261,7 @@ func TestProc_doWithNestedX(t *testing.T) {
 		if y != DEPTH {
 			t.Fatalf("expected delegated execution")
 		}
+		t.Logf("executing deferred action: " + name)
 	})
 	if err == nil {
 		t.Fatalf("expected !nil error chan")
@@ -299,7 +271,28 @@ func TestProc_doWithNestedX(t *testing.T) {
 	fatalAfter(t, decorated.OnError(err, func(e error) {
 		t.Fatalf("unexpected error: %v", err)
 	}), 1*time.Second, "timed out waiting for doer result")
+}
 
-	decorated.End()
+func TestProc_doWithNestedX(t *testing.T) {
+	p := New()
+	runDelegationTest(t, p, "nested")
+	p.End()
+	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
+}
+
+// intended to be run with -race
+func TestProc_doWithNestedXConcurrent(t *testing.T) {
+	p := New()
+	var wg sync.WaitGroup
+	const CONC = 20
+	wg.Add(CONC)
+	for i := 0; i < CONC; i++ {
+		i := i
+		runtime.Go(func() { runDelegationTest(t, p, fmt.Sprintf("nested%d", i)) }).Then(wg.Done)
+	}
+	ch := runtime.Go(wg.Wait)
+	fatalAfter(t, ch, 2*time.Second, "timed out waiting for concurrent delegates")
+
+	p.End()
 	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
 }

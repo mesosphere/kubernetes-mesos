@@ -8,6 +8,7 @@ import (
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	bindings "github.com/mesos/mesos-go/scheduler"
 	"github.com/mesosphere/kubernetes-mesos/pkg/proc"
+	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 )
 
 type DriverFactory func() (bindings.SchedulerDriver, error)
@@ -36,12 +37,29 @@ func (stage *stageType) get() stageType {
 // execute some action in the deferred context of the process, but only if we
 // match the stage of the process at the time the action is executed.
 func (stage stageType) Do(p *SchedulerProcess, a proc.Action) <-chan error {
-	err := proc.NewErrorOnce(p.Done())
+	errOnce := proc.NewErrorOnce(p.Done())
 	errOuter := p.Do(proc.Action(func() {
-		err.Report(stage.When(p, a))
+		switch stage {
+		case standbyStage:
+			//await standby signal or death
+			select {
+			case <-p.standby:
+			case <-p.Done():
+			}
+		case masterStage:
+			//await elected signal or death
+			select {
+			case <-p.elected:
+			case <-p.Done():
+			}
+		case finStage:
+			errOnce.Report(fmt.Errorf("scheduler process is dying, dropping action"))
+		default:
+		}
+		errOnce.Report(stage.When(p, a))
 	}))
-	go err.Forward(errOuter)
-	return err.Err()
+	go errOnce.Forward(errOuter)
+	return errOnce.Err()
 }
 
 // execute some action only if we match the stage of the scheduler process
@@ -55,35 +73,38 @@ func (stage stageType) When(p *SchedulerProcess, a proc.Action) (err error) {
 }
 
 type SchedulerProcess struct {
-	proc.ProcessInit
+	proc.Process
 	bindings.Scheduler
 	stage    stageType
 	elected  chan struct{} // upon close we've been elected
 	failover chan struct{} // closed indicates that we should failover upon End()
+	standby  chan struct{}
 }
 
 func New(sched bindings.Scheduler) *SchedulerProcess {
 	p := &SchedulerProcess{
-		ProcessInit: proc.New(),
-		Scheduler:   sched,
-		stage:       initStage,
-		elected:     make(chan struct{}),
-		failover:    make(chan struct{}),
+		Process:   proc.New(),
+		Scheduler: sched,
+		stage:     initStage,
+		elected:   make(chan struct{}),
+		failover:  make(chan struct{}),
+		standby:   make(chan struct{}),
 	}
+	runtime.On(p.Running(), p.begin)
 	return p
 }
 
-func (self *SchedulerProcess) Begin() {
+func (self *SchedulerProcess) begin() {
 	if (&self.stage).transition(initStage, standbyStage) {
+		close(self.standby)
 		log.Infoln("scheduler process entered standby stage")
-		self.ProcessInit.Begin()
 	} else {
 		log.Errorf("failed to transition from init to standby stage")
 	}
 }
 
 func (self *SchedulerProcess) End() {
-	defer self.ProcessInit.End()
+	defer self.Process.End()
 	(&self.stage).set(finStage)
 	log.Infoln("scheduler process entered fin stage")
 }

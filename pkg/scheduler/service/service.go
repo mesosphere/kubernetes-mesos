@@ -543,13 +543,13 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProce
 		ReconcileCooldown: s.ReconcileCooldown,
 	})
 
-	schedulerProcess := ha.New(mesosPodScheduler)
 	masterUri := kmcloud.MasterURI()
 	info, cred, err := s.buildFrameworkInfo()
 	if err != nil {
 		log.Fatalf("Misconfigured mesos framework: %v", err)
 	}
 
+	schedulerProcess := ha.New(mesosPodScheduler)
 	dconfig := &bindings.DriverConfig{
 		Scheduler:        schedulerProcess,
 		Framework:        info,
@@ -568,8 +568,6 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProce
 	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(schedulerProcess.Done(), s.mux))
 	runtime.On(mesosPodScheduler.Registration(), kpl.Run)
 	runtime.On(mesosPodScheduler.Registration(), s.newServiceWriter(schedulerProcess.Done()))
-
-	schedulerProcess.Begin()
 
 	deferredInit := func() (err error) {
 		if err = mesosPodScheduler.Init(schedulerProcess.Master(), kpl, s.mux); err != nil {
