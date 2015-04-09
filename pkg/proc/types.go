@@ -26,13 +26,7 @@ type Process interface {
 	Context
 	Doer
 	OnError(<-chan error, func(error)) <-chan struct{}
-}
-
-type ProcessInit interface {
-	Process
-
-	// begin process accounting and spawn requisite background routines
-	Begin()
+	Running() <-chan struct{}
 }
 
 type ErrorOnce interface {

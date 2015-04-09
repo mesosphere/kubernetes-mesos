@@ -8,6 +8,7 @@ import (
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	bindings "github.com/mesos/mesos-go/scheduler"
 	"github.com/mesosphere/kubernetes-mesos/pkg/proc"
+	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 )
 
 type DriverFactory func() (bindings.SchedulerDriver, error)
@@ -55,7 +56,7 @@ func (stage stageType) When(p *SchedulerProcess, a proc.Action) (err error) {
 }
 
 type SchedulerProcess struct {
-	proc.ProcessInit
+	proc.Process
 	bindings.Scheduler
 	stage    stageType
 	elected  chan struct{} // upon close we've been elected
@@ -64,26 +65,26 @@ type SchedulerProcess struct {
 
 func New(sched bindings.Scheduler) *SchedulerProcess {
 	p := &SchedulerProcess{
-		ProcessInit: proc.New(),
-		Scheduler:   sched,
-		stage:       initStage,
-		elected:     make(chan struct{}),
-		failover:    make(chan struct{}),
+		Process:   proc.New(),
+		Scheduler: sched,
+		stage:     initStage,
+		elected:   make(chan struct{}),
+		failover:  make(chan struct{}),
 	}
+	runtime.On(p.Running(), p.begin)
 	return p
 }
 
-func (self *SchedulerProcess) Begin() {
+func (self *SchedulerProcess) begin() {
 	if (&self.stage).transition(initStage, standbyStage) {
 		log.Infoln("scheduler process entered standby stage")
-		self.ProcessInit.Begin()
 	} else {
 		log.Errorf("failed to transition from init to standby stage")
 	}
 }
 
 func (self *SchedulerProcess) End() {
-	defer self.ProcessInit.End()
+	defer self.Process.End()
 	(&self.stage).set(finStage)
 	log.Infoln("scheduler process entered fin stage")
 }

@@ -26,6 +26,7 @@ type procImpl struct {
 	writeLock sync.Mutex // avoid data race between write and close of backlog
 	changed   *sync.Cond // wait/signal for backlog changes
 	engine    DoerFunc
+	running   chan struct{} // closes once event loop processing starts
 }
 
 type Config struct {
@@ -51,11 +52,11 @@ func init() {
 	closedErrChan = ch
 }
 
-func New() ProcessInit {
+func New() Process {
 	return newConfigured(defaultConfig)
 }
 
-func newConfigured(config Config) ProcessInit {
+func newConfigured(config Config) Process {
 	state := stateNew
 	pi := &procImpl{
 		Config:    config,
@@ -63,29 +64,35 @@ func newConfigured(config Config) ProcessInit {
 		terminate: make(chan struct{}),
 		state:     &state,
 		pid:       atomic.AddUint32(&pid, 1),
+		running:   make(chan struct{}),
 	}
 	pi.engine = DoerFunc(pi.doLater)
 	pi.changed = sync.NewCond(&pi.writeLock)
 	pi.wg.Add(1) // symmetrical to wg.Done() in End()
-	pi.done = runtime.Go(pi.wg.Wait)
+	pi.done = pi.begin()
 	return pi
 }
 
+// returns a chan that closes upon termination of the action processing loop
 func (self *procImpl) Done() <-chan struct{} {
 	return self.done
 }
 
-func (self *procImpl) Begin() {
+func (self *procImpl) Running() <-chan struct{} {
+	return self.running
+}
+
+func (self *procImpl) begin() runtime.Signal {
 	if !self.state.transition(stateNew, stateRunning) {
 		panic(fmt.Errorf("failed to transition from New to Idle state"))
 	}
 	defer log.V(2).Infof("started process %d", self.pid)
-	entered := false
+	var entered runtime.Latch
 	// execute actions on the backlog chan
-	runtime.Go(func() {
+	return runtime.Go(func() {
 		runtime.Until(func() {
-			if !entered {
-				entered = true
+			if entered.Acquire() {
+				close(self.running)
 				self.wg.Add(1)
 			}
 			for action := range self.backlog {
@@ -102,7 +109,7 @@ func (self *procImpl) Begin() {
 		}, self.actionHandlerCrashDelay, self.terminate)
 	}).Then(func() {
 		log.V(2).Infof("finished processing action backlog for process %d", self.pid)
-		if entered {
+		if !entered.Acquire() {
 			self.wg.Done()
 		}
 	})
@@ -194,7 +201,8 @@ func (self *procImpl) End() {
 
 		log.V(2).Infof("waiting for deferred actions to complete")
 
-		<-self.Done()
+		// wait for all pending actions to complete, then flush the backlog
+		self.wg.Wait()
 		self.flush()
 	}
 }
@@ -271,6 +279,13 @@ func (p *processAdapter) End() {
 func (p *processAdapter) Done() <-chan struct{} {
 	if p != nil && p.parent != nil {
 		return p.parent.Done()
+	}
+	return nil
+}
+
+func (p *processAdapter) Running() <-chan struct{} {
+	if p != nil && p.parent != nil {
+		return p.parent.Running()
 	}
 	return nil
 }
