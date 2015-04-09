@@ -46,6 +46,14 @@ func (stage stageType) Do(p *SchedulerProcess, a proc.Action) <-chan error {
 			case <-p.standby:
 			case <-p.Done():
 			}
+		case masterStage:
+			//await elected signal or death
+			select {
+			case <-p.elected:
+			case <-p.Done():
+			}
+		case finStage:
+			<-p.Done()
 		default:
 		}
 		err.Report(stage.When(p, a))
