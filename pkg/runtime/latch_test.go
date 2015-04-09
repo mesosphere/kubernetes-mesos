@@ -4,6 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func Test_LatchAcquireBasic(t *testing.T) {
@@ -35,6 +36,7 @@ func Test_LatchAcquireConcurrent(t *testing.T) {
 			}
 		}()
 	}
+	time.Sleep(200 * time.Millisecond)
 	close(ch)
 	wg.Wait()
 	if success != 1 {
