@@ -39,6 +39,15 @@ func (stage *stageType) get() stageType {
 func (stage stageType) Do(p *SchedulerProcess, a proc.Action) <-chan error {
 	err := proc.NewErrorOnce(p.Done())
 	errOuter := p.Do(proc.Action(func() {
+		switch stage {
+		case standbyStage:
+			//await standby signal or death
+			select {
+			case <-p.standby:
+			case <-p.Done():
+			}
+		default:
+		}
 		err.Report(stage.When(p, a))
 	}))
 	go err.Forward(errOuter)
@@ -61,6 +70,7 @@ type SchedulerProcess struct {
 	stage    stageType
 	elected  chan struct{} // upon close we've been elected
 	failover chan struct{} // closed indicates that we should failover upon End()
+	standby  chan struct{}
 }
 
 func New(sched bindings.Scheduler) *SchedulerProcess {
@@ -70,6 +80,7 @@ func New(sched bindings.Scheduler) *SchedulerProcess {
 		stage:     initStage,
 		elected:   make(chan struct{}),
 		failover:  make(chan struct{}),
+		standby:   make(chan struct{}),
 	}
 	runtime.On(p.Running(), p.begin)
 	return p
@@ -77,6 +88,7 @@ func New(sched bindings.Scheduler) *SchedulerProcess {
 
 func (self *SchedulerProcess) begin() {
 	if (&self.stage).transition(initStage, standbyStage) {
+		close(self.standby)
 		log.Infoln("scheduler process entered standby stage")
 	} else {
 		log.Errorf("failed to transition from init to standby stage")
