@@ -1,5 +1,6 @@
 package proc
 
+// something that executes in the context of a process
 type Action func()
 
 type Context interface {
@@ -25,15 +26,21 @@ type DoerFunc func(Action) <-chan error
 type Process interface {
 	Context
 	Doer
+
+	// see top level OnError func
 	OnError(<-chan error, func(error)) <-chan struct{}
+
+	// return a signal chan that will close once the process is ready to run actions
 	Running() <-chan struct{}
 }
 
 type ErrorOnce interface {
 	// return a chan that only ever sends one error, either obtained via Report() or Forward()
 	Err() <-chan error
+
 	// reports the given error via Err(), but only if no other errors have been reported or forwarded
 	Report(error)
+
 	// waits for an error on the incoming chan, the result of which is later obtained via Err() (if no
 	// other errors have been reported or forwarded)
 	Forward(<-chan error)

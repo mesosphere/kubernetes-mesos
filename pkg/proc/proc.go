@@ -11,21 +11,25 @@ import (
 )
 
 const (
+	// if the action processor crashes (if some Action panics) then we
+	// wait this long before spinning up the action processor again.
 	defaultActionHandlerCrashDelay = 100 * time.Millisecond
-	defaultActionQueueDepth        = 1024
+
+	// how many actions we can store in the backlog
+	defaultActionQueueDepth = 1024
 )
 
 type procImpl struct {
 	Config
-	backlog   chan Action
-	terminate chan struct{} // signaled via close()
-	wg        sync.WaitGroup
+	backlog   chan Action    // action queue
+	terminate chan struct{}  // signaled via close()
+	wg        sync.WaitGroup // End() terminates when the wait is over
 	done      runtime.Signal
 	state     *stateType
 	pid       uint32
-	writeLock sync.Mutex // avoid data race between write and close of backlog
-	changed   *sync.Cond // wait/signal for backlog changes
-	engine    DoerFunc
+	writeLock sync.Mutex    // avoid data race between write and close of backlog
+	changed   *sync.Cond    // wait/signal for backlog changes
+	engine    DoerFunc      // isolated this for easier unit testing later on
 	running   chan struct{} // closes once event loop processing starts
 }
 
@@ -118,7 +122,8 @@ func (self *procImpl) begin() runtime.Signal {
 // execute some action in the context of the current lifecycle. actions
 // executed via this func are to be executed in a concurrency-safe manner:
 // no two actions should execute at the same time. invocations of this func
-// should never block.
+// should not block for very long, unless the action backlog is full or the
+// process is terminating.
 // returns errProcessTerminated if the process already ended.
 func (self *procImpl) doLater(deferredAction Action) (err <-chan error) {
 	a := Action(func() {
@@ -155,6 +160,11 @@ func (self *procImpl) Do(a Action) <-chan error {
 	return self.engine(a)
 }
 
+// spawn a goroutine that waits for an error. if a non-nil error is read from the
+// channel then the handler func is invoked, otherwise (nil error or closed chan)
+// the handler is skipped. if a nil handler is specified then it's not invoked.
+// the signal chan that's returned closes once the error process logic (and handler,
+// if any) has completed.
 func OnError(ch <-chan error, f func(error), abort <-chan struct{}) <-chan struct{} {
 	return runtime.Go(func() {
 		if ch == nil {
