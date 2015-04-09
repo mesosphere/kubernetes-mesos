@@ -37,7 +37,7 @@ func (stage *stageType) get() stageType {
 // execute some action in the deferred context of the process, but only if we
 // match the stage of the process at the time the action is executed.
 func (stage stageType) Do(p *SchedulerProcess, a proc.Action) <-chan error {
-	err := proc.NewErrorOnce(p.Done())
+	errOnce := proc.NewErrorOnce(p.Done())
 	errOuter := p.Do(proc.Action(func() {
 		switch stage {
 		case standbyStage:
@@ -53,13 +53,13 @@ func (stage stageType) Do(p *SchedulerProcess, a proc.Action) <-chan error {
 			case <-p.Done():
 			}
 		case finStage:
-			<-p.Done()
+			errOnce.Report(fmt.Errorf("scheduler process is dying, dropping action"))
 		default:
 		}
-		err.Report(stage.When(p, a))
+		errOnce.Report(stage.When(p, a))
 	}))
-	go err.Forward(errOuter)
-	return err.Err()
+	go errOnce.Forward(errOuter)
+	return errOnce.Err()
 }
 
 // execute some action only if we match the stage of the scheduler process
