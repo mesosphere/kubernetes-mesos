@@ -243,7 +243,12 @@ func (b *errorOnce) Report(err error) {
 	})
 }
 
-func (b *errorOnce) Forward(errIn <-chan error) {
+func (b *errorOnce) Send(errIn <-chan error) ErrorOnce {
+	go b.forward(errIn)
+	return b
+}
+
+func (b *errorOnce) forward(errIn <-chan error) {
 	if errIn == nil {
 		b.Report(nil)
 		return
@@ -269,12 +274,12 @@ func (p *processAdapter) Do(a Action) <-chan error {
 	go func() {
 		errOuter := p.parent.Do(func() {
 			errInner := p.delegate.Do(a)
-			errCh.Forward(errInner)
+			errCh.forward(errInner)
 		})
 		// if the outer err is !nil then either the parent failed to schedule the
 		// the action, or else it backgrounded the scheduling task.
 		if errOuter != nil {
-			errCh.Forward(errOuter)
+			errCh.forward(errOuter)
 		}
 	}()
 	return errCh.Err()

@@ -209,7 +209,7 @@ func TestProc_doWithNestedErrorPropagation(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected !nil error chan")
 	}
-	go errOnce.Forward(err)
+	errOnce.Send(err)
 
 	foundError := false
 	fatalAfter(t, executed, 1*time.Second, "timed out waiting deferred execution")

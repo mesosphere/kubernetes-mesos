@@ -154,8 +154,7 @@ func New(config Config) *KubernetesScheduler {
 					filters := &mesos.Filters{}
 					_, err = k.driver.DeclineOffer(offerId, filters)
 				})
-				go errOnce.Forward(errOuter)
-				return <-errOnce.Err()
+				return <-errOnce.Send(errOuter).Err()
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
 			LingerTTL:     defaultOfferLingerTTL * time.Second,
@@ -722,8 +721,7 @@ func newReconciler(doer proc.Doer, action ReconcilerAction, cooldown time.Durati
 					err = action(driver, cancel)
 				}()
 			})
-			go errOnce.Forward(errCh)
-			return <-errOnce.Err()
+			return <-errOnce.Send(errCh).Err()
 		},
 	}
 }
@@ -782,8 +780,7 @@ requestLoop:
 						log.V(1).Infof("failed to request implicit reconciliation from mesos: %v", err)
 					}
 				})
-				go errOnce.Forward(errCh)
-				if err := <-errOnce.Err(); err != nil {
+				if err := <-errOnce.Send(errCh).Err(); err != nil {
 					log.Errorf("failed to run implicit reconciliation: %v", err)
 				}
 				goto slowdown

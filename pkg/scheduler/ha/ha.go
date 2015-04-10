@@ -58,8 +58,7 @@ func (stage stageType) Do(p *SchedulerProcess, a proc.Action) <-chan error {
 		}
 		errOnce.Report(stage.When(p, a))
 	}))
-	go errOnce.Forward(errOuter)
-	return errOnce.Err()
+	return errOnce.Send(errOuter).Err()
 }
 
 // execute some action only if we match the stage of the scheduler process
@@ -146,8 +145,7 @@ func (self *SchedulerProcess) Elect(newDriver DriverFactory) {
 			log.Errorf("expected RUNNING status, not %v", stat)
 		}
 	}))
-	go errOnce.Forward(errCh)
-	if err := <-errOnce.Err(); err != nil {
+	if err := <-errOnce.Send(errCh).Err(); err != nil {
 		defer self.End()
 		log.Errorf("failed to handle election event, aborting: %v", err)
 	}
