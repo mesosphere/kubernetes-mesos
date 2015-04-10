@@ -53,7 +53,7 @@ func (stage stageType) Do(p *SchedulerProcess, a proc.Action) <-chan error {
 			case <-p.Done():
 			}
 		case finStage:
-			errOnce.Report(fmt.Errorf("scheduler process is dying, dropping action"))
+			errOnce.Reportf("scheduler process is dying, dropping action")
 		default:
 		}
 		errOnce.Report(stage.When(p, a))

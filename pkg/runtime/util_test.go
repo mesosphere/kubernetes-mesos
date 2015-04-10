@@ -15,7 +15,7 @@ func TestUntil(t *testing.T) {
 	//--
 	ch = make(chan struct{})
 	called := make(chan struct{})
-	Go(func() {
+	After(func() {
 		Until(func() {
 			called <- struct{}{}
 		}, 0, ch)
@@ -29,7 +29,7 @@ func TestUntil(t *testing.T) {
 	ch = make(chan struct{})
 	called = make(chan struct{})
 	running := make(chan struct{})
-	Go(func() {
+	After(func() {
 		Until(func() {
 			close(running)
 			called <- struct{}{}

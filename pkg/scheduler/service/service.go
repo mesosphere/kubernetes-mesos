@@ -400,11 +400,11 @@ func (s *SchedulerServer) Run(hks hyperkube.Interface, _ []string) error {
 
 	schedulerProcess, driverFactory, etcdClient, eid := s.bootstrap(hks)
 
+	if s.EnableProfiling {
+		profile.InstallHandler(s.mux)
+	}
 	go runtime.Until(func() {
 		log.V(1).Info("Starting HTTP interface")
-		if s.EnableProfiling {
-			profile.InstallHandler(s.mux)
-		}
 		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), s.mux))
 	}, defaultHttpBindInterval, schedulerProcess.Done())
 
@@ -566,7 +566,7 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProce
 	}
 
 	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(schedulerProcess.Done(), s.mux))
-	runtime.On(mesosPodScheduler.Registration(), kpl.Run)
+	runtime.On(mesosPodScheduler.Registration(), func() { kpl.Run(schedulerProcess.Done()) })
 	runtime.On(mesosPodScheduler.Registration(), s.newServiceWriter(schedulerProcess.Done()))
 
 	deferredInit := func() (err error) {
