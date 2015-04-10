@@ -40,6 +40,7 @@ type ErrorOnce interface {
 
 	// reports the given error via Err(), but only if no other errors have been reported or forwarded
 	Report(error)
+	Reportf(string, ...interface{})
 
 	// waits for an error on the incoming chan, the result of which is later obtained via Err() (if no
 	// other errors have been reported or forwarded)

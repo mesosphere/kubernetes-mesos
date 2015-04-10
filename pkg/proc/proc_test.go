@@ -23,7 +23,7 @@ func errorAfter(errOnce ErrorOnce, done <-chan struct{}, d time.Duration, msg st
 	select {
 	case <-done:
 	case <-time.After(d):
-		errOnce.Report(fmt.Errorf(msg, args...))
+		errOnce.Reportf(msg, args...)
 	}
 }
 
@@ -202,7 +202,7 @@ func TestProc_doWithNestedErrorPropagation(t *testing.T) {
 	decorated2 := DoWith(decorated, DoerFunc(func(a Action) <-chan error {
 		delegated = true
 		a()
-		errOnce.Report(fmt.Errorf("unexpected error in decorator2"))
+		errOnce.Reportf("unexpected error in decorator2")
 		return ErrorChan(fmt.Errorf("another unexpected error in decorator2"))
 	}))
 
@@ -267,17 +267,17 @@ func runDelegationTest(t *testing.T, p Process, name string, errOnce ErrorOnce) 
 	err := decorated.Do(func() {
 		defer close(executed)
 		if y != DEPTH {
-			errOnce.Report(fmt.Errorf("expected delegated execution"))
+			errOnce.Reportf("expected delegated execution")
 		}
 		t.Logf("executing deferred action: " + name)
 	})
 	if err == nil {
-		errOnce.Report(fmt.Errorf("expected !nil error chan"))
+		errOnce.Reportf("expected !nil error chan")
 	}
 	errOnce.Send(err)
 	errorAfter(errOnce, executed, 1*time.Second, "timed out waiting deferred execution")
 	errorAfter(errOnce, decorated.OnError(err, func(e error) {
-		errOnce.Report(fmt.Errorf("unexpected error: %v", err))
+		errOnce.Reportf("unexpected error: %v", err)
 	}), 1*time.Second, "timed out waiting for doer result")
 }
 

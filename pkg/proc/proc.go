@@ -234,6 +234,10 @@ func (b *errorOnce) Err() <-chan error {
 	return b.err
 }
 
+func (b *errorOnce) Reportf(msg string, args ...interface{}) {
+	b.Report(fmt.Errorf(msg, args))
+}
+
 func (b *errorOnce) Report(err error) {
 	b.once.Do(func() {
 		select {
