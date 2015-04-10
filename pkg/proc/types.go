@@ -27,13 +27,17 @@ type Process interface {
 	Context
 	Doer
 
-	// see top level OnError func
+	// see top level OnError func. this implementation will terminate upon the arrival of
+	// an error (and subsequently invoke the error handler, if given) or else the termination
+	// of the process (testable via IsProcessTerminated).
 	OnError(<-chan error, func(error)) <-chan struct{}
 
 	// return a signal chan that will close once the process is ready to run actions
 	Running() <-chan struct{}
 }
 
+// this is an error promise. if we ever start building out support for other promise types it will probably
+// make sense to group them in some sort of "promises" package.
 type ErrorOnce interface {
 	// return a chan that only ever sends one error, either obtained via Report() or Forward()
 	Err() <-chan error
