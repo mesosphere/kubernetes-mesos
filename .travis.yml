@@ -14,4 +14,4 @@ install:
 
 script:
   - make test.cover
-  - $(go env GOPATH | awk 'BEGIN{FS=":"} {print $1}')/bin/goveralls -coverprofile=all.coverage.out -service=travis-ci -repotoken $COVERALLS_TOKEN
+  - test -n "$COVERALLS_TOKEN" && $(go env GOPATH | awk 'BEGIN{FS=":"} {print $1}')/bin/goveralls -coverprofile=all.coverage.out -service=travis-ci -repotoken $COVERALLS_TOKEN || true
