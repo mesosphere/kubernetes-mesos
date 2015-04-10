@@ -28,10 +28,11 @@ import (
 )
 
 const (
-	enqueuePopTimeout  = 200 * time.Millisecond
-	enqueueWaitTimeout = 1 * time.Second
-	yieldPopTimeout    = 200 * time.Millisecond
-	yieldWaitTimeout   = 1 * time.Second
+	enqueuePopTimeout   = 200 * time.Millisecond
+	enqueueWaitTimeout  = 1 * time.Second
+	yieldPopTimeout     = 200 * time.Millisecond
+	yieldWaitTimeout    = 1 * time.Second
+	pluginRecoveryDelay = 100 * time.Millisecond // delay after scheduler plugin crashes, before we resume scheduling
 )
 
 // scheduler abstraction to allow for easier unit testing
@@ -203,7 +204,7 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *pod
 	}
 
 	// the kubelet-executor uses this to instantiate the pod
-	log.V(2).Infof("prepared pod spec: %+v", pod) // TODO(jdef) debug!! too verbose
+	log.V(3).Infof("prepared pod spec: %+v", pod)
 
 	data, err := api.Codec.Encode(&pod)
 	if err != nil {
@@ -396,7 +397,7 @@ func (q *queuer) Run(done <-chan struct{}) {
 			// may proceed even if there have been no recent pod changes
 			p := q.podUpdates.Await(enqueuePopTimeout)
 			if p == nil {
-				signalled := runtime.Go(q.deltaCond.Wait)
+				signalled := runtime.After(q.deltaCond.Wait)
 				// we've yielded the lock
 				select {
 				case <-time.After(enqueueWaitTimeout):
@@ -440,7 +441,7 @@ func (q *queuer) yield() *api.Pod {
 		// enqueuer Run() routine for very long
 		kpod := q.podQueue.Await(yieldPopTimeout)
 		if kpod == nil {
-			signalled := runtime.Go(q.unscheduledCond.Wait)
+			signalled := runtime.After(q.unscheduledCond.Wait)
 			// lock is yielded at this point and we're going to wait for either
 			// a timeout, or a signal that there's data
 			select {
@@ -696,9 +697,9 @@ type schedulingPlugin struct {
 	starting chan struct{}
 }
 
-func (s *schedulingPlugin) Run() {
-	close(s.starting)
-	go runtime.Until(s.scheduleOne, 100*time.Millisecond, nil) // TODO(jdef) extract constant, provide stop chan
+func (s *schedulingPlugin) Run(done <-chan struct{}) {
+	defer close(s.starting)
+	go runtime.Until(s.scheduleOne, pluginRecoveryDelay, done)
 }
 
 // hacked from GoogleCloudPlatform/kubernetes/plugin/pkg/scheduler/scheduler.go,

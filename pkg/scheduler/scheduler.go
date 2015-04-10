@@ -62,7 +62,7 @@ type PluginInterface interface {
 	reconcilePod(api.Pod)
 
 	// execute the Scheduling plugin, should start a go routine and return immediately
-	Run()
+	Run(<-chan struct{})
 }
 
 // KubernetesScheduler implements:

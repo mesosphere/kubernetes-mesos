@@ -15,13 +15,13 @@ type Signal <-chan struct{}
 // two funcs from separate invocations of Closer() (on the same sig chan) will cause a panic if both invoked.
 // for example:
 //     // good
-//     x := runtime.Go(func() { ... })
+//     x := runtime.After(func() { ... })
 //     f := x.Closer()
 //     f()
 //     f()
 //
 //     // bad
-//     x := runtime.Go(func() { ... })
+//     x := runtime.After(func() { ... })
 //     f := x.Closer()
 //     g := x.Closer()
 //     f()
@@ -49,7 +49,7 @@ func On(sig <-chan struct{}, f func()) Signal {
 	if sig == nil {
 		return nil
 	}
-	return Go(func() {
+	return After(func() {
 		<-sig
 		if f != nil {
 			f()
@@ -61,7 +61,7 @@ func OnOSSignal(sig <-chan os.Signal, f func(os.Signal)) Signal {
 	if sig == nil {
 		return nil
 	}
-	return Go(func() {
+	return After(func() {
 		if s, ok := <-sig; ok && f != nil {
 			f(s)
 		}
@@ -70,7 +70,7 @@ func OnOSSignal(sig <-chan os.Signal, f func(os.Signal)) Signal {
 
 // spawn a goroutine to execute a func, immediately returns a chan that closes
 // upon completion of the func. returns a nil signal chan if the given func is nil.
-func Go(f func()) Signal {
+func After(f func()) Signal {
 	ch := make(chan struct{})
 	go func() {
 		defer close(ch)

@@ -29,6 +29,7 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/hyperkube"
+	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 
 	"github.com/spf13/pflag"
 )
@@ -344,18 +345,15 @@ func (kl *kubeletExecutor) ListenAndServe(address net.IP, port uint, tlsOptions 
 	// so only execute certain initialization procs once
 	kl.initialize.Do(func() {
 		if kl.runProxy {
-			go util.Forever(kl.runProxyService, 5*time.Second)
+			go runtime.Until(kl.runProxyService, 5*time.Second, kl.executorDone)
 		}
 		go func() {
 			defer close(kl.finished)
 			if _, err := kl.driver.Run(); err != nil {
-				log.Fatalf("failed to start executor driver: %v", err)
+				log.Fatalf("executor driver failed: %v", err)
 			}
 			log.Info("executor Run completed")
 		}()
-
-		// TODO(who?) Recover running containers from check pointed pod list.
-		// @see reconcileTasks
 	})
 	log.Infof("Starting kubelet server...")
 	kubelet.ListenAndServeKubeletServer(kl, address, port, tlsOptions, enableDebuggingHandlers, kl.enableProfiling)

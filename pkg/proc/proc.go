@@ -93,7 +93,7 @@ func (self *procImpl) begin() runtime.Signal {
 	defer log.V(2).Infof("started process %d", self.pid)
 	var entered runtime.Latch
 	// execute actions on the backlog chan
-	return runtime.Go(func() {
+	return runtime.After(func() {
 		runtime.Until(func() {
 			if entered.Acquire() {
 				close(self.running)
@@ -166,7 +166,7 @@ func (self *procImpl) Do(a Action) <-chan error {
 // the signal chan that's returned closes once the error process logic (and handler,
 // if any) has completed.
 func OnError(ch <-chan error, f func(error), abort <-chan struct{}) <-chan struct{} {
-	return runtime.Go(func() {
+	return runtime.After(func() {
 		if ch == nil {
 			return
 		}
