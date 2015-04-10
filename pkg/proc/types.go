@@ -43,5 +43,8 @@ type ErrorOnce interface {
 
 	// waits for an error on the incoming chan, the result of which is later obtained via Err() (if no
 	// other errors have been reported or forwarded)
-	Forward(<-chan error)
+	forward(<-chan error)
+
+	// non-blocking, spins up a goroutine that reports an error (if any) that occurs on the error chan.
+	Send(<-chan error) ErrorOnce
 }
