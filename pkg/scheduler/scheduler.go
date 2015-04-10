@@ -99,7 +99,6 @@ type KubernetesScheduler struct {
 	// unsafe state, needs to be guarded
 
 	slaves       map[string]*Slave // SlaveID => slave.
-	slaveIDs     map[string]string // Slave's hostname => slaveID
 	taskRegistry podtask.Registry
 
 	// via deferred init
@@ -162,7 +161,6 @@ func New(config Config) *KubernetesScheduler {
 			ListenerDelay: defaultListenerDelay * time.Second,
 		}),
 		slaves:            make(map[string]*Slave),
-		slaveIDs:          make(map[string]string),
 		taskRegistry:      podtask.NewInMemoryRegistry(),
 		reconcileCooldown: config.ReconcileCooldown,
 		registration:      make(chan struct{}),
@@ -337,12 +335,10 @@ func (k *KubernetesScheduler) ResourceOffers(driver bindings.SchedulerDriver, of
 	k.offers.Add(offers)
 	for _, offer := range offers {
 		slaveId := offer.GetSlaveId().GetValue()
-		slave, exists := k.slaves[slaveId]
+		_, exists := k.slaves[slaveId]
 		if !exists {
 			k.slaves[slaveId] = newSlave(offer.GetHostname())
-			slave = k.slaves[slaveId]
 		}
-		k.slaveIDs[slave.HostName] = slaveId
 	}
 }
 
@@ -854,7 +850,6 @@ func (ks *KubernetesScheduler) recoverTasks() error {
 			slave = newSlave(t.Offer.Host())
 			ks.slaves[slaveId] = slave
 		}
-		ks.slaveIDs[slave.HostName] = slaveId
 	}
 	for _, pod := range podList.Items {
 		if t, ok, err := podtask.RecoverFrom(pod); err != nil {
