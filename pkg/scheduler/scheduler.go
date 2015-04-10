@@ -165,7 +165,7 @@ func New(config Config) *KubernetesScheduler {
 		reconcileCooldown: config.ReconcileCooldown,
 		registration:      make(chan struct{}),
 		asRegisteredMaster: proc.DoerFunc(func(proc.Action) <-chan error {
-			return proc.ErrorChan(fmt.Errorf("cannot execute action with unregistered scheduler"))
+			return proc.ErrorChanf("cannot execute action with unregistered scheduler")
 		}),
 	}
 	return k
@@ -177,7 +177,7 @@ func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterfac
 	//TODO(jdef) watch electedMaster.Done() to figure out when background jobs should be shut down
 	k.asRegisteredMaster = proc.DoerFunc(func(a proc.Action) <-chan error {
 		if !k.registered {
-			return proc.ErrorChan(fmt.Errorf("failed to execute registered action, scheduler is disconnected"))
+			return proc.ErrorChanf("failed to execute registered action, scheduler is disconnected")
 		}
 		return electedMaster.Do(a)
 	})

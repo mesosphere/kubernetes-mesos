@@ -235,7 +235,7 @@ func (b *errorOnce) Err() <-chan error {
 }
 
 func (b *errorOnce) Reportf(msg string, args ...interface{}) {
-	b.Report(fmt.Errorf(msg, args))
+	b.Report(fmt.Errorf(msg, args...))
 }
 
 func (b *errorOnce) Report(err error) {
@@ -326,6 +326,10 @@ func DoWith(other Process, d Doer) Process {
 		parent:   other,
 		delegate: d,
 	}
+}
+
+func ErrorChanf(msg string, args ...interface{}) <-chan error {
+	return ErrorChan(fmt.Errorf(msg, args...))
 }
 
 func ErrorChan(err error) <-chan error {

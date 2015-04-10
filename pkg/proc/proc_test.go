@@ -203,7 +203,7 @@ func TestProc_doWithNestedErrorPropagation(t *testing.T) {
 		delegated = true
 		a()
 		errOnce.Reportf("unexpected error in decorator2")
-		return ErrorChan(fmt.Errorf("another unexpected error in decorator2"))
+		return ErrorChanf("another unexpected error in decorator2")
 	}))
 
 	executed := make(chan struct{})
@@ -254,7 +254,7 @@ func runDelegationTest(t *testing.T, p Process, name string, errOnce ErrorOnce) 
 			}
 			y++
 			if y != x {
-				return ErrorChan(fmt.Errorf("out of order delegated execution"))
+				return ErrorChanf("out of order delegated execution")
 			}
 			defer wg.Done()
 			a()
