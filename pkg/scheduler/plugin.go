@@ -74,9 +74,7 @@ func (k *k8smScheduler) createPodTask(ctx api.Context, pod *api.Pod) (*podtask.T
 }
 
 func (k *k8smScheduler) slaveFor(id string) (slave *Slave, ok bool) {
-	k.internal.RLock()
-	defer k.internal.RUnlock()
-	slave, ok = k.internal.slaves[id]
+	slave, ok = k.internal.slaves.getSlave(id)
 	return
 }
 

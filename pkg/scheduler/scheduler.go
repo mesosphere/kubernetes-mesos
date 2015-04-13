@@ -56,6 +56,44 @@ func newSlave(hostName string) *Slave {
 	}
 }
 
+type slaveStorage struct {
+	sync.Mutex
+	slaves map[string]*Slave // SlaveID => slave.
+}
+
+func newSlaveStorage() *slaveStorage {
+	return &slaveStorage{
+		slaves: make(map[string]*Slave),
+	}
+}
+
+// Create a mapping between a slaveID and slave if not existing.
+func (self *slaveStorage) checkAndAdd(slaveId, slaveHostname string) {
+	self.Lock()
+	defer self.Unlock()
+	_, exists := self.slaves[slaveId]
+	if !exists {
+		self.slaves[slaveId] = newSlave(slaveHostname)
+	}
+}
+
+func (self *slaveStorage) getSlaveIds() []string {
+	self.Lock()
+	defer self.Unlock()
+	slaveIds := make([]string, 0, len(self.slaves))
+	for slaveID, _ := range self.slaves {
+		slaveIds = append(slaveIds, slaveID)
+	}
+	return slaveIds
+}
+
+func (self *slaveStorage) getSlave(slaveId string) (*Slave, bool) {
+	self.Lock()
+	defer self.Unlock()
+	slave, exists := self.slaves[slaveId]
+	return slave, exists
+}
+
 type PluginInterface interface {
 	// the apiserver may have a different state for the pod than we do
 	// so reconcile our records, but only for this one pod
@@ -95,10 +133,10 @@ type KubernetesScheduler struct {
 	registration   chan struct{} // signal chan that closes upon first successful registration
 	onRegistration sync.Once
 	offers         offers.Registry
+	slaves         *slaveStorage
 
 	// unsafe state, needs to be guarded
 
-	slaves       map[string]*Slave // SlaveID => slave.
 	taskRegistry podtask.Registry
 
 	// via deferred init
@@ -160,7 +198,7 @@ func New(config Config) *KubernetesScheduler {
 			TTL:           defaultOfferTTL * time.Second,
 			ListenerDelay: defaultListenerDelay * time.Second,
 		}),
-		slaves:            make(map[string]*Slave),
+		slaves:            newSlaveStorage(),
 		taskRegistry:      podtask.NewInMemoryRegistry(),
 		reconcileCooldown: config.ReconcileCooldown,
 		registration:      make(chan struct{}),
@@ -226,17 +264,7 @@ func (k *KubernetesScheduler) InstallDebugHandlers(mux *http.ServeMux) {
 	requestReconciliation("/debug/actions/requestImplicit", k.reconciler.RequestImplicit)
 
 	wrappedHandler("/debug/actions/kamikaze", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ids := make(chan []string, 1)
-		func() {
-			k.Lock()
-			defer k.Unlock()
-			slaves := []string{}
-			for slaveId, _ := range k.slaves {
-				slaves = append(slaves, slaveId)
-			}
-			ids <- slaves
-		}()
-		slaves := <-ids
+		slaves := k.slaves.getSlaveIds()
 		for _, slaveId := range slaves {
 			_, err := k.driver.SendFrameworkMessage(
 				k.executor.ExecutorId,
@@ -328,17 +356,11 @@ func (k *KubernetesScheduler) Disconnected(driver bindings.SchedulerDriver) {
 func (k *KubernetesScheduler) ResourceOffers(driver bindings.SchedulerDriver, offers []*mesos.Offer) {
 	log.V(2).Infof("Received offers %+v", offers)
 
-	k.Lock()
-	defer k.Unlock()
-
 	// Record the offers in the global offer map as well as each slave's offer map.
 	k.offers.Add(offers)
 	for _, offer := range offers {
 		slaveId := offer.GetSlaveId().GetValue()
-		_, exists := k.slaves[slaveId]
-		if !exists {
-			k.slaves[slaveId] = newSlave(offer.GetHostname())
-		}
+		k.slaves.checkAndAdd(slaveId, offer.GetHostname())
 	}
 }
 
@@ -386,9 +408,7 @@ func (k *KubernetesScheduler) StatusUpdate(driver bindings.SchedulerDriver, task
 			} // else, we don't really care about FINISHED tasks that aren't registered
 			return
 		}
-		k.RLock()
-		defer k.RUnlock()
-		if _, knownSlave := k.slaves[taskStatus.GetSlaveId().GetValue()]; !knownSlave {
+		if _, exists := k.slaves.getSlave(taskStatus.GetSlaveId().GetValue()); !exists {
 			// a registered task has an update reported by a slave that we don't recognize.
 			// this should never happen! So we don't reconcile it.
 			log.Errorf("Ignore status %+v because the slave does not exist", taskStatus)
@@ -841,15 +861,9 @@ func (ks *KubernetesScheduler) recoverTasks() error {
 		return err
 	}
 	recoverSlave := func(t *podtask.T) {
-		ks.Lock()
-		defer ks.Unlock()
 
 		slaveId := t.Spec.SlaveID
-		slave, exists := ks.slaves[slaveId]
-		if !exists {
-			slave = newSlave(t.Offer.Host())
-			ks.slaves[slaveId] = slave
-		}
+		ks.slaves.checkAndAdd(slaveId, t.Offer.Host())
 	}
 	for _, pod := range podList.Items {
 		if t, ok, err := podtask.RecoverFrom(pod); err != nil {
