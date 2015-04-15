@@ -1,0 +1,16 @@
+{
+  "id": "etcd-server", 
+  "cpus": 0.5,
+  "mem": 128.0,
+  "instances": 3,
+  "ports": [ 4001, 2380, 2379 ],
+  "container": {
+    "type": "DOCKER",
+    "docker": {
+      "image": "jdef/k8sm-etcd:2.0.9"
+    }
+  },
+  "env": {
+    "ETCD_DISCOVERY": "ETCD_DISCOVERY_VALUE"
+  }
+}
