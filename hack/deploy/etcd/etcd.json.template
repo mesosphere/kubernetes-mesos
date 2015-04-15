@@ -2,7 +2,7 @@
   "id": "etcd-server", 
   "cpus": 0.5,
   "mem": 128.0,
-  "instances": 3,
+  "instances": CLUSTER_SIZE_VALUE,
   "ports": [ 4001, 2380, 2379 ],
   "container": {
     "type": "DOCKER",
