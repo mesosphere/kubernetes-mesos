@@ -8,7 +8,6 @@ _obj
 _test
 bin
 _build
-.vagrant
 
 # Architecture specific extensions/prefixes
 *.[568vq]
