@@ -52,6 +52,19 @@ $ make test                        # execute unit tests
 $ make install DESTDIR=$(pwd)/bin  # install to ./bin
 ```
 
+### Build using Go
+**NOTE:** Building Kubernetes for Mesos requires Go 1.4+.
+```shell
+$ git clone https://github.com/mesosphere/kubernetes-mesos.git k8sm
+$ cd k8sm
+$ go run makefile.go [command]
+```
+
+the available commands are `help`, `install` and `all` for the moment.
+`install` will output the binaries to ./target
+
+if building a binary is required, then run `go build makefile.go`
+
 ### Start the framework
 
 **NETWORKING:** Kubernetes v0.5 introduced "Services v2" which follows an IP-per-Service model.
