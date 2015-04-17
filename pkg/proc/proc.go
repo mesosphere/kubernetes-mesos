@@ -197,24 +197,26 @@ func (self *procImpl) flush() {
 	}
 }
 
-func (self *procImpl) End() {
-	if self.state.transitionTo(stateTerminal, stateTerminal) {
-		self.writeLock.Lock()
-		defer self.writeLock.Unlock()
+func (self *procImpl) End() <-chan struct{} {
+	return runtime.After(func() {
+		if self.state.transitionTo(stateTerminal, stateTerminal) {
+			self.writeLock.Lock()
+			defer self.writeLock.Unlock()
 
-		log.V(2).Infof("terminating process %d", self.pid)
+			log.V(2).Infof("terminating process %d", self.pid)
 
-		close(self.backlog)
-		close(self.terminate)
-		self.wg.Done()
-		self.changed.Broadcast()
+			close(self.backlog)
+			close(self.terminate)
+			self.wg.Done()
+			self.changed.Broadcast()
 
-		log.V(2).Infof("waiting for deferred actions to complete")
+			log.V(2).Infof("waiting for deferred actions to complete")
 
-		// wait for all pending actions to complete, then flush the backlog
-		self.wg.Wait()
-		self.flush()
-	}
+			// wait for all pending actions to complete, then flush the backlog
+			self.wg.Wait()
+			self.flush()
+		}
+	})
 }
 
 type errorOnce struct {
@@ -289,10 +291,11 @@ func (p *processAdapter) Do(a Action) <-chan error {
 	return errCh.Err()
 }
 
-func (p *processAdapter) End() {
+func (p *processAdapter) End() <-chan struct{} {
 	if p != nil && p.parent != nil {
-		p.parent.End()
+		return p.parent.End()
 	}
+	return nil
 }
 
 func (p *processAdapter) Done() <-chan struct{} {

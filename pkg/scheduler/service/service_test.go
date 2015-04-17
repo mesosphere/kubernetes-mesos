@@ -5,14 +5,11 @@ package service
 import (
 	"testing"
 	"time"
-
-	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 )
 
 type fakeSchedulerProcess struct {
 	doneFunc     func() <-chan struct{}
 	failoverFunc func() <-chan struct{}
-	ended        runtime.Latch
 }
 
 func (self *fakeSchedulerProcess) Done() <-chan struct{} {
@@ -29,8 +26,10 @@ func (self *fakeSchedulerProcess) Failover() <-chan struct{} {
 	return self.failoverFunc()
 }
 
-func (self *fakeSchedulerProcess) End() {
-	self.ended.Acquire()
+func (self *fakeSchedulerProcess) End() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
 }
 
 func Test_awaitFailoverDone(t *testing.T) {

@@ -857,7 +857,7 @@ func (ks *KubernetesScheduler) recoverTasks() error {
 	ctx := api.NewDefaultContext()
 	podList, err := ks.client.Pods(api.NamespaceValue(ctx)).List(labels.Everything())
 	if err != nil {
-		log.V(1).Info("failed to recover pod registry, madness may ensue: %v", err)
+		log.V(1).Infof("failed to recover pod registry, madness may ensue: %v", err)
 		return err
 	}
 	recoverSlave := func(t *podtask.T) {

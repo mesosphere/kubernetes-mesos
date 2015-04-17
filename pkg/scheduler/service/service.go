@@ -121,7 +121,7 @@ type SchedulerServer struct {
 // useful for unit testing specific funcs
 type schedulerProcessInterface interface {
 	Done() <-chan struct{}
-	End()
+	End() <-chan struct{}
 	Failover() <-chan struct{}
 }
 

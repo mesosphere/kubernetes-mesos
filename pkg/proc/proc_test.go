@@ -42,7 +42,7 @@ func TestProc_manyEndings(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(COUNT)
 	for i := 0; i < COUNT; i++ {
-		runtime.After(p.End).Then(wg.Done)
+		runtime.On(p.End(), wg.Done)
 	}
 	fatalAfter(t, runtime.After(wg.Wait), 1*time.Second, "timed out waiting for loose End()s")
 	fatalAfter(t, p.Done(), 1*time.Second, "timed out waiting for process death")
@@ -70,6 +70,29 @@ func TestProc_singleAction(t *testing.T) {
 
 	p.End()
 
+	fatalAfter(t, p.Done(), 2*time.Second, "timed out waiting for process death")
+}
+
+func TestProc_singleActionEnd(t *testing.T) {
+	p := New()
+	scheduled := make(chan struct{})
+	called := make(chan struct{})
+
+	go func() {
+		log.Infof("do'ing deferred action")
+		defer close(scheduled)
+		err := p.Do(func() {
+			defer close(called)
+			log.Infof("deferred action invoked")
+			p.End()
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}()
+
+	fatalAfter(t, scheduled, 1*time.Second, "timed out waiting for deferred action to be scheduled")
+	fatalAfter(t, called, 1*time.Second, "timed out waiting for deferred action to be invoked")
 	fatalAfter(t, p.Done(), 2*time.Second, "timed out waiting for process death")
 }
 
@@ -113,6 +136,7 @@ func TestProc_goodLifecycle(t *testing.T) {
 func TestProc_doWithDeadProc(t *testing.T) {
 	p := New()
 	p.End()
+	time.Sleep(100 * time.Millisecond)
 
 	errUnexpected := fmt.Errorf("unexpected execution of delegated action")
 	decorated := DoWith(p, DoerFunc(func(_ Action) <-chan error {
@@ -285,7 +309,7 @@ func TestProc_doWithNestedX(t *testing.T) {
 	p := New()
 	errOnce := NewErrorOnce(p.Done())
 	runDelegationTest(t, p, "nested", errOnce)
-	p.End()
+	<-p.End()
 	select {
 	case err := <-errOnce.Err():
 		if err != nil {
@@ -310,7 +334,7 @@ func TestProc_doWithNestedXConcurrent(t *testing.T) {
 	ch := runtime.After(wg.Wait)
 	fatalAfter(t, ch, 2*time.Second, "timed out waiting for concurrent delegates")
 
-	p.End()
+	<-p.End()
 
 	select {
 	case err := <-errOnce.Err():

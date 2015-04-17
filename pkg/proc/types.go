@@ -5,7 +5,7 @@ type Action func()
 
 type Context interface {
 	// end (terminate) the execution context
-	End()
+	End() <-chan struct{}
 
 	// return a signal chan that will close upon the termination of this process
 	Done() <-chan struct{}

@@ -102,10 +102,10 @@ func (self *SchedulerProcess) begin() {
 	}
 }
 
-func (self *SchedulerProcess) End() {
-	defer self.Process.End()
+func (self *SchedulerProcess) End() <-chan struct{} {
 	(&self.stage).set(finStage)
 	log.Infoln("scheduler process entered fin stage")
+	return self.Process.End()
 }
 
 func (self *SchedulerProcess) Elect(newDriver DriverFactory) {
