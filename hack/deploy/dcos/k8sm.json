@@ -1,0 +1,16 @@
+{
+  "id": "/k8sm",
+  "cpus": 0.75,
+  "mem": 384.0,
+  "ports": [ 8888, 10251, 10252 ],
+  "container": {
+    "type": "DOCKER",
+    "docker": {
+      "image": "jdef/k8sm-km-dcos:0.14.2-0.5-dev",
+      "forcePullImage": true
+    }
+  },
+  "env":{
+    "GLOG_v": "1"
+  }
+}
