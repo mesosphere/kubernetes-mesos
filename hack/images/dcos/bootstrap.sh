@@ -5,12 +5,12 @@ die() {
 }
 
 leading_master() {
-  test -n "$MESOS_MASTER" && {
-    echo $MESOS_MASTER
+  test -n "$K8SM_MESOS_MASTER" && {
+    echo $K8SM_MESOS_MASTER
     return
   }
   local leader=$(nslookup leader.mesos | sed -e '/^Server:/,/^Address .*$/{ d }' -e '/^$/d'|grep -e '^Address '|cut -f3 -d' ')
-  test -n "$leader" || die Failed to identify mesos master, missing MESOS_MASTER variable and cannot find leader.mesos
+  test -n "$leader" || die Failed to identify mesos master, missing K8SM_MESOS_MASTER variable and cannot find leader.mesos
   echo leader.mesos:5050
 }
 
@@ -30,64 +30,96 @@ etcd_servers() {
   echo http://leader.mesos:4001
 }
 
-api_server() {
-  test -n "$KUBERNETES_MASTER" && {
-    echo $KUBERNETES_MASTER
-    return
-  }
-  local apiserver_addr=${KUBE_APISERVER_ADDR:-leader.mesos}
-  local apiserver_port=${KUBE_APISERVER_PORT:-8888}
-  echo http://${apiserver_addr}:${apiserver_port}
+prepare_var_run() {
+  local hostpath=/var/run/kubernetes
+  local run=${MESOS_SANDBOX}/run
+
+  test -L $hostpath && rm -f $hostpath
+  test -d $hostpath && rm -rf $hostpath  # should not happen, but...
+  test -f $hostpath && rm -f $hostpath   # should not happen, but...
+  mkdir -p $(dirname $hostpath) && mkdir -p $run && ln -s $run $hostpath && chown nobody:nobody $run
 }
 
+prepare_service_script() {
+  local svcdir=$1
+  local name=$2
+  local script=$3
+  mkdir -p ${svcdir}/${name} || die Failed to create service directory at $svcdir/$name
+  cat >${svcdir}/${name}/${script}
+  chmod +x ${svcdir}/${name}/${script}
+
+  test "$script" == "run" || return 0
+
+  # only set up logging for run service scripts
+  mkdir -p $log_dir/$name
+  mkdir -p ${svcdir}/${name}/log
+  cat <<EOF >${svcdir}/${name}/log/run
+#!/bin/sh
+exec s6-log ${log_args} $log_dir/$name
+EOF
+  chmod +x ${svcdir}/${name}/log/run
+}
+
+log_dir=${LOG_DIR:-$MESOS_SANDBOX/log}
 service_dir=${SERVICE_DIR:-$MESOS_SANDBOX/services}
 mesos_master=$(leading_master) || die
 etcd_server_list=$(etcd_servers) || die
-apiserver=$(api_server) || die
 logv=${GLOG_v:-0}
+log_history=${LOG_HISTORY:-10}
+log_size=${LOG_SIZE:-2000000}
+
+log_args="-p -b n${log_history} s${log_size}"
+
+# run service procs as "nobody"
+apply_uids="s6-applyuidgid -u 99 -g 99"
 
 #
 # create services directories and scripts
 #
-mkdir -p ${service_dir}/apiserver
-mkdir -p ${service_dir}/controller-manager
-mkdir -p ${service_dir}/scheduler
+mkdir -p ${log_dir}
+prepare_var_run || die Failed to initialize apiserver run directory
 
-cat <<EOF >${service_dir}/apiserver/run
+prepare_service_script ${service_dir} .s6-svscan finish <<EOF
 #!/bin/sh
-exec /km apiserver \\
-      --address=$HOST \\
-      --port=$PORT_8888 \\
-      --mesos_master=${mesos_master} \\
-      --etcd_servers=${etcd_server_list} \\
-      --portal_net=${PORTAL_NET:-10.10.10.0/24} \\
-      --cloud_provider=mesos \\
-      --v=$logv >$MESOS_SANDBOX/apiserver.log 2>&1
+  local hostpath=/var/run/kubernetes
+  test -L $hostpath && rm -f $hostpath
 EOF
 
-cat <<EOF >${service_dir}/controller-manager/run
+prepare_service_script ${service_dir} apiserver run <<EOF
 #!/bin/sh
-exec /km controller-manager \\
-      --address=$HOST \\
-      --port=$PORT_10252 \\
-      --mesos_master=${mesos_master} \\
-      --master=${apiserver} \\
-      --v=$logv >$MESOS_SANDBOX/controller-manager.log 2>&1
+exec $apply_uids /km apiserver \\
+  --address=$HOST \\
+  --port=$PORT_8888 \\
+  --mesos_master=${mesos_master} \\
+  --etcd_servers=${etcd_server_list} \\
+  --portal_net=${PORTAL_NET:-10.10.10.0/24} \\
+  --cloud_provider=mesos \\
+  --v=${APISERVER_GLOG_v:-${logv}} \\
+  2>&1
 EOF
 
-cat <<EOF >${service_dir}/scheduler/run
+prepare_service_script ${service_dir} controller-manager run <<EOF
 #!/bin/sh
-exec /km scheduler \\
-      --address=$HOST \\
-      --port=$PORT_10251 \\
-      --mesos_master=${mesos_master} \\
-      --api_servers=${apiserver} \\
-      --etcd_servers=${etcd_server_list} \\
-      --mesos_user=${MESOS_USER:-root} \\
-      --v=$logv >$MESOS_SANDBOX/scheduler.log 2>&1
+exec $apply_uids /km controller-manager \\
+  --address=$HOST \\
+  --port=$PORT_10252 \\
+  --mesos_master=${mesos_master} \\
+  --master=http://$HOST:$PORT_8888 \\
+  --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}} \\
+  2>&1
 EOF
 
-chmod +x ${service_dir}/apiserver/run
-chmod +x ${service_dir}/controller-manager/run
-chmod +x ${service_dir}/scheduler/run
-exec /usr/bin/s6-svscan -t${S6_RESCAN:-5000000} ${service_dir}
+prepare_service_script ${service_dir} scheduler run <<EOF
+#!/bin/sh
+exec $apply_uids /km scheduler \\
+  --address=$HOST \\
+  --port=$PORT_10251 \\
+  --mesos_master=${mesos_master} \\
+  --api_servers=http://$HOST:$PORT_8888 \\
+  --etcd_servers=${etcd_server_list} \\
+  --mesos_user=${K8SM_MESOS_USER:-root} \\
+  --v=${SCHEDULER_GLOG_v:-${logv}} \\
+  2>&1
+EOF
+
+exec /usr/bin/s6-svscan -t${S6_RESCAN:-500000} ${service_dir}
