@@ -100,6 +100,7 @@ type KubernetesExecutor struct {
 	shutdownAlert       func()          // invoked just prior to executor shutdown
 	kubeletFinished     <-chan struct{} // signals that kubelet Run() died
 	initialRegistration sync.Once
+	staticPods          []api.Pod
 }
 
 type Config struct {
@@ -183,6 +184,10 @@ func (k *KubernetesExecutor) Registered(driver bindings.ExecutorDriver,
 	if !(&k.state).transition(disconnectedState, connectedState) {
 		log.Errorf("failed to register/transition to a connected state")
 	}
+
+	//get static pods info from executorInfo
+	//k.staticPods =
+
 	k.initialRegistration.Do(k.onInitialRegistration)
 }
 
@@ -196,6 +201,9 @@ func (k *KubernetesExecutor) Reregistered(driver bindings.ExecutorDriver, slaveI
 	if !(&k.state).transition(disconnectedState, connectedState) {
 		log.Errorf("failed to reregister/transition to a connected state")
 	}
+	//get static pods info from executorInfo
+	//k.staticPods =
+
 	k.initialRegistration.Do(k.onInitialRegistration)
 }
 
@@ -206,6 +214,9 @@ func (k *KubernetesExecutor) onInitialRegistration() {
 		Op:     kubelet.SET,
 		Source: k.sourcename,
 	}
+
+	//start static pod
+
 }
 
 // Disconnected is called when the executor is disconnected with the slave.
@@ -775,6 +786,61 @@ func (k *KubernetesExecutor) sendFrameworkMessage(driver bindings.ExecutorDriver
 	default:
 		k.outgoing <- func() (mesos.Status, error) { return driver.SendFrameworkMessage(msg) }
 	}
+}
+
+//  start static pods in the same context as executor
+// 	mesos ressource accounting is already included in the executor ressources
+func (k *KubernetesExecutor) launchStaticPods() {
+
+	for _, staticPod := range k.staticPods {
+		log.V(1).Info("Starting StaticPod")
+
+		if !k.isConnected() {
+			log.Errorf("Ignore launch task because the executor is disconnected\n")
+			return
+		}
+
+		//HACK(jdef): cloned binding construction from k8s plugin/pkg/scheduler/scheduler.go
+		binding := &api.Binding{
+			ObjectMeta: api.ObjectMeta{
+				Namespace:   staticPod.Namespace,
+				Name:        staticPod.Name,
+				Annotations: make(map[string]string),
+			},
+			Target: api.ObjectReference{
+				Kind: "Node",
+				Name: staticPod.Annotations[meta.BindingHostKey],
+			},
+		}
+
+		// forward the annotations that the scheduler wants to apply
+		for k, v := range staticPod.Annotations {
+			binding.Annotations[k] = v
+		}
+
+		log.Infof("Binding '%v/%v' to '%v' with annotations %+v...", staticPod.Namespace, staticPod.Name, binding.Target.Name, binding.Annotations)
+		ctx := api.WithNamespace(api.NewContext(), binding.Namespace)
+		// TODO(k8s): use Pods interface for binding once clusters are upgraded
+		// return b.Pods(binding.Namespace).Bind(binding)
+		err := k.client.Post().Namespace(api.NamespaceValue(ctx)).Resource("bindings").Body(binding).Do().Error()
+		if err != nil {
+			log.Error("Failed to post bindings.")
+			return
+		}
+
+		podFullName := container.GetPodFullName(&staticPod)
+
+		//should we add/track staticPod tasks
+		k.pods[podFullName] = &staticPod
+	}
+
+	// Send the pod updates to the channel.
+	update := kubelet.PodUpdate{Op: kubelet.SET}
+	for _, p := range k.pods {
+		update.Pods = append(update.Pods, *p)
+	}
+	k.updateChan <- update
+
 }
 
 func (k *KubernetesExecutor) sendLoop() {

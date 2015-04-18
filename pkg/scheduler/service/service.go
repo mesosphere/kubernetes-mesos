@@ -117,6 +117,7 @@ type SchedulerServer struct {
 	KubeletHostNetworkSources     string
 	KubeletSyncFrequency          time.Duration
 	KubeletNetworkPluginName      string
+	StaticPodsConfigFileName      string
 
 	executable string // path to the binary running this service
 	client     *client.Client
@@ -174,6 +175,7 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&s.AllowPrivileged, "allow_privileged", s.AllowPrivileged, "If true, allow privileged containers.")
 	fs.StringVar(&s.ClusterDomain, "cluster_domain", s.ClusterDomain, "Domain for this cluster.  If set, kubelet will configure all containers to search this domain in addition to the host's search domains")
 	fs.Var(&s.ClusterDNS, "cluster_dns", "IP address for a cluster DNS server. If set, kubelet will configure all containers to use this for DNS resolution in addition to the host's DNS servers")
+	fs.StringVar(&s.StaticPodsConfigFileName, "static_pods_config", s.StaticPodsConfigFileName, "Filename for specification of static pods. Defaults to none.")
 
 	fs.StringVar(&s.MesosMaster, "mesos_master", s.MesosMaster, "Location of the Mesos master. The format is a comma-delimited list of of hosts like zk://host1:port,host2:port/mesos. If using ZooKeeper, pay particular attention to the leading zk:// and trailing /mesos! If not using ZooKeeper, standard URLs like http://localhost are also acceptable.")
 	fs.StringVar(&s.MesosUser, "mesos_user", s.MesosUser, "Mesos user for this framework, defaults to root.")
@@ -556,14 +558,15 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface, sc *schedcfg.Config
 	}
 
 	mesosPodScheduler := scheduler.New(scheduler.Config{
-		Schedcfg:          *sc,
-		Executor:          executor,
-		ScheduleFunc:      scheduler.FCFSScheduleFunc,
-		Client:            client,
-		EtcdClient:        etcdClient,
-		FailoverTimeout:   s.FailoverTimeout,
-		ReconcileInterval: s.ReconcileInterval,
-		ReconcileCooldown: s.ReconcileCooldown,
+		Schedcfg:             *sc,
+		Executor:             executor,
+		ScheduleFunc:         scheduler.FCFSScheduleFunc,
+		Client:               client,
+		EtcdClient:           etcdClient,
+		FailoverTimeout:      s.FailoverTimeout,
+		ReconcileInterval:    s.ReconcileInterval,
+		ReconcileCooldown:    s.ReconcileCooldown,
+		StaticPodsConfigFile: s.StaticPodsConfigFileName,
 	})
 
 	masterUri := s.MesosMaster

@@ -122,6 +122,7 @@ type KubernetesScheduler struct {
 	onRegistration sync.Once
 	offers         offers.Registry
 	slaves         *slaveStorage
+	staticPods     []api.Pod
 
 	// unsafe state, needs to be guarded
 
@@ -137,14 +138,15 @@ type KubernetesScheduler struct {
 }
 
 type Config struct {
-	Schedcfg          schedcfg.Config
-	Executor          *mesos.ExecutorInfo
-	ScheduleFunc      PodScheduleFunc
-	Client            *client.Client
-	EtcdClient        tools.EtcdGetSet
-	FailoverTimeout   float64
-	ReconcileInterval int64
-	ReconcileCooldown time.Duration
+	Schedcfg             schedcfg.Config
+	Executor             *mesos.ExecutorInfo
+	ScheduleFunc         PodScheduleFunc
+	Client               *client.Client
+	EtcdClient           tools.EtcdGetSet
+	FailoverTimeout      float64
+	ReconcileInterval    int64
+	ReconcileCooldown    time.Duration
+	StaticPodsConfigFile string
 }
 
 // New create a new KubernetesScheduler
