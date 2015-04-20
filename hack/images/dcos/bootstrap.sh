@@ -58,6 +58,9 @@ prepare_service_script() {
 exec s6-log ${log_args} $log_dir/$name
 EOF
   chmod +x ${svcdir}/${name}/log/run
+
+  local loglink=log/$name/current
+  ln -sv $loglink ${MESOS_SANDBOX}/${name}.log
 }
 
 log_dir=${LOG_DIR:-$MESOS_SANDBOX/log}
