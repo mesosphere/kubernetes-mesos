@@ -1,7 +1,7 @@
 {
   "id": "/k8sm",
-  "cpus": 0.75,
-  "mem": 384.0,
+  "cpus": 1,
+  "mem": 1024.0,
   "ports": [ 8888, 10251, 10252 ],
   "container": {
     "type": "DOCKER",
