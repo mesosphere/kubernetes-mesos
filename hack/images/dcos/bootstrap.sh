@@ -89,6 +89,9 @@ prepare_service_script ${service_dir} .s6-svscan finish <<EOF
   test -L $hostpath && rm -f $hostpath
 EOF
 
+#
+# apiserver, uses frontend service proxy to connect with etcd
+#
 prepare_service_script ${service_dir} apiserver run <<EOF
 #!/bin/sh
 exec $apply_uids /km apiserver \\
@@ -102,17 +105,27 @@ exec $apply_uids /km apiserver \\
   2>&1
 EOF
 
+#
+# controller-manager, doesn't need to use frontend proxy to access
+# apiserver like the scheduler, it can access it directly here.
+#
 prepare_service_script ${service_dir} controller-manager run <<EOF
 #!/bin/sh
 exec $apply_uids /km controller-manager \\
   --address=$HOST \\
   --port=$PORT_10252 \\
   --mesos_master=${mesos_master} \\
-  --master=${api_server} \\
+  --master=http://$HOST:$PORT_8888 \\
   --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}} \\
   2>&1
 EOF
 
+#
+# scheduler, uses frontend service proxy to access apiserver and
+# etcd. it spawns executors configured with the same address for
+# --api_servers and if the IPs change (because this container changes
+# hosts) then the executors become zombies.
+#
 prepare_service_script ${service_dir} scheduler run <<EOF
 #!/bin/sh
 exec $apply_uids /km scheduler \\
