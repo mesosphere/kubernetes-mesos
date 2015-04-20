@@ -120,9 +120,9 @@ type SchedulerServer struct {
 
 // useful for unit testing specific funcs
 type schedulerProcessInterface interface {
-	Done() <-chan struct{}
 	End() <-chan struct{}
 	Failover() <-chan struct{}
+	Terminal() <-chan struct{}
 }
 
 // NewSchedulerServer creates a new SchedulerServer with default parameters
@@ -406,7 +406,7 @@ func (s *SchedulerServer) Run(hks hyperkube.Interface, _ []string) error {
 	go runtime.Until(func() {
 		log.V(1).Info("Starting HTTP interface")
 		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), s.mux))
-	}, defaultHttpBindInterval, schedulerProcess.Done())
+	}, defaultHttpBindInterval, schedulerProcess.Terminal())
 
 	if s.HA {
 		validation := ha.ValidationFunc(validateLeadershipTransition)
@@ -439,9 +439,9 @@ func (s *SchedulerServer) awaitFailover(schedulerProcess schedulerProcessInterfa
 
 	// guard for failover signal processing, first signal processor wins
 	failoverLatch := &runtime.Latch{}
-	runtime.On(schedulerProcess.Done(), func() {
+	runtime.On(schedulerProcess.Terminal(), func() {
 		if !failoverLatch.Acquire() {
-			log.V(1).Infof("scheduler process ended, already failing over")
+			log.V(1).Infof("scheduler process ending, already failing over")
 			select {}
 		}
 		var err error
@@ -565,9 +565,9 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProce
 		},
 	}
 
-	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(schedulerProcess.Done(), s.mux))
-	runtime.On(mesosPodScheduler.Registration(), func() { kpl.Run(schedulerProcess.Done()) })
-	runtime.On(mesosPodScheduler.Registration(), s.newServiceWriter(schedulerProcess.Done()))
+	kpl := scheduler.NewPlugin(mesosPodScheduler.NewPluginConfig(schedulerProcess.Terminal(), s.mux))
+	runtime.On(mesosPodScheduler.Registration(), func() { kpl.Run(schedulerProcess.Terminal()) })
+	runtime.On(mesosPodScheduler.Registration(), s.newServiceWriter(schedulerProcess.Terminal()))
 
 	deferredInit := func() (err error) {
 		if err = mesosPodScheduler.Init(schedulerProcess.Master(), kpl, s.mux); err != nil {

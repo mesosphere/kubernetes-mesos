@@ -12,6 +12,7 @@ import (
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers/metrics"
+	"github.com/mesosphere/kubernetes-mesos/pkg/proc"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 )
@@ -59,11 +60,11 @@ type Registry interface {
 type Walker func(offer Perishable) (stop bool, err error)
 
 type RegistryConfig struct {
-	DeclineOffer  func(offerId string) error // tell Mesos that we're declining the offer
-	Compat        func(*mesos.Offer) bool    // returns true if offer is compatible; incompatible offers are declined
-	TTL           time.Duration              // determines a perishable offer's expiration deadline: now+ttl
-	LingerTTL     time.Duration              // if zero, offers will not linger in the FIFO past their expiration deadline
-	ListenerDelay time.Duration              // specifies the sleep time between offer listener notifications
+	DeclineOffer  func(offerId string) <-chan error // tell Mesos that we're declining the offer
+	Compat        func(*mesos.Offer) bool           // returns true if offer is compatible; incompatible offers are declined
+	TTL           time.Duration                     // determines a perishable offer's expiration deadline: now+ttl
+	LingerTTL     time.Duration                     // if zero, offers will not linger in the FIFO past their expiration deadline
+	ListenerDelay time.Duration                     // specifies the sleep time between offer listener notifications
 }
 
 type offerStorage struct {
@@ -209,11 +210,12 @@ func CreateRegistry(c RegistryConfig) Registry {
 }
 
 func (s *offerStorage) declineOffer(offerId, hostname string, reason metrics.OfferDeclinedReason) {
-	if err := s.DeclineOffer(offerId); err != nil {
-		log.Warningf("Failed to decline offer %v: %v", offerId, err)
-	} else {
+	//TODO(jdef) might be nice to spec an abort chan here
+	runtime.Signal(proc.OnError(s.DeclineOffer(offerId), func(err error) {
+		log.Warningf("decline failed for offer id %v: %v", offerId, err)
+	}, nil)).Then(func() {
 		metrics.OffersDeclined.WithLabelValues(hostname, string(reason)).Inc()
-	}
+	})
 }
 
 func (s *offerStorage) Add(offers []*mesos.Offer) {

@@ -31,6 +31,7 @@ type procImpl struct {
 	changed   *sync.Cond    // wait/signal for backlog changes
 	engine    DoerFunc      // isolated this for easier unit testing later on
 	running   chan struct{} // closes once event loop processing starts
+	dead      chan struct{} // closes upon completion of process termination
 }
 
 type Config struct {
@@ -69,6 +70,7 @@ func newConfigured(config Config) Process {
 		state:     &state,
 		pid:       atomic.AddUint32(&pid, 1),
 		running:   make(chan struct{}),
+		dead:      make(chan struct{}),
 	}
 	pi.engine = DoerFunc(pi.doLater)
 	pi.changed = sync.NewCond(&pi.writeLock)
@@ -198,8 +200,9 @@ func (self *procImpl) flush() {
 }
 
 func (self *procImpl) End() <-chan struct{} {
-	return runtime.After(func() {
-		if self.state.transitionTo(stateTerminal, stateTerminal) {
+	if self.state.transitionTo(stateTerminal, stateTerminal) {
+		go func() {
+			defer close(self.dead)
 			self.writeLock.Lock()
 			defer self.writeLock.Unlock()
 
@@ -215,8 +218,9 @@ func (self *procImpl) End() <-chan struct{} {
 			// wait for all pending actions to complete, then flush the backlog
 			self.wg.Wait()
 			self.flush()
-		}
-	})
+		}()
+	}
+	return self.dead
 }
 
 type errorOnce struct {

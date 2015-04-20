@@ -12,7 +12,7 @@ type fakeSchedulerProcess struct {
 	failoverFunc func() <-chan struct{}
 }
 
-func (self *fakeSchedulerProcess) Done() <-chan struct{} {
+func (self *fakeSchedulerProcess) Terminal() <-chan struct{} {
 	if self == nil || self.doneFunc == nil {
 		return nil
 	}

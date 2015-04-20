@@ -182,7 +182,7 @@ func New(config Config) *KubernetesScheduler {
 				}
 				return true
 			},
-			DeclineOffer: func(id string) error {
+			DeclineOffer: func(id string) <-chan error {
 				errOnce := proc.NewErrorOnce(k.terminate)
 				errOuter := k.asRegisteredMaster.Do(func() {
 					var err error
@@ -191,7 +191,7 @@ func New(config Config) *KubernetesScheduler {
 					filters := &mesos.Filters{}
 					_, err = k.driver.DeclineOffer(offerId, filters)
 				})
-				return <-errOnce.Send(errOuter).Err()
+				return errOnce.Send(errOuter).Err()
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
 			LingerTTL:     defaultOfferLingerTTL * time.Second,
@@ -212,10 +212,9 @@ func New(config Config) *KubernetesScheduler {
 func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterface, mux *http.ServeMux) error {
 	log.V(1).Infoln("initializing kubernetes mesos scheduler")
 
-	//TODO(jdef) watch electedMaster.Done() to figure out when background jobs should be shut down
 	k.asRegisteredMaster = proc.DoerFunc(func(a proc.Action) <-chan error {
 		if !k.registered {
-			return proc.ErrorChanf("failed to execute registered action, scheduler is disconnected")
+			return proc.ErrorChanf("failed to execute action, scheduler is disconnected")
 		}
 		return electedMaster.Do(a)
 	})
@@ -590,44 +589,76 @@ func explicitTaskFilter(t *podtask.T) bool {
 // is cancelled. if any other errors occur the composite reconciler will attempt to complete the
 // sequence, reporting only the last generated error.
 func (k *KubernetesScheduler) makeCompositeReconciler(actions ...ReconcilerAction) ReconcilerAction {
-	return ReconcilerAction(func(d bindings.SchedulerDriver, c <-chan struct{}) (err error) {
-		for _, action := range actions {
-			if err = action(d, c); err == reconciliationCancelledErr {
-				break
-			} else if err != nil {
-				log.Warningf("composite reconciliation error: %v", err)
+	if x := len(actions); x == 0 {
+		// programming error
+		panic("no actions specified for composite reconciler")
+	} else if x == 1 {
+		return actions[0]
+	}
+	chained := func(d bindings.SchedulerDriver, c <-chan struct{}, a, b ReconcilerAction) <-chan error {
+		ech := a(d, c)
+		ch := make(chan error, 1)
+		go func() {
+			select {
+			case <-k.terminate:
+			case <-c:
+			case e := <-ech:
+				if e != nil {
+					ch <- e
+					return
+				}
+				ech = b(d, c)
+				select {
+				case <-k.terminate:
+				case <-c:
+				case e := <-ech:
+					if e != nil {
+						ch <- e
+						return
+					}
+					close(ch)
+					return
+				}
 			}
+			ch <- fmt.Errorf("aborting composite reconciler action")
+		}()
+		return ch
+	}
+	result := func(d bindings.SchedulerDriver, c <-chan struct{}) <-chan error {
+		return chained(d, c, actions[0], actions[1])
+	}
+	for i := 2; i < len(actions); i++ {
+		i := i
+		next := func(d bindings.SchedulerDriver, c <-chan struct{}) <-chan error {
+			return chained(d, c, ReconcilerAction(result), actions[i])
 		}
-		return
-	})
+		result = next
+	}
+	return ReconcilerAction(result)
 }
 
 // reconciler action factory, performs explicit task reconciliation for non-terminal
 // tasks listed in the scheduler's internal taskRegistry.
 func (k *KubernetesScheduler) makeTaskRegistryReconciler() ReconcilerAction {
-	return ReconcilerAction(func(drv bindings.SchedulerDriver, cancel <-chan struct{}) error {
+	return ReconcilerAction(func(drv bindings.SchedulerDriver, cancel <-chan struct{}) <-chan error {
 		taskToSlave := make(map[string]string)
-		func() {
-			k.Lock()
-			defer k.Unlock()
-			for _, t := range k.taskRegistry.List(explicitTaskFilter) {
-				if t.Spec.SlaveID != "" {
-					taskToSlave[t.ID] = t.Spec.SlaveID
-				}
+		for _, t := range k.taskRegistry.List(explicitTaskFilter) {
+			if t.Spec.SlaveID != "" {
+				taskToSlave[t.ID] = t.Spec.SlaveID
 			}
-		}()
-		return k.explicitlyReconcileTasks(drv, taskToSlave, cancel)
+		}
+		return proc.ErrorChan(k.explicitlyReconcileTasks(drv, taskToSlave, cancel))
 	})
 }
 
 // reconciler action factory, performs explicit task reconciliation for non-terminal
 // tasks identified by annotations in the Kubernetes pod registry.
 func (k *KubernetesScheduler) makePodRegistryReconciler() ReconcilerAction {
-	return ReconcilerAction(func(drv bindings.SchedulerDriver, cancel <-chan struct{}) error {
+	return ReconcilerAction(func(drv bindings.SchedulerDriver, cancel <-chan struct{}) <-chan error {
 		ctx := api.NewDefaultContext()
 		podList, err := k.client.Pods(api.NamespaceValue(ctx)).List(labels.Everything())
 		if err != nil {
-			return fmt.Errorf("failed to reconcile pod registry: %v", err)
+			return proc.ErrorChanf("failed to reconcile pod registry: %v", err)
 		}
 		taskToSlave := make(map[string]string)
 		for _, pod := range podList.Items {
@@ -644,7 +675,7 @@ func (k *KubernetesScheduler) makePodRegistryReconciler() ReconcilerAction {
 			}
 			taskToSlave[taskId] = slaveId
 		}
-		return k.explicitlyReconcileTasks(drv, taskToSlave, cancel)
+		return proc.ErrorChan(k.explicitlyReconcileTasks(drv, taskToSlave, cancel))
 	})
 }
 
@@ -704,7 +735,7 @@ var (
 	reconciliationCancelledErr = fmt.Errorf("explicit task reconciliation cancelled")
 )
 
-type ReconcilerAction func(driver bindings.SchedulerDriver, cancel <-chan struct{}) error
+type ReconcilerAction func(driver bindings.SchedulerDriver, cancel <-chan struct{}) <-chan error
 
 type Reconciler struct {
 	proc.Doer
@@ -722,22 +753,21 @@ func newReconciler(doer proc.Doer, action ReconcilerAction, cooldown time.Durati
 		implicit: make(chan struct{}, 1),
 		cooldown: cooldown,
 		done:     done,
-		Action: func(driver bindings.SchedulerDriver, cancel <-chan struct{}) error {
+		Action: func(driver bindings.SchedulerDriver, cancel <-chan struct{}) <-chan error {
 			// trigged the reconciler action in the doer's execution context,
 			// but it could take a while and the scheduler needs to be able to
 			// process updates, the callbacks for which ALSO execute in the SAME
 			// deferred execution context -- so the action MUST be executed async.
-			errOnce := proc.NewErrorOnce(done)
-			errCh := doer.Do(func() {
+			errOnce := proc.NewErrorOnce(cancel)
+			return errOnce.Send(doer.Do(func() {
 				// only triggers the action if we're the currently elected,
 				// registered master and runs the action async.
 				go func() {
-					var err error
-					defer errOnce.Report(err)
+					var err <-chan error
+					defer errOnce.Send(err)
 					err = action(driver, cancel)
 				}()
-			})
-			return <-errOnce.Send(errCh).Err()
+			})).Err()
 		},
 	}
 }
@@ -796,9 +826,9 @@ requestLoop:
 						log.V(1).Infof("failed to request implicit reconciliation from mesos: %v", err)
 					}
 				})
-				if err := <-errOnce.Send(errCh).Err(); err != nil {
+				proc.OnError(errOnce.Send(errCh).Err(), func(err error) {
 					log.Errorf("failed to run implicit reconciliation: %v", err)
-				}
+				}, r.done)
 				goto slowdown
 			}
 		case <-r.done:
@@ -834,7 +864,7 @@ requestLoop:
 
 			metrics.ReconciliationExecuted.WithLabelValues("explicit").Inc()
 			defer close(fin)
-			err := r.Action(driver, cancel)
+			err := <-r.Action(driver, cancel)
 			if err == reconciliationCancelledErr {
 				metrics.ReconciliationCancelled.WithLabelValues("explicit").Inc()
 				log.Infoln(err.Error())

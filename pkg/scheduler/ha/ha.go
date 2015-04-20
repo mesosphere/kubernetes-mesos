@@ -26,8 +26,22 @@ func (stage *stageType) transition(from, to stageType) bool {
 	return atomic.CompareAndSwapInt32((*int32)(stage), int32(from), int32(to))
 }
 
-func (stage *stageType) set(to stageType) {
-	atomic.StoreInt32((*int32)(stage), int32(to))
+func (s *stageType) transitionTo(to stageType, unless ...stageType) bool {
+	if len(unless) == 0 {
+		atomic.StoreInt32((*int32)(s), int32(to))
+		return true
+	}
+	for {
+		state := s.get()
+		for _, x := range unless {
+			if state == x {
+				return false
+			}
+		}
+		if s.transition(state, to) {
+			return true
+		}
+	}
 }
 
 func (stage *stageType) get() stageType {
@@ -37,7 +51,7 @@ func (stage *stageType) get() stageType {
 // execute some action in the deferred context of the process, but only if we
 // match the stage of the process at the time the action is executed.
 func (stage stageType) Do(p *SchedulerProcess, a proc.Action) <-chan error {
-	errOnce := proc.NewErrorOnce(p.Done())
+	errOnce := proc.NewErrorOnce(p.fin)
 	errOuter := p.Do(proc.Action(func() {
 		switch stage {
 		case standbyStage:
@@ -54,6 +68,7 @@ func (stage stageType) Do(p *SchedulerProcess, a proc.Action) <-chan error {
 			}
 		case finStage:
 			errOnce.Reportf("scheduler process is dying, dropping action")
+			return
 		default:
 		}
 		errOnce.Report(stage.When(p, a))
@@ -78,6 +93,7 @@ type SchedulerProcess struct {
 	elected  chan struct{} // upon close we've been elected
 	failover chan struct{} // closed indicates that we should failover upon End()
 	standby  chan struct{}
+	fin      chan struct{}
 }
 
 func New(sched bindings.Scheduler) *SchedulerProcess {
@@ -88,6 +104,7 @@ func New(sched bindings.Scheduler) *SchedulerProcess {
 		elected:   make(chan struct{}),
 		failover:  make(chan struct{}),
 		standby:   make(chan struct{}),
+		fin:       make(chan struct{}),
 	}
 	runtime.On(p.Running(), p.begin)
 	return p
@@ -103,14 +120,16 @@ func (self *SchedulerProcess) begin() {
 }
 
 func (self *SchedulerProcess) End() <-chan struct{} {
-	(&self.stage).set(finStage)
-	log.Infoln("scheduler process entered fin stage")
+	if (&self.stage).transitionTo(finStage, finStage) {
+		defer close(self.fin)
+		log.Infoln("scheduler process entered fin stage")
+	}
 	return self.Process.End()
 }
 
 func (self *SchedulerProcess) Elect(newDriver DriverFactory) {
-	errOnce := proc.NewErrorOnce(self.Done())
-	errCh := standbyStage.Do(self, proc.Action(func() {
+	errOnce := proc.NewErrorOnce(self.fin)
+	proc.OnError(errOnce.Send(standbyStage.Do(self, proc.Action(func() {
 		if !(&self.stage).transition(standbyStage, masterStage) {
 			log.Errorf("failed to transition from standby to master stage, aborting")
 			self.End()
@@ -144,11 +163,14 @@ func (self *SchedulerProcess) Elect(newDriver DriverFactory) {
 		} else {
 			log.Errorf("expected RUNNING status, not %v", stat)
 		}
-	}))
-	if err := <-errOnce.Send(errCh).Err(); err != nil {
+	}))).Err(), func(err error) {
 		defer self.End()
 		log.Errorf("failed to handle election event, aborting: %v", err)
-	}
+	}, self.fin)
+}
+
+func (self *SchedulerProcess) Terminal() <-chan struct{} {
+	return self.fin
 }
 
 func (self *SchedulerProcess) Elected() <-chan struct{} {
@@ -159,11 +181,27 @@ func (self *SchedulerProcess) Failover() <-chan struct{} {
 	return self.failover
 }
 
+type masterProcess struct {
+	*SchedulerProcess
+	doer proc.Doer
+}
+
+func (self *masterProcess) Done() <-chan struct{} {
+	return self.SchedulerProcess.Terminal()
+}
+
+func (self *masterProcess) Do(a proc.Action) <-chan error {
+	return self.doer.Do(a)
+}
+
 // returns a Process instance that will only execute a proc.Action if the scheduler is the elected master
 func (self *SchedulerProcess) Master() proc.Process {
-	return proc.DoWith(self, proc.DoerFunc(func(a proc.Action) <-chan error {
-		return proc.ErrorChan(masterStage.When(self, a))
-	}))
+	return &masterProcess{
+		SchedulerProcess: self,
+		doer: proc.DoWith(self, proc.DoerFunc(func(a proc.Action) <-chan error {
+			return proc.ErrorChan(masterStage.When(self, a))
+		})),
+	}
 }
 
 func (self *SchedulerProcess) logError(ch <-chan error) {
@@ -227,7 +265,5 @@ func (self *SchedulerProcess) ExecutorLost(drv bindings.SchedulerDriver, eid *me
 }
 
 func (self *SchedulerProcess) Error(drv bindings.SchedulerDriver, msg string) {
-	self.logError(self.Master().Do(proc.Action(func() {
-		self.Scheduler.Error(drv, msg)
-	})))
+	self.Scheduler.Error(drv, msg)
 }

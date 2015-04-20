@@ -7,6 +7,7 @@ import (
 
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	util "github.com/mesos/mesos-go/mesosutil"
+	"github.com/mesosphere/kubernetes-mesos/pkg/proc"
 )
 
 func TestTimedOffer(t *testing.T) {
@@ -49,8 +50,8 @@ func TestTimedOffer(t *testing.T) {
 func TestWalk(t *testing.T) {
 	t.Parallel()
 	config := RegistryConfig{
-		DeclineOffer: func(offerId string) error {
-			return nil
+		DeclineOffer: func(offerId string) <-chan error {
+			return proc.ErrorChan(nil)
 		},
 		TTL:           0 * time.Second,
 		LingerTTL:     0 * time.Second,
