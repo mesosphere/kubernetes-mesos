@@ -4,30 +4,14 @@ die() {
   exit 1
 }
 
-leading_master() {
+leading_master_ip() {
   test -n "$K8SM_MESOS_MASTER" && {
     echo $K8SM_MESOS_MASTER
     return
   }
   local leader=$(nslookup leader.mesos | sed -e '/^Server:/,/^Address .*$/{ d }' -e '/^$/d'|grep -e '^Address '|cut -f3 -d' ')
   test -n "$leader" || die Failed to identify mesos master, missing K8SM_MESOS_MASTER variable and cannot find leader.mesos
-  echo leader.mesos:5050
-}
-
-etcd_servers() {
-  test -n "$ETCD_SERVER_LIST" && {
-    echo $ETCD_SERVER_LIST
-    return
-  }
-
-  #-- eventually we'll be able to look this up via SRV
-  #local srv=_etcd-server._tcp.marathon.mesos
-  #nslookup -q=SRV $srv | grep -e "^$srv"| awk '{print $7;}'| \
-  #  sort | uniq | sed -e 's/^\(.*\)\.$/\1/g' | xargs echo -n | tr ' ' ',' || \
-  #    die Failed to look up etcd services in marathon
-
-  #-- for now, assume etcd is running on the mesos master, or is being proxied from there
-  echo http://leader.mesos:4001
+  echo leader.mesos
 }
 
 prepare_var_run() {
@@ -65,8 +49,25 @@ EOF
 
 log_dir=${LOG_DIR:-$MESOS_SANDBOX/log}
 service_dir=${SERVICE_DIR:-$MESOS_SANDBOX/services}
-mesos_master=$(leading_master) || die
-etcd_server_list=$(etcd_servers) || die
+mesos_leader=$(leading_master_ip) || die
+mesos_master=${mesos_leader}:5050
+
+# assume that the leading mesos master is always running a marathon
+# service proxy, perhaps using haproxy.
+service_proxy=${SERVICE_PROXY:-${mesos_leader}}
+
+# would be nice if this was auto-discoverable. if this value changes
+# between launches of the framework, there can be dangling executors,
+# so it is important that this point to some frontend load balancer
+# of some sort, addressed by a fixed domain name or else a static IP.
+etcd_server_list=${ETCD_SERVER_LIST:-http://${service_proxy}:4001}
+
+# would be nice if this was auto-discoverable. if this value changes
+# between launches of the framework, there can be dangling executors,
+# so it is important that this point to some frontend load balancer
+# of some sort, addressed by a fixed domain name or else a static IP.
+api_server=${KUBERNETES_MASTER:-http://${service_proxy}:8888}
+
 logv=${GLOG_v:-0}
 log_history=${LOG_HISTORY:-10}
 log_size=${LOG_SIZE:-2000000}
@@ -107,7 +108,7 @@ exec $apply_uids /km controller-manager \\
   --address=$HOST \\
   --port=$PORT_10252 \\
   --mesos_master=${mesos_master} \\
-  --master=http://$HOST:$PORT_8888 \\
+  --master=${api_server} \\
   --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}} \\
   2>&1
 EOF
@@ -118,7 +119,7 @@ exec $apply_uids /km scheduler \\
   --address=$HOST \\
   --port=$PORT_10251 \\
   --mesos_master=${mesos_master} \\
-  --api_servers=http://$HOST:$PORT_8888 \\
+  --api_servers=${api_server} \\
   --etcd_servers=${etcd_server_list} \\
   --mesos_user=${K8SM_MESOS_USER:-root} \\
   --v=${SCHEDULER_GLOG_v:-${logv}} \\
