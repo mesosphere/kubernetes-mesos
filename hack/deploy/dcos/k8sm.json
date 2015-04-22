@@ -12,5 +12,19 @@
   },
   "env":{
     "GLOG_v": "1"
-  }
+  },
+  "upgradeStrategy":{
+    "minimumHealthCapacity": 0,
+    "maximumOverCapacity": 0
+  },
+  "instances": 1,
+  "healthChecks": [
+    {
+      "intervalSeconds": 60,
+      "maxConsecutiveFailures": 2,
+      "path": "/healthz",
+      "portIndex": 0,
+      "protocol": "HTTP"
+    }
+  ]
 }
