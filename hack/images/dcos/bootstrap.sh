@@ -105,6 +105,11 @@ exec $apply_uids /km apiserver \\
   2>&1
 EOF
 
+prepare_service_script ${service_dir} apiserver finish <<EOF
+#!/bin/sh
+test "$1" = "256" || sleep ${APISERVER_RESPAWN_DELAY:-3}
+EOF
+
 #
 # controller-manager, doesn't need to use frontend proxy to access
 # apiserver like the scheduler, it can access it directly here.
@@ -118,6 +123,11 @@ exec $apply_uids /km controller-manager \\
   --master=http://$HOST:$PORT_8888 \\
   --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}} \\
   2>&1
+EOF
+
+prepare_service_script ${service_dir} controller-manager finish <<EOF
+#!/bin/sh
+test "$1" = "256" || sleep ${CONTROLLER_MANAGER_RESPAWN_DELAY:-3}
 EOF
 
 #
@@ -137,6 +147,11 @@ exec $apply_uids /km scheduler \\
   --mesos_user=${K8SM_MESOS_USER:-root} \\
   --v=${SCHEDULER_GLOG_v:-${logv}} \\
   2>&1
+EOF
+
+prepare_service_script ${service_dir} scheduler finish <<EOF
+#!/bin/sh
+test "$1" = "256" || sleep ${SCHEDULER_RESPAWN_DELAY:-3}
 EOF
 
 exec /usr/bin/s6-svscan -t${S6_RESCAN:-500000} ${service_dir}
