@@ -6,7 +6,9 @@ RUN echo 'nobody::99:' >>/etc/group
 
 ADD usr /usr/
 ADD km /km
-ADD bootstrap.sh /bootstrap.sh
+ADD leapsecs.dat /etc/
 
 CMD [ ]
 ENTRYPOINT [ "/bootstrap.sh" ]
+
+ADD bootstrap.sh /bootstrap.sh

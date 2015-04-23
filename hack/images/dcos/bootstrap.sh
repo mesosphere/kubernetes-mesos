@@ -34,6 +34,8 @@ prepare_service_script() {
 
   test "$script" == "run" || return 0
 
+  s6-mkfifodir -f ${svcdir}/${name}/event
+
   # only set up logging for run service scripts
   mkdir -p $log_dir/$name
   mkdir -p ${svcdir}/${name}/log
@@ -45,10 +47,38 @@ EOF
 
   local loglink=log/$name/current
   ln -sv $loglink ${MESOS_SANDBOX}/${name}.log
+
+  echo prepared script $script for service $name in dir $svcdir
+}
+
+prepare_monitor_script() {
+  local mondir=$1
+  local svcdir=$2
+  local name=$3
+
+  prepare_service_script ${mondir} ${name}-monitor run <<EOF
+#!/usr/bin/execlineb
+fdmove -c 2 1
+foreground {
+  s6-notifywhenup s6-ftrig-listen1 ${svcdir}/${name}/event u
+    busybox echo waiting for ${name} service startup
+}
+foreground {
+  busybox echo ${name} service started
+}
+loopwhilex
+  foreground {
+    s6-ftrig-listen1 ${svcdir}/${name}/event u
+      busybox echo waiting for ${name} service restart
+  }
+  busybox echo ${name} service restarted
+EOF
 }
 
 log_dir=${LOG_DIR:-$MESOS_SANDBOX/log}
-service_dir=${SERVICE_DIR:-$MESOS_SANDBOX/services}
+service_dir=${SERVICE_DIR:-$MESOS_SANDBOX/service.d}
+monitor_dir=${MONITOR_DIR:-$MESOS_SANDBOX/monitor.d}
+
 mesos_leader=$(leading_master_ip) || die
 mesos_master=${mesos_leader}:5050
 
@@ -92,17 +122,20 @@ EOF
 #
 # apiserver, uses frontend service proxy to connect with etcd
 #
+prepare_monitor_script ${monitor_dir} ${service_dir} apiserver
+
 prepare_service_script ${service_dir} apiserver run <<EOF
-#!/bin/sh
-exec $apply_uids /km apiserver \\
-  --address=$HOST \\
-  --port=$PORT_8888 \\
-  --mesos_master=${mesos_master} \\
-  --etcd_servers=${etcd_server_list} \\
-  --portal_net=${PORTAL_NET:-10.10.10.0/24} \\
-  --cloud_provider=mesos \\
-  --v=${APISERVER_GLOG_v:-${logv}} \\
-  2>&1
+#!/usr/bin/execlineb
+fdmove -c 2 1
+$apply_uids
+/km apiserver
+  --address=$HOST
+  --port=$PORT_8888
+  --mesos_master=${mesos_master}
+  --etcd_servers=${etcd_server_list}
+  --portal_net=${PORTAL_NET:-10.10.10.0/24}
+  --cloud_provider=mesos
+  --v=${APISERVER_GLOG_v:-${logv}}
 EOF
 
 prepare_service_script ${service_dir} apiserver finish <<EOF
@@ -114,15 +147,18 @@ EOF
 # controller-manager, doesn't need to use frontend proxy to access
 # apiserver like the scheduler, it can access it directly here.
 #
+prepare_monitor_script ${monitor_dir} ${service_dir} controller-manager
+
 prepare_service_script ${service_dir} controller-manager run <<EOF
-#!/bin/sh
-exec $apply_uids /km controller-manager \\
-  --address=$HOST \\
-  --port=$PORT_10252 \\
-  --mesos_master=${mesos_master} \\
-  --master=http://$HOST:$PORT_8888 \\
-  --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}} \\
-  2>&1
+#!/usr/bin/execlineb
+fdmove -c 2 1
+$apply_uids
+/km controller-manager
+  --address=$HOST
+  --port=$PORT_10252
+  --mesos_master=${mesos_master}
+  --master=http://$HOST:$PORT_8888
+  --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}}
 EOF
 
 prepare_service_script ${service_dir} controller-manager finish <<EOF
@@ -136,17 +172,20 @@ EOF
 # --api_servers and if the IPs change (because this container changes
 # hosts) then the executors become zombies.
 #
+prepare_monitor_script ${monitor_dir} ${service_dir} scheduler
+
 prepare_service_script ${service_dir} scheduler run <<EOF
-#!/bin/sh
-exec $apply_uids /km scheduler \\
-  --address=$HOST \\
-  --port=$PORT_10251 \\
-  --mesos_master=${mesos_master} \\
-  --api_servers=${api_server} \\
-  --etcd_servers=${etcd_server_list} \\
-  --mesos_user=${K8SM_MESOS_USER:-root} \\
-  --v=${SCHEDULER_GLOG_v:-${logv}} \\
-  2>&1
+#!/usr/bin/execlineb
+fdmove -c 2 1
+$apply_uids
+/km scheduler
+  --address=$HOST
+  --port=$PORT_10251
+  --mesos_master=${mesos_master}
+  --api_servers=${api_server}
+  --etcd_servers=${etcd_server_list}
+  --mesos_user=${K8SM_MESOS_USER:-root}
+  --v=${SCHEDULER_GLOG_v:-${logv}}
 EOF
 
 prepare_service_script ${service_dir} scheduler finish <<EOF
@@ -154,4 +193,24 @@ prepare_service_script ${service_dir} scheduler finish <<EOF
 test "$1" = "256" || sleep ${SCHEDULER_RESPAWN_DELAY:-3}
 EOF
 
-exec /usr/bin/s6-svscan -t${S6_RESCAN:-500000} ${service_dir}
+#--- service monitor
+#
+# (0) subscribe to monitor "up" events
+# (1) fork service monitors
+# (2) after all monitors have reported "up" once,
+# (3) spawn the service tree
+#
+cd ${MESOS_SANDBOX}
+
+cat <<EOF >monitor.sh
+#!/usr/bin/execlineb
+foreground {
+  s6-ftrig-listen -a {
+    ${monitor_dir}/apiserver-monitor/event U
+  } /usr/bin/s6-svscan -t${S6_RESCAN:-30000} ${monitor_dir}
+}
+/usr/bin/s6-svscan -t${S6_RESCAN:-30000} ${service_dir}
+EOF
+
+chmod +x monitor.sh
+exec ./monitor.sh
