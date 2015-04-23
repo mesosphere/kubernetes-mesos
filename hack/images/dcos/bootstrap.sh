@@ -40,8 +40,8 @@ prepare_service_script() {
   mkdir -p $log_dir/$name
   mkdir -p ${svcdir}/${name}/log
   cat <<EOF >${svcdir}/${name}/log/run
-#!/bin/sh
-exec s6-log ${log_args} $log_dir/$name
+#!/usr/bin/execlineb
+s6-log ${log_args} $log_dir/$name
 EOF
   chmod +x ${svcdir}/${name}/log/run
 
@@ -61,17 +61,38 @@ prepare_monitor_script() {
 fdmove -c 2 1
 foreground {
   s6-notifywhenup s6-ftrig-listen1 ${svcdir}/${name}/event u
-    busybox echo waiting for ${name} service startup
+    echo waiting for ${name} service startup
 }
 foreground {
-  busybox echo ${name} service started
+  echo ${name} service started
 }
 loopwhilex
   foreground {
     s6-ftrig-listen1 ${svcdir}/${name}/event u
-      busybox echo waiting for ${name} service restart
+      echo waiting for ${name} service restart
   }
-  busybox echo ${name} service restarted
+  echo ${name} service restarted
+EOF
+}
+
+prepare_service() {
+  local mond="$1"
+  local svcd="$2"
+  local name="$3"
+  local respawnto="$4"
+
+  cat | prepare_service_script ${svcd} ${name} run
+  prepare_monitor_script ${mond} ${svcd} ${name}
+  prepare_service_script ${svcd} ${name} finish <<EOF
+#!/usr/bin/execlineb -S2
+foreground {
+  if { test "\${1}" != "256" }
+    foreground {
+      backtick -n ts { date "+%m%d %H:%M:%S.999999" }
+      import ts printf "I%s %7d respawn.xx:0] sleeping ${respawnto}s before respawning ${name}\\n" "\${ts}" "\${2}"
+    } sleep ${respawnto}
+}
+exit 0
 EOF
 }
 
@@ -114,17 +135,15 @@ mkdir -p ${log_dir}
 prepare_var_run || die Failed to initialize apiserver run directory
 
 prepare_service_script ${service_dir} .s6-svscan finish <<EOF
-#!/bin/sh
-  local hostpath=/var/run/kubernetes
-  test -L $hostpath && rm -f $hostpath
+#!/usr/bin/execlineb
+  define hostpath /var/run/kubernetes
+  foreground { if { test -L ${hostpath} } rm -f ${hostpath} } exit 0
 EOF
 
 #
 # apiserver, uses frontend service proxy to connect with etcd
 #
-prepare_monitor_script ${monitor_dir} ${service_dir} apiserver
-
-prepare_service_script ${service_dir} apiserver run <<EOF
+prepare_service ${monitor_dir} ${service_dir} apiserver ${APISERVER_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
 $apply_uids
@@ -138,18 +157,11 @@ $apply_uids
   --v=${APISERVER_GLOG_v:-${logv}}
 EOF
 
-prepare_service_script ${service_dir} apiserver finish <<EOF
-#!/bin/sh
-test "$1" = "256" || sleep ${APISERVER_RESPAWN_DELAY:-3}
-EOF
-
 #
 # controller-manager, doesn't need to use frontend proxy to access
 # apiserver like the scheduler, it can access it directly here.
 #
-prepare_monitor_script ${monitor_dir} ${service_dir} controller-manager
-
-prepare_service_script ${service_dir} controller-manager run <<EOF
+prepare_service ${monitor_dir} ${service_dir} controller-manager ${CONTROLLER_MANAGER_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
 $apply_uids
@@ -161,20 +173,13 @@ $apply_uids
   --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}}
 EOF
 
-prepare_service_script ${service_dir} controller-manager finish <<EOF
-#!/bin/sh
-test "$1" = "256" || sleep ${CONTROLLER_MANAGER_RESPAWN_DELAY:-3}
-EOF
-
 #
 # scheduler, uses frontend service proxy to access apiserver and
 # etcd. it spawns executors configured with the same address for
 # --api_servers and if the IPs change (because this container changes
 # hosts) then the executors become zombies.
 #
-prepare_monitor_script ${monitor_dir} ${service_dir} scheduler
-
-prepare_service_script ${service_dir} scheduler run <<EOF
+prepare_service ${monitor_dir} ${service_dir} scheduler ${SCHEDULER_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
 $apply_uids
@@ -186,11 +191,6 @@ $apply_uids
   --etcd_servers=${etcd_server_list}
   --mesos_user=${K8SM_MESOS_USER:-root}
   --v=${SCHEDULER_GLOG_v:-${logv}}
-EOF
-
-prepare_service_script ${service_dir} scheduler finish <<EOF
-#!/bin/sh
-test "$1" = "256" || sleep ${SCHEDULER_RESPAWN_DELAY:-3}
 EOF
 
 #--- service monitor
