@@ -10,6 +10,32 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/proc"
 )
 
+func TestExpiredOffer(t *testing.T) {
+	t.Parallel()
+
+	ttl := 2 * time.Second
+	o := Expired("test", "testhost", ttl)
+
+	if o.Id() != "test" {
+		t.Error("expiredOffer does not return its Id")
+	}
+	if o.Host() != "testhost" {
+		t.Error("expiredOffer does not return its hostname")
+	}
+	if o.HasExpired() != true {
+		t.Error("expiredOffer is not expired")
+	}
+	if o.Details() != nil {
+		t.Error("expiredOffer does not return nil Details")
+	}
+	if o.Acquire() != false {
+		t.Error("expiredOffer must not be able to be acquired")
+	}
+	if delay := o.GetDelay(); !(0 < delay && delay <= ttl) {
+		t.Error("expiredOffer does not return a valid deadline")
+	}
+} // TestExpiredOffer
+
 func TestTimedOffer(t *testing.T) {
 	t.Parallel()
 
