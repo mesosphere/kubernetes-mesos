@@ -882,7 +882,6 @@ requestLoop:
 	} // for
 }
 
-// returns true if registry state was updated
 func (ks *KubernetesScheduler) recoverTasks() error {
 	ctx := api.NewDefaultContext()
 	podList, err := ks.client.Pods(api.NamespaceValue(ctx)).List(labels.Everything())
