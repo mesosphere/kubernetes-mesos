@@ -141,7 +141,7 @@ func (e *expiredOffer) Release() {}
 
 func (e *expiredOffer) age(s *offerStorage) {
 	log.V(3).Infof("Delete lingering offer: %v", e.id)
-	s.offers.Delete(e.id)
+	s.offers.Delete(e)
 	s.slaves.deleteOffer(e.id)
 }
 
