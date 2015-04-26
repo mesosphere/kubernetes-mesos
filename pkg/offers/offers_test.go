@@ -73,6 +73,162 @@ func TestTimedOffer(t *testing.T) {
 	}
 } // TestTimedOffer
 
+func TestOfferStorage(t *testing.T) {
+	ttl := time.Second / 4
+	declinedNum := 0
+	config := RegistryConfig{
+		DeclineOffer: func(offerId string) <-chan error {
+			declinedNum = declinedNum + 1
+			return proc.ErrorChan(nil)
+		},
+		Compat: func(o *mesos.Offer) bool {
+			return o.Hostname == nil || *o.Hostname != "incompatiblehost"
+		},
+		TTL:           ttl,
+		LingerTTL:     2 * ttl,
+	}
+	storage := CreateRegistry(config)
+
+	done := make(chan struct{})
+	storage.Init(done)
+
+	// Add offer
+	id := util.NewOfferID("foo")
+	o := &mesos.Offer{Id: id}
+	storage.Add([]*mesos.Offer{o})
+
+	// Added offer should be in the storage
+	if obj, ok := storage.Get(id.GetValue()); obj == nil || !ok {
+		t.Error("offer not added")
+	}
+	if obj, _ := storage.Get(id.GetValue()); obj.Details() != o {
+		t.Error("added offer differs from returned offer")
+	}
+
+	// Not-added offer is not in storage
+	if obj, ok := storage.Get("bar"); obj != nil || ok {
+		t.Error("offer bar should not exist in storage")
+	}
+
+	// Deleted offer lingers in storage, is acquired and declined
+	offer, _ := storage.Get(id.GetValue())
+	declinedNumBefore := declinedNum
+	storage.Delete(id.GetValue(), "deleted for test")
+	if obj, _ := storage.Get(id.GetValue()); obj == nil {
+		t.Error("deleted offer is not lingering")
+	}
+	if obj, _ := storage.Get(id.GetValue()); !obj.HasExpired() {
+		t.Error("deleted offer is no expired")
+	}
+	if ok := offer.Acquire(); ok {
+		t.Error("deleted offer can be acquired")
+	}
+	if declinedNum <= declinedNumBefore {
+		t.Error("deleted offer was not declined")
+	}
+
+	// Acquired offer is only declined after 2*ttl
+	id = util.NewOfferID("foo2")
+	o = &mesos.Offer{Id: id}
+	storage.Add([]*mesos.Offer{o})
+	offer, _ = storage.Get(id.GetValue())
+	declinedNumBefore = declinedNum
+	offer.Acquire()
+	storage.Delete(id.GetValue(), "deleted for test")
+	if declinedNum > declinedNumBefore {
+		t.Error("acquired offer is declined")
+	}
+
+	offer.Release()
+	time.Sleep(3 * ttl)
+	if declinedNum <= declinedNumBefore {
+		t.Error("released offer is not declined after 2*ttl")
+	}
+
+	// Added offer should be expired after ttl, but lingering
+	id = util.NewOfferID("foo3")
+	o = &mesos.Offer{Id: id}
+	storage.Add([]*mesos.Offer{o})
+
+	time.Sleep(2 * ttl)
+	obj, ok := storage.Get(id.GetValue())
+	if obj == nil || !ok {
+		t.Error("offer not lingering after ttl")
+	}
+	if !obj.HasExpired() {
+		t.Error("offer is not expired after ttl")
+	}
+
+	// Should be deleted when waiting longer than LingerTTL
+	time.Sleep(2 * ttl)
+	if obj, ok := storage.Get(id.GetValue()); obj != nil || ok {
+		t.Error("offer not deleted after LingerTTL")
+	}
+
+	// Incompatible offer is declined
+	id = util.NewOfferID("foo4")
+	incompatibleHostname := "incompatiblehost"
+	o = &mesos.Offer{Id: id, Hostname:&incompatibleHostname}
+	declinedNumBefore = declinedNum
+	storage.Add([]*mesos.Offer{o})
+	if obj, ok := storage.Get(id.GetValue()); obj != nil || ok {
+		t.Error("incompatible offer not rejected")
+	}
+	if declinedNum <= declinedNumBefore {
+		t.Error("incompatible offer is not declined")
+	}
+
+	// Invalidated offer are not declined, but expired
+	id = util.NewOfferID("foo5")
+	o = &mesos.Offer{Id: id}
+	storage.Add([]*mesos.Offer{o})
+	offer, _ = storage.Get(id.GetValue())
+	declinedNumBefore = declinedNum
+	storage.Invalidate(id.GetValue())
+	if obj, _ := storage.Get(id.GetValue()); !obj.HasExpired() {
+		t.Error("invalidated offer is not expired")
+	}
+	if declinedNum > declinedNumBefore {
+		t.Error("invalidated offer is declined")
+	}
+	if ok := offer.Acquire(); ok {
+		t.Error("invalidated offer can be acquired")
+	}
+
+	// Invalidate "" will invalidate all offers
+	id = util.NewOfferID("foo6")
+	o = &mesos.Offer{Id: id}
+	storage.Add([]*mesos.Offer{o})
+	id2 := util.NewOfferID("foo7")
+	o2 := &mesos.Offer{Id: id2}
+	storage.Add([]*mesos.Offer{o2})
+	storage.Invalidate("")
+	if obj, _ := storage.Get(id.GetValue()); !obj.HasExpired() {
+		t.Error("invalidated offer is not expired")
+	}
+	if obj2, _ := storage.Get(id2.GetValue()); !obj2.HasExpired() {
+		t.Error("invalidated offer is not expired")
+	}
+
+	// InvalidateForSlave invalides all offers for that slave, but only those
+	id = util.NewOfferID("foo8")
+	slaveId := util.NewSlaveID("test-slave")
+	o = &mesos.Offer{Id: id, SlaveId:slaveId}
+	storage.Add([]*mesos.Offer{o})
+	id2 = util.NewOfferID("foo9")
+	o2 = &mesos.Offer{Id: id2}
+	storage.Add([]*mesos.Offer{o2})
+	storage.InvalidateForSlave(slaveId.GetValue())
+	if obj, _ := storage.Get(id.GetValue()); !obj.HasExpired() {
+		t.Error("invalidated offer for test-slave is not expired")
+	}
+	if obj2, _ := storage.Get(id2.GetValue()); obj2.HasExpired() {
+		t.Error("invalidated offer another slave is expired")
+	}
+
+	close(done)
+} // TestOfferStorage
+
 func TestWalk(t *testing.T) {
 	t.Parallel()
 	config := RegistryConfig{
