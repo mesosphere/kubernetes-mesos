@@ -229,6 +229,56 @@ func TestOfferStorage(t *testing.T) {
 	close(done)
 } // TestOfferStorage
 
+func TestListen(t *testing.T) {
+	ttl := time.Second / 4
+	config := RegistryConfig{
+		DeclineOffer: func(offerId string) <-chan error {
+			return proc.ErrorChan(nil)
+		},
+		Compat: func(o *mesos.Offer) bool {
+			return true
+		},
+		TTL:           ttl,
+		ListenerDelay: ttl / 2,
+	}
+	storage := CreateRegistry(config)
+
+	done := make(chan struct {})
+	storage.Init(done)
+
+	// Create two listeners with a hostname filter
+	hostname1 := "hostname1"
+	hostname2 := "hostname2"
+	listener1 := storage.Listen("listener1", func(offer *mesos.Offer) bool {
+		return offer.GetHostname() == hostname1
+	})
+	listener2 := storage.Listen("listener2", func(offer *mesos.Offer) bool {
+		return offer.GetHostname() == hostname2
+	})
+
+	// Add hostname1 offer
+	id := util.NewOfferID("foo")
+	o := &mesos.Offer{Id: id, Hostname:&hostname1}
+	storage.Add([]*mesos.Offer{o})
+
+	// listener1 is notified by closing channel
+	select {
+	case _, more := <-listener1:
+		if more {
+			t.Error("listener1 is not closed")
+		}
+	}
+
+	// listener2 is not notified within ttl
+	select {
+		case <-listener2:
+			t.Error("listener2 is notified")
+		case <-time.After(ttl):
+	}
+
+	close(done)
+} // TestListen
+
 func TestWalk(t *testing.T) {
 	t.Parallel()
 	config := RegistryConfig{
