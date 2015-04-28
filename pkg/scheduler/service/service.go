@@ -100,6 +100,7 @@ type SchedulerServer struct {
 	Graceful                      bool
 	FrameworkName                 string
 	HA                            bool
+	AdvertisedAddress             string
 	HADomain                      string
 	KMPath                        string
 	ClusterDNS                    util.IP
@@ -186,6 +187,7 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&s.Graceful, "graceful", s.Graceful, "Indicator of a graceful failover, intended for internal use only.")
 	fs.BoolVar(&s.HA, "ha", s.HA, "Run the scheduler in high availability mode with leader election. All peers should be configured exactly the same.")
 	fs.StringVar(&s.FrameworkName, "framework_name", s.FrameworkName, "The framework name to register with Mesos.")
+	fs.StringVar(&s.AdvertisedAddress, "advertised_address", s.AdvertisedAddress, "host:port address that is advertised to clients. May be used to construct artifact download URIs.")
 
 	fs.BoolVar(&s.ExecutorBindall, "executor_bindall", s.ExecutorBindall, "When true will set -address of the executor to 0.0.0.0.")
 	fs.IntVar(&s.ExecutorLogV, "executor_logv", s.ExecutorLogV, "Logging verbosity of spawned executor processes.")
@@ -235,7 +237,9 @@ func (s *SchedulerServer) serveFrameworkArtifact(path string) (string, string) {
 	serveFile("/"+base, path)
 
 	hostURI := ""
-	if s.HA && s.HADomain != "" {
+	if s.AdvertisedAddress != "" {
+		hostURI = fmt.Sprintf("http://%s/%s", s.AdvertisedAddress, base)
+	} else if s.HA && s.HADomain != "" {
 		hostURI = fmt.Sprintf("http://%s.%s:%d/%s", SCHEDULER_SERVICE_NAME, s.HADomain, ports.SchedulerPort, base)
 	} else {
 		hostURI = fmt.Sprintf("http://%s:%d/%s", s.Address.String(), s.Port, base)
