@@ -26,19 +26,6 @@ export LD_LIBRARY_PATH
 #test "$1" = "executor" || die Expected executor mode, not \"$1\"
 #shift
 
-mesos_leader=$(leading_master_ip) || die
-mesos_master=${mesos_leader}:5050
-
-# assume that the leading mesos master is always running a marathon
-# service proxy, perhaps using haproxy.
-service_proxy=${SERVICE_PROXY:-${mesos_leader}}
-
-# would be nice if this was auto-discoverable. if this value changes
-# between launches of the framework, there can be dangling executors,
-# so it is important that this point to some frontend load balancer
-# of some sort, addressed by a fixed domain name or else a static IP.
-api_server=${KUBERNETES_MASTER:-http://${service_proxy}:8888}
-
 # executor startup will block until there is a reader on this FIFO, and then
 # executor communicates suicide by closing this FIFO
 shutdown_fifo=${sandbox}/shutdown_fifo
@@ -87,25 +74,11 @@ EOF
 prepare_service ${monitor_dir} ${service_dir} proxy ${PROXY_RESPAWN_DELAY:-3} <<EOF
 #!/bin/sh
 exec 2>&1
-bp=""
-
-teardown() {
-  local rc=\$?
-  test -n "\$bp" && kill \$bp
-  exit \$rc
-}
-
-trap teardown TERM
-
-redirfd -rnb 0 $shutdown_fifo foreground cat "" touch down &
-bp=\$!
-
 unset LD_LIBRARY_PATH
-${sandbox}/opt/km proxy \\
+exec ${sandbox}/opt/km proxy \\
   --bind_address=${LIBPROCESS_IP:-0.0.0.0} \\
   --logtostderr=true \\
   --master=${KUBERNETES_MASTER}
-teardown
 EOF
 
 #
@@ -149,10 +122,16 @@ EOF
 # the finish script can only live for 5s at most
 prepare_service_script ${service_dir} shutdown finish <<EOF
 #!/bin/sh
-touch down
-exec 2>&1
+touch down \\
+  ${service_dir}/proxy/down \\
+  ${service_dir}/executor/down \\
+  ${monitor_dir}/proxy-monitor/down \\
+  ${monitor_dir}/executor-monitor/down
 echo shutdown finished \$*
-exec s6-scanctl -t ${service_dir}
+s6-svscanctl -t ${monitor_dir} &
+s6-svscanctl -t ${service_dir} &
+wait
+exit 0
 EOF
 
 #--- service monitor
@@ -177,8 +156,8 @@ die() {
 s6-ftrig-listen -a \
   ${monitor_dir}/executor-monitor/event U \
   ${monitor_dir}/proxy-monitor/event U \
-  '' s6-svscan -t${S6_RESCAN:-30000} ${monitor_dir} || die monitoring s6-ftrig-listen exited \$?
-exec s6-svscan -t${S6_RESCAN:-30000} ${service_dir}
+  '' s6-svscan ${monitor_dir} || die monitoring s6-ftrig-listen exited \$?
+exec s6-svscan ${service_dir}
 EOF
 chmod +x init.d/s1/run
 
@@ -186,7 +165,10 @@ cat <<EOF >init.d/s1/finish
 #!/bin/sh
 touch down
 echo executor terminating \$*
-exec s6-scanctl -t ${sandbox}/init
+s6-svscanctl -t ${monitor_dir} &
+s6-svscanctl -t ${sandbox}/init &
+wait
+exit 0
 EOF
 chmod +x init.d/s1/finish
 

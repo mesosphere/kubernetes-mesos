@@ -8,6 +8,19 @@ test -n "$sandbox" || die failed to identify mesos sandbox. neither MESOS_DIRECT
 mesos_leader=$(leading_master_ip) || die
 mesos_master=${mesos_leader}:5050
 
+default_dns_name=${DEFAULT_DNS_NAME:-k8sm.marathon.mesos}
+
+apiserver_host=${APISERVER_HOST:-${default_dns_name}}
+apiserver_port=${APISERVER_PORT:-8888}
+apiserver_ro_port=${APISERVER_RO_PORT:-8889}
+apiserver_ro_host=${APISERVER_RO_HOST:-${default_dns_name}}
+
+scheduler_host=${SCHEDULER_HOST:-${default_dns_name}}
+scheduler_port=${SCHEDULER_PORT:-10251}
+
+controller_manager_host=${CONTROLLER_MANAGER_HOST:-${default_dns_name}}
+controller_manager_port=${CONTROLLER_MANAGER_PORT:-10252}
+
 # assume that the leading mesos master is always running a marathon
 # service proxy, perhaps using haproxy.
 service_proxy=${SERVICE_PROXY:-${mesos_leader}}
@@ -17,12 +30,6 @@ service_proxy=${SERVICE_PROXY:-${mesos_leader}}
 # so it is important that this point to some frontend load balancer
 # of some sort, addressed by a fixed domain name or else a static IP.
 etcd_server_list=${ETCD_SERVER_LIST:-http://${service_proxy}:4001}
-
-# would be nice if this was auto-discoverable. if this value changes
-# between launches of the framework, there can be dangling executors,
-# so it is important that this point to some frontend load balancer
-# of some sort, addressed by a fixed domain name or else a static IP.
-api_server=${KUBERNETES_MASTER:-http://${service_proxy}:8888}
 
 # run service procs as "nobody"
 apply_uids="s6-applyuidgid -u 99 -g 99"
@@ -48,7 +55,8 @@ fdmove -c 2 1
 $apply_uids
 /opt/km apiserver
   --address=$HOST
-  --port=$PORT_8888
+  --port=$apiserver_port
+  --read_only_port=$apiserver_ro_port
   --mesos_master=${mesos_master}
   --etcd_servers=${etcd_server_list}
   --portal_net=${PORTAL_NET:-10.10.10.0/24}
@@ -66,9 +74,9 @@ fdmove -c 2 1
 $apply_uids
 /opt/km controller-manager
   --address=$HOST
-  --port=$PORT_10252
+  --port=$controller_manager_port
   --mesos_master=${mesos_master}
-  --master=http://$HOST:$PORT_8888
+  --master=http://$HOST:$apiserver_port
   --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}}
 EOF
 
@@ -84,13 +92,14 @@ fdmove -c 2 1
 $apply_uids
 /opt/km scheduler
   --address=$HOST
-  --port=$PORT_10251
+  --port=$scheduler_port
   --mesos_master=${mesos_master}
-  --api_servers=${api_server}
+  --api_servers=http://${apiserver_host}:${apiserver_port}
   --etcd_servers=${etcd_server_list}
   --mesos_user=${K8SM_MESOS_USER:-root}
   --v=${SCHEDULER_GLOG_v:-${logv}}
   --km_path=${sandbox}/executor-installer.sh
+  --advertised_address=${scheduler_host}:${scheduler_port}
 EOF
 
 cd ${sandbox}

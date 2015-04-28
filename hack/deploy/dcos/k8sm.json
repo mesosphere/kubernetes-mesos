@@ -2,7 +2,6 @@
   "id": "/k8sm",
   "cpus": 1,
   "mem": 1024.0,
-  "ports": [ 8888, 10251, 10252 ],
   "container": {
     "type": "DOCKER",
     "docker": {
@@ -11,7 +10,11 @@
     }
   },
   "env":{
-    "GLOG_v": "1"
+    "GLOG_v": "1",
+    "APISERVER_PORT": "8888",
+    "APISERVER_RO_PORT": "8889",
+    "SCHEDULER_PORT": "10251",
+    "CONTROLLER_MANAGER_PORT": "10252"
   },
   "upgradeStrategy":{
     "minimumHealthCapacity": 0,
@@ -20,11 +23,10 @@
   "instances": 1,
   "healthChecks": [
     {
+      "command": { "value": "curl -f -XGET http://$HOST:$APISERVER_PORT/healthz" },
       "intervalSeconds": 60,
       "maxConsecutiveFailures": 2,
-      "path": "/healthz",
-      "portIndex": 0,
-      "protocol": "HTTP"
+      "protocol": "COMMAND"
     }
   ]
 }
