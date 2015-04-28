@@ -85,15 +85,6 @@ If you are running an older version of etcd you may want to consider an upgrade.
 #### kubernetes-mesos
 
 Ensure that your Mesos cluster is started.
-If you're running a standalone Mesos master on `${servicehost}` then set:
-```shell
-$ export mesos_master=${servicehost}:5050
-```
-
-Or if you have multiple Mesos masters registered with a Zookeeper cluster then set:
-```shell
-$ export mesos_master=zk://${zkserver1}:2181,${zkserver2}:2181,${zkserver3}:2181/mesos
-```
 
 Create a configuration file for the Mesos cloud provider:
 
@@ -125,7 +116,6 @@ Fire up the kubernetes-mesos framework components (yes, these are **all** requir
 ```shell
 $ ./bin/km apiserver \
   --address=${servicehost} \
-  --mesos_master=${mesos_master} \
   --etcd_servers=http://${servicehost}:4001 \
   --portal_net=10.10.10.0/24 \
   --port=8888 \
@@ -134,11 +124,9 @@ $ ./bin/km apiserver \
 
 $ ./bin/km controller-manager \
   --master=$servicehost:8888 \
-  --mesos_master=${mesos_master}
 
 $ ./bin/km scheduler \
   --address=${servicehost} \
-  --mesos_master=${mesos_master} \
   --etcd_servers=http://${servicehost}:4001 \
   --mesos_user=root \
   --api_servers=$servicehost:8888
