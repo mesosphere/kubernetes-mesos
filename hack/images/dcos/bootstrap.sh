@@ -1,5 +1,9 @@
 #!/bin/sh
-source /functions.sh
+
+sandbox=${MESOS_SANDBOX:-${MESOS_DIRECTORY}}
+test -n "$sandbox" || die failed to identify mesos sandbox. neither MESOS_DIRECTORY or MESOS_SANDBOX was specified
+
+. /opt/functions.sh
 
 mesos_leader=$(leading_master_ip) || die
 mesos_master=${mesos_leader}:5050
@@ -42,7 +46,7 @@ prepare_service ${monitor_dir} ${service_dir} apiserver ${APISERVER_RESPAWN_DELA
 #!/usr/bin/execlineb
 fdmove -c 2 1
 $apply_uids
-/km apiserver
+/opt/km apiserver
   --address=$HOST
   --port=$PORT_8888
   --mesos_master=${mesos_master}
@@ -60,7 +64,7 @@ prepare_service ${monitor_dir} ${service_dir} controller-manager ${CONTROLLER_MA
 #!/usr/bin/execlineb
 fdmove -c 2 1
 $apply_uids
-/km controller-manager
+/opt/km controller-manager
   --address=$HOST
   --port=$PORT_10252
   --mesos_master=${mesos_master}
@@ -78,7 +82,7 @@ prepare_service ${monitor_dir} ${service_dir} scheduler ${SCHEDULER_RESPAWN_DELA
 #!/usr/bin/execlineb
 fdmove -c 2 1
 $apply_uids
-/km scheduler
+/opt/km scheduler
   --address=$HOST
   --port=$PORT_10251
   --mesos_master=${mesos_master}
@@ -86,7 +90,20 @@ $apply_uids
   --etcd_servers=${etcd_server_list}
   --mesos_user=${K8SM_MESOS_USER:-root}
   --v=${SCHEDULER_GLOG_v:-${logv}}
+  --km_path=${sandbox}/executor-installer.sh
 EOF
+
+cd ${sandbox}
+
+>executor-extractor echo '#!/bin/bash
+echo "Self Extracting Installer"
+ARCHIVE=`awk "/^__ARCHIVE_BELOW__/ {print NR + 1; exit 0; }" $0`
+tail -n+$ARCHIVE $0 | tar xzv
+exec ./opt/executor.sh "$@"
+__ARCHIVE_BELOW__'
+
+(cat executor-extractor; tar czf - -C / opt etc/leapsecs.dat usr bin sbin) >executor-installer.sh
+chmod +x executor-installer.sh
 
 #--- service monitor
 #
@@ -95,13 +112,13 @@ EOF
 # (2) after all monitors have reported "up" once,
 # (3) spawn the service tree
 #
-cd ${MESOS_SANDBOX}
-
 cat <<EOF >monitor.sh
 #!/usr/bin/execlineb
 foreground {
   s6-ftrig-listen -a {
     ${monitor_dir}/apiserver-monitor/event U
+    ${monitor_dir}/scheduler-monitor/event U
+    ${monitor_dir}/controller-manager-monitor/event U
   } /usr/bin/s6-svscan -t${S6_RESCAN:-30000} ${monitor_dir}
 }
 /usr/bin/s6-svscan -t${S6_RESCAN:-30000} ${service_dir}

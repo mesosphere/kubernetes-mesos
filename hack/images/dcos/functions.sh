@@ -1,4 +1,7 @@
 #!/bin/sh
+
+test -n "$sandbox" || die failed to identify mesos sandbox
+
 die() {
   test ${#} -eq 0 || echo "$@" >&2
   exit 1
@@ -16,7 +19,7 @@ leading_master_ip() {
 
 prepare_var_run() {
   local hostpath=/var/run/kubernetes
-  local run=${MESOS_SANDBOX}/run
+  local run=${sandbox}/run
 
   test -L $hostpath && rm -f $hostpath
   test -d $hostpath && rm -rf $hostpath  # should not happen, but...
@@ -32,7 +35,7 @@ prepare_service_script() {
   cat >${svcdir}/${name}/${script}
   chmod +x ${svcdir}/${name}/${script}
 
-  test "$script" == "run" || return 0
+  test "$script" = "run" || return 0
 
   s6-mkfifodir -f ${svcdir}/${name}/event
 
@@ -40,13 +43,13 @@ prepare_service_script() {
   mkdir -p $log_dir/$name
   mkdir -p ${svcdir}/${name}/log
   cat <<EOF >${svcdir}/${name}/log/run
-#!/usr/bin/execlineb
-s6-log ${log_args} $log_dir/$name
+#!/bin/sh
+exec s6-log ${log_args} $log_dir/$name
 EOF
   chmod +x ${svcdir}/${name}/log/run
 
   local loglink=log/$name/current
-  ln -sv $loglink ${MESOS_SANDBOX}/${name}.log
+  ln -sv $loglink ${sandbox}/${name}.log
 
   echo prepared script $script for service $name in dir $svcdir
 }
@@ -57,21 +60,13 @@ prepare_monitor_script() {
   local name=$3
 
   prepare_service_script ${mondir} ${name}-monitor run <<EOF
-#!/usr/bin/execlineb
-fdmove -c 2 1
-foreground {
-  s6-notifywhenup s6-ftrig-listen1 ${svcdir}/${name}/event u
-    echo waiting for ${name} service startup
-}
-foreground {
-  echo ${name} service started
-}
-loopwhilex
-  foreground {
-    s6-ftrig-listen1 ${svcdir}/${name}/event u
-      echo waiting for ${name} service restart
-  }
-  echo ${name} service restarted
+#!/bin/sh
+exec 2>&1
+exec \\
+  loopwhilex \\
+    foreground s6-ftrig-listen1 ${svcdir}/${name}/event u \\
+      s6-notifywhenup echo '' \\
+    echo ${name} service started
 EOF
 }
 
@@ -84,21 +79,18 @@ prepare_service() {
   cat | prepare_service_script ${svcd} ${name} run
   prepare_monitor_script ${mond} ${svcd} ${name}
   prepare_service_script ${svcd} ${name} finish <<EOF
-#!/usr/bin/execlineb -S2
-foreground {
-  if { test "\${1}" != "256" }
-    foreground {
-      backtick -n ts { date "+%m%d %H:%M:%S.999999" }
-      import ts printf "I%s %7d respawn.xx:0] sleeping ${respawnSec}s before respawning ${name}\\n" "\${ts}" "\${2}"
-    } sleep ${respawnSec}
-}
+#!/bin/sh
+test "\$1" != "256" &&
+    printf "I%s %7d respawn.xx:0] sleeping ${respawnSec}s before respawning ${name}\\n" \\
+      "\$(date '+%m%d %H:%M:%S.999999')" "\${2}" &&
+    sleep ${respawnSec}
 exit 0
 EOF
 }
 
-log_dir=${LOG_DIR:-$MESOS_SANDBOX/log}
-monitor_dir=${MONITOR_DIR:-$MESOS_SANDBOX/monitor.d}
-service_dir=${SERVICE_DIR:-$MESOS_SANDBOX/service.d}
+log_dir=${LOG_DIR:-$sandbox/log}
+monitor_dir=${MONITOR_DIR:-$sandbox/monitor.d}
+service_dir=${SERVICE_DIR:-$sandbox/service.d}
 
 log_history=${LOG_HISTORY:-10}
 log_size=${LOG_SIZE:-2000000}
