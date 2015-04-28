@@ -36,6 +36,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/master/ports"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/tools"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
 	"github.com/coreos/go-etcd/etcd"
 	"github.com/gogo/protobuf/proto"
 	log "github.com/golang/glog"
@@ -400,6 +401,7 @@ func (s *SchedulerServer) Run(hks hyperkube.Interface, _ []string) error {
 
 	schedulerProcess, driverFactory, etcdClient, eid := s.bootstrap(hks)
 
+	healthz.InstallHandler(s.mux)
 	if s.EnableProfiling {
 		profile.InstallHandler(s.mux)
 	}
