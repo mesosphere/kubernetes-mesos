@@ -29,6 +29,7 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/hyperkube"
+	"github.com/mesosphere/kubernetes-mesos/pkg/redirfd"
 	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
 
 	"github.com/spf13/pflag"
@@ -49,6 +50,8 @@ type KubeletExecutorServer struct {
 	ProxyBindall    bool
 	SuicideTimeout  time.Duration
 	EnableProfiling bool
+	ShutdownFD      int
+	ShutdownFIFO    string
 }
 
 func NewKubeletExecutorServer() *KubeletExecutorServer {
@@ -65,6 +68,7 @@ func NewKubeletExecutorServer() *KubeletExecutorServer {
 		k.RootDirectory = pwd // mesos sandbox dir
 	}
 	k.Address = util.IP(net.ParseIP(defaultBindingAddress()))
+	k.ShutdownFD = -1 // indicates unspecified FD
 	return k
 }
 
@@ -89,6 +93,8 @@ func (s *KubeletExecutorServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&s.ProxyBindall, "proxy_bindall", s.ProxyBindall, "When true will cause kube-proxy to bind to 0.0.0.0.")
 	fs.DurationVar(&s.SuicideTimeout, "suicide_timeout", s.SuicideTimeout, "Self-terminate after this period of inactivity. Zero disables suicide watch.")
 	fs.BoolVar(&s.EnableProfiling, "profiling", s.EnableProfiling, "Enable profiling via web interface host:port/debug/pprof/")
+	fs.IntVar(&s.ShutdownFD, "shutdown_fd", s.ShutdownFD, "File descriptor used to signal shutdown to external watchers, requires shutdown_fifo flag")
+	fs.StringVar(&s.ShutdownFIFO, "shutdown_fifo", s.ShutdownFIFO, "FIFO used to signal shutdown to external watchers, requires shutdown_fd flag")
 }
 
 func (s *KubeletExecutorServer) AddStandaloneFlags(fs *pflag.FlagSet) {
@@ -98,6 +104,16 @@ func (s *KubeletExecutorServer) AddStandaloneFlags(fs *pflag.FlagSet) {
 
 func (s *KubeletExecutorServer) AddHyperkubeFlags(fs *pflag.FlagSet) {
 	s.addCoreFlags(fs)
+}
+
+// returns a Closer that should be closed to signal impending shutdown, but only if ShutdownFD and ShutdownFIFO were specified.
+func (s *KubeletExecutorServer) syncExternalShutdownWatcher() (io.Closer, error) {
+	if s.ShutdownFD == -1 || s.ShutdownFIFO == "" {
+		return nil, nil
+	}
+	// redirfd -w n fifo ...  # (blocks until the fifo is read)
+	log.Infof("blocked, waiting for shutdown reader for FD %d FIFO at %s", s.ShutdownFD, s.ShutdownFIFO)
+	return redirfd.Write.Redirect(true, false, s.ShutdownFD, s.ShutdownFIFO)
 }
 
 // Run runs the specified KubeletExecutorServer.
@@ -117,6 +133,11 @@ func (s *KubeletExecutorServer) Run(hks hyperkube.Interface, _ []string) error {
 
 	log.Infof("Using root directory: %v", s.RootDirectory)
 	credentialprovider.SetPreferredDockercfgPath(s.RootDirectory)
+
+	shutdownCloser, err := s.syncExternalShutdownWatcher()
+	if err != nil {
+		return err
+	}
 
 	cadvisorInterface, err := cadvisor.New(s.CadvisorPort)
 	if err != nil {
@@ -169,10 +190,10 @@ func (s *KubeletExecutorServer) Run(hks hyperkube.Interface, _ []string) error {
 
 	finished := make(chan struct{})
 	app.RunKubelet(&kcfg, app.KubeletBuilder(func(kc *app.KubeletConfig) (app.KubeletBootstrap, *kconfig.PodConfig, error) {
-		return s.createAndInitKubelet(kc, hks, &clientConfig, finished)
+		return s.createAndInitKubelet(kc, hks, &clientConfig, shutdownCloser, finished)
 	}))
 
-	// block until executor is shut down or commits suicide
+	// block until executor is shut down or commits shutdown
 	select {}
 }
 
@@ -218,6 +239,7 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(
 	kc *app.KubeletConfig,
 	hks hyperkube.Interface,
 	clientConfig *client.Config,
+	shutdownCloser io.Closer,
 	finished chan struct{},
 ) (app.KubeletBootstrap, *kconfig.PodConfig, error) {
 
@@ -280,6 +302,13 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(
 		Docker:          kc.DockerClient,
 		SuicideTimeout:  ks.SuicideTimeout,
 		KubeletFinished: kubeletFinished,
+		ShutdownAlert: func() {
+			if shutdownCloser != nil {
+				if e := shutdownCloser.Close(); e != nil {
+					log.Warningf("failed to signal shutdown to external watcher: %v", e)
+				}
+			}
+		},
 	})
 
 	k := &kubeletExecutor{

@@ -14,6 +14,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/container"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 	"github.com/fsouza/go-dockerclient"
 	"github.com/gogo/protobuf/proto"
@@ -96,6 +97,7 @@ type KubernetesExecutor struct {
 	dockerClient        dockertools.DockerInterface
 	suicideWatch        suicideWatcher
 	suicideTimeout      time.Duration
+	shutdownAlert       func()          // invoked just prior to executor shutdown by suicide
 	kubeletFinished     <-chan struct{} // signals that kubelet Run() died
 	initialRegistration sync.Once
 }
@@ -107,6 +109,7 @@ type Config struct {
 	APIClient       *client.Client
 	Watch           watch.Interface
 	Docker          dockertools.DockerInterface
+	ShutdownAlert   func()
 	SuicideTimeout  time.Duration
 	KubeletFinished <-chan struct{}
 }
@@ -131,6 +134,7 @@ func New(config Config) *KubernetesExecutor {
 		suicideTimeout:  config.SuicideTimeout,
 		kubeletFinished: config.KubeletFinished,
 		suicideWatch:    &suicideTimer{},
+		shutdownAlert:   config.ShutdownAlert,
 	}
 	//TODO(jdef) do something real with these events..
 	if config.Watch != nil {
@@ -687,6 +691,13 @@ func (k *KubernetesExecutor) doShutdown(driver bindings.ExecutorDriver) {
 
 	// signal to all listeners that this KubeletExecutor is done!
 	close(k.done)
+
+	if k.shutdownAlert != nil {
+		func() {
+			util.HandleCrash()
+			k.shutdownAlert()
+		}()
+	}
 
 	log.Infoln("Stopping executor driver")
 	_, err := driver.Stop()
