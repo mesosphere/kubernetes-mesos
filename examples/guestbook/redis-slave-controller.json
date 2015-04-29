@@ -12,7 +12,7 @@
              "id": "redis-slave-controller",
              "containers": [{
                "name": "slave",
-               "image": "jdef/redis-slave",
+               "image": "mesosphere/kubernetes:guestbook-redis-slave",
                "ports": [{"containerPort": 6379, "hostPort": 31020}]
              }]
            }
