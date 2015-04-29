@@ -143,16 +143,18 @@ func (s *CMServer) Run(_ []string) error {
 		if s.EnableProfiling {
 			profile.InstallHandler(mux)
 		}
-		controllers := []interface{} { controllerManager, nodeController }
-		checkers := make([]healthz.HealthzChecker, len(controllers))
-		for _, checkme := range controllers {
-			checker, ok := checkme.(healthz.HealthzChecker)
-			if ok {
+
+		// Any controllers implementing HealthzChecker will be Check()ed during health check.
+		controllers := []interface{} { controllerManager, nodeController, resourceQuotaManager, namespaceManager }
+		checkers := make([]healthz.HealthzChecker, 0)
+		for _, c := range controllers {
+			if checker, ok := c.(healthz.HealthzChecker); ok {
 				checkers = append(checkers, checker)
 			}
 		}
 
 		healthz.InstallHandler(mux, checkers...)
+
 		util.Forever(func() { http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), mux) }, 5*time.Second)
 	}()
 
