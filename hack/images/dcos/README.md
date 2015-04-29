@@ -13,6 +13,6 @@
 * webhook.sh - helper that can communicate with simple HTTP webhook endpoints
 
 ## TODO
-- [ ] process supervision for the executor is broken, dandling procs end up as children of slave
+- [x] process supervision for the executor is broken, dandling procs end up as children of slave
 - [ ] makes a big assumption about the location of etcd, need a better story here
 - [ ] s6 and k8s require files to exist in certain places on the host. this is terrible practice
