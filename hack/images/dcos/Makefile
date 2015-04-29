@@ -15,16 +15,23 @@ EXECLINE_VER ?= 2.1.1.1
 EXECLINE_ARCH ?= $(COMMON_ARCH)
 EXECLINE_OBJ ?= execline-$(EXECLINE_VER)-$(EXECLINE_ARCH)-bin.tar.gz
 
+ETCD_IMAGE = etcd
+ETCD_TAG = 2.0.9
+ETCD_OUTPUT_DIR = $(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64
+ETCD_BINS = $(ETCD_OUTPUT_DIR)/etcd $(ETCD_OUTPUT_DIR)/etcdctl
+ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz
+
 S6_BINS ?= $(S6_OBJ) $(EXECLINE_OBJ)
 
-.PHONY:	clean build push s6 $(S6_BINS) deps
+.PHONY:	clean build push s6 $(S6_BINS) deps etcd $(ETCD_BINS)
 
+#	rm -rf km $(ETCD_OUTPUT_DIR) usr _build etcd*
 clean:
 	rm -rf km
 
-deps: $(S6_BINS)
+deps: $(S6_BINS) $(ETCD_BINS)
 
-build: clean deps
+build: deps
 	cp -pv $(TARGET) .
 	$(SUDO) docker build -t $(REPO):$(TAG) .
 
@@ -40,5 +47,12 @@ s6:
 
 $(S6_BINS): s6
 	tar xzf _build/dist/$@
+
+etcd:
+	test 1 = 1 $(ETCD_BINS:%= -a -f "%") || ( \
+		curl -L -O $(ETCD_SOURCE) && tar xzvf $(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz)
+
+$(ETCD_BINS): etcd
+	cp $@ .
 
 all:	push

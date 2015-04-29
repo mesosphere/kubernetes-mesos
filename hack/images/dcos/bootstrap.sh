@@ -28,8 +28,26 @@ service_proxy=${SERVICE_PROXY:-${mesos_leader}}
 # would be nice if this was auto-discoverable. if this value changes
 # between launches of the framework, there can be dangling executors,
 # so it is important that this point to some frontend load balancer
-# of some sort, addressed by a fixed domain name or else a static IP.
-etcd_server_list=${ETCD_SERVER_LIST:-http://${service_proxy}:4001}
+# of some sort, or is otherwise addressed by a fixed domain name or
+# else a static IP.
+etcd_server_port=${ETCD_SERVER_PORT:-4001}
+etcd_server_peer_port=${ETCD_SERVER_PEER_PORT:-4002}
+if test -n "$DISABLE_ETCD_SERVER"; then
+  etcd_server_list=${ETCD_SERVER_LIST:-http://${service_proxy}:${etcd_server_port}}
+else
+  etcd_advertise_server_host=${ETCD_ADVERTISE_SERVER_HOST:-${default_dns_name}}
+  etcd_server_host=${ETCD_SERVER_HOST:-${HOST}}
+
+  etcd_initial_advertise_peer_urls=${ETCD_INITIAL_ADVERTISE_PEER_URLS:-http://${etcd_advertise_server_host}:${etcd_server_peer_port}}
+  etcd_listen_peer_urls=${ETCD_LISTEN_PEER_URLS:-http://${etcd_server_host}:${etcd_server_peer_port}}
+
+  etcd_advertise_client_urls=${ETCD_ADVERTISE_CLIENT_URLS:-http://${etcd_advertise_server_host}:${etcd_server_port}}
+  etcd_listen_client_urls=${ETCD_LISTEN_CLIENT_URLS:-http://${etcd_server_host}:${etcd_server_port}}
+
+  etcd_server_name=${ETCD_SERVER_NAME:-k8sm-etcd}
+  etcd_server_data=${ETCD_SERVER_DATA:-${sandbox}/etcd-data}
+  etcd_server_list=${etcd_listen_client_urls}
+fi
 
 # run service procs as "nobody"
 apply_uids="s6-applyuidgid -u 99 -g 99"
@@ -44,6 +62,24 @@ prepare_service_script ${service_dir} .s6-svscan finish <<EOF
 #!/usr/bin/execlineb
   define hostpath /var/run/kubernetes
   foreground { if { test -L ${hostpath} } rm -f ${hostpath} } exit 0
+EOF
+
+#TODO(jdef) don't run this as root
+test -n "$DISABLE_ETCD_SERVER" || prepare_service ${monitor_dir} ${service_dir} etcd-server ${ETCD_SERVER_RESPAWN_DELAY:-3} << EOF
+#!/bin/sh
+exec 2>&1
+mkdir -p $etcd_server_data
+echo starting etcd
+PATH=/opt:$PATH
+export PATH
+exec /opt/etcd \\
+  -data-dir $etcd_server_data \\
+  -name $etcd_server_name \\
+  -initial-cluster ${etcd_server_name}=${etcd_initial_advertise_peer_urls} \\
+  -initial-advertise-peer-urls ${etcd_initial_advertise_peer_urls} \\
+  -advertise-client-urls ${etcd_advertise_client_urls} \\
+  -listen-client-urls ${etcd_listen_client_urls} \\
+  -listen-peer-urls ${etcd_listen_peer_urls}
 EOF
 
 #

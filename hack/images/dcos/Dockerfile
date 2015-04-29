@@ -9,6 +9,8 @@ ENTRYPOINT [ "/opt/bootstrap.sh" ]
 
 ADD usr			/usr/
 ADD leapsecs.dat	/etc/
+ADD etcd		/opt/
+ADD etcdctl		/opt/
 ADD km			/opt/
 ADD functions.sh	/opt/
 ADD bootstrap.sh	/opt/
