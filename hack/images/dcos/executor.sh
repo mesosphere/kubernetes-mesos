@@ -45,17 +45,38 @@ test -L /usr/libexec/s6lockd-helper || ln -s ${sandbox}/usr/libexec/s6lockd-help
 # In this service script, we map a FD to the shutdown_fifo, expecting that upon startup the
 # executor will flip into blocking mode until there is a fifo reader (via redirfd -w n fifo)
 #
-prepare_service ${monitor_dir} ${service_dir} executor ${EXECUTOR_RESPAWN_DELAY:-3} <<EOF
+prepare_service_script ${service_dir} executor run <<EOF
 #!/bin/sh
 exec 2>&1
 unset LD_LIBRARY_PATH
-exec redirfd -w -nb 3 $shutdown_fifo \\
+sleep 2
+exec \\
+  redirfd -w -nb 3 $shutdown_fifo \\
+  foreground rm -f ${service_dir}/shutdown/down '' \\
+  ./run-stage2
+EOF
+
+# split this from 'run' because foreground gets confused with multiple blocks present
+# when not using execlineb
+prepare_service_script ${service_dir} executor run-stage2 <<EOF
+#!/bin/sh
+exec 2>&1
+exec \\
+  foreground s6-svc -u ${service_dir}/shutdown '' \\
   ${sandbox}/opt/km executor ${@} \\
     --run_proxy=false \\
     --hostname_override=$LIBPROCESS_IP \\
     --address=$LIBPROCESS_IP \\
     --shutdown_fd=3 \\
     --shutdown_fifo=$shutdown_fifo
+EOF
+
+prepare_service_script ${service_dir} executor finish <<EOF
+#!/bin/sh
+exec 2>&1
+test -f down && exec s6-svscanctl -t ${service_dir}
+echo rebooting executor...
+sleep 2
 EOF
 
 #TODO: support these additional parameters at some point for the kube API client; should
@@ -71,7 +92,7 @@ EOF
 
 # if the proxy dies then it will send a shutdown signal to the executor.
 # TODO(jdef) probably don't want this behavior but I can't remember why I added it yesterday..
-prepare_service ${monitor_dir} ${service_dir} proxy ${PROXY_RESPAWN_DELAY:-3} <<EOF
+prepare_service_script ${service_dir} proxy run <<EOF
 #!/bin/sh
 exec 2>&1
 unset LD_LIBRARY_PATH
@@ -114,62 +135,41 @@ EOF
 prepare_service_script ${service_dir} shutdown run <<EOF
 #!/bin/sh
 exec 2>&1
-echo awaiting shutdown signal
-exec redirfd -rnb 0 $shutdown_fifo foreground cat '' s6-svc -OD ${service_dir}/executor
+echo spawning shutdown monitor
+exec \\
+  redirfd -rnb 0 $shutdown_fifo \\
+  foreground cat '' \\
+  ./post-run
+EOF
+
+# post-run may take longer than 5s to complete so do some cleanup work here
+# instead of in the finish script (which is time constrained)
+prepare_service_script ${service_dir} shutdown post-run <<EOF
+#!/bin/sh
+exec 2>&1
+echo entering post-run phase for shutdown monitor
+touch down \\
+    ${service_dir}/proxy/down \\
+    ${service_dir}/executor/down
+exec s6-svc -Dd ${service_dir}/executor
 EOF
 
 # 2) sends termination signal to k8s service s6 supervisor.
 # the finish script can only live for 5s at most
 prepare_service_script ${service_dir} shutdown finish <<EOF
 #!/bin/sh
-touch down \\
-  ${service_dir}/proxy/down \\
-  ${service_dir}/executor/down \\
-  ${monitor_dir}/proxy-monitor/down \\
-  ${monitor_dir}/executor-monitor/down
-echo shutdown finished \$*
-s6-svscanctl -t ${monitor_dir} &
-s6-svscanctl -t ${service_dir} &
-wait
-exit 0
+exec 2>&1
+echo shutdown monitor finished \$*
 EOF
 
-#--- service monitor
-#
-# (0) subscribe to monitor "up" events
-# (1) fork service monitors
-# (2) after all monitors have reported "up" once,
-# (3) spawn the service tree
-#
-cd ${sandbox}
-mkdir -p init.d/s1
+mkfifo ${shutdown_fifo}
 
-# TODO(jdef) the supervision hierarchy is messed up here: the monitor svscan escapes
-# and becomes owned by the slave instead of the top-level "init/s1" svscan
-cat <<EOF >init.d/s1/run
-#!/bin/sh
-die() {
-  local rc=\$?
-  echo \$* >&2
-  exit \$rc
-}
-s6-ftrig-listen -a \
-  ${monitor_dir}/executor-monitor/event U \
-  ${monitor_dir}/proxy-monitor/event U \
-  '' s6-svscan ${monitor_dir} || die monitoring s6-ftrig-listen exited \$?
+# default startup mode for shutdown monitor is "down", the executor service script
+# will flip it on and the service supervisor will eventually realize (<= 5s) that
+# this file no longer exists and it will start the shutdown monitor service. the
+# executor startup sequence actually blocks on the FIFO until the shutdown watcher
+# spawns.
+touch ${service_dir}/shutdown/down
+
+echo Starting service supervisor
 exec s6-svscan ${service_dir}
-EOF
-chmod +x init.d/s1/run
-
-cat <<EOF >init.d/s1/finish
-#!/bin/sh
-touch down
-echo executor terminating \$*
-s6-svscanctl -t ${monitor_dir} &
-s6-svscanctl -t ${sandbox}/init &
-wait
-exit 0
-EOF
-chmod +x init.d/s1/finish
-
-exec s6-svscan init.d
