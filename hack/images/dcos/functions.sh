@@ -7,6 +7,16 @@ die() {
   exit 1
 }
 
+lookup_ip() {
+  test -n "$K8SM_MESOS_MASTER" && {
+    echo $K8SM_MESOS_MASTER
+    return
+  }
+  local leader=$(nslookup "$1" | sed -e '/^Server:/,/^Address .*$/{ d }' -e '/^$/d'|grep -e '^Address '|cut -f3 -d' '|head -1)
+  test -n "$leader" || die Failed to identify $1
+  echo $leader
+}
+
 leading_master_ip() {
   test -n "$K8SM_MESOS_MASTER" && {
     echo $K8SM_MESOS_MASTER

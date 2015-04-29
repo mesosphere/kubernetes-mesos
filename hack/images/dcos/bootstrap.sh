@@ -51,6 +51,9 @@ fi
 
 # run service procs as "nobody"
 apply_uids="s6-applyuidgid -u 99 -g 99"
+host_ip=$(echo $HOST | grep -e '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+' >/dev/null 2>&1)
+test -n "$host_ip" || host_ip=$(lookup_ip "$HOST")
+echo host_ip=$host_ip
 
 #
 # create services directories and scripts
@@ -132,7 +135,7 @@ prepare_service ${monitor_dir} ${service_dir} apiserver ${APISERVER_RESPAWN_DELA
 fdmove -c 2 1
 $apply_uids
 /opt/km apiserver
-  --address=$HOST
+  --address=$host_ip
   --port=$apiserver_port
   --read_only_port=$apiserver_ro_port
   --mesos_master=${mesos_master}
@@ -151,10 +154,10 @@ prepare_service ${monitor_dir} ${service_dir} controller-manager ${CONTROLLER_MA
 fdmove -c 2 1
 $apply_uids
 /opt/km controller-manager
-  --address=$HOST
+  --address=$host_ip
   --port=$controller_manager_port
   --mesos_master=${mesos_master}
-  --master=http://$HOST:$apiserver_port
+  --master=http://$host_ip:$apiserver_port
   --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}}
 EOF
 
@@ -177,7 +180,7 @@ prepare_service ${monitor_dir} ${service_dir} scheduler ${SCHEDULER_RESPAWN_DELA
 fdmove -c 2 1
 $apply_uids
 /opt/km scheduler $failover_timeout
-  --address=$HOST
+  --address=$host_ip
   --port=$scheduler_port
   --mesos_master=${mesos_master}
   --api_servers=http://${apiserver_host}:${apiserver_port}
