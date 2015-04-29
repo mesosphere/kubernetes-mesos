@@ -15,3 +15,4 @@ ADD km			/opt/
 ADD functions.sh	/opt/
 ADD bootstrap.sh	/opt/
 ADD executor.sh		/opt/
+ADD .version		/opt/

@@ -4,6 +4,7 @@ sandbox=${MESOS_SANDBOX:-${MESOS_DIRECTORY}}
 test -n "$sandbox" || die failed to identify mesos sandbox. neither MESOS_DIRECTORY or MESOS_SANDBOX was specified
 
 . /opt/functions.sh
+cp /opt/.version ${sandbox}
 
 mesos_leader=$(leading_master_ip) || die
 mesos_master=${mesos_leader}:5050
@@ -200,7 +201,9 @@ cd ${sandbox}
 echo "Self Extracting Installer"
 ARCHIVE=`awk "/^__ARCHIVE_BELOW__/ {print NR + 1; exit 0; }" $0`
 tail -n+$ARCHIVE $0 | tar xzv
-exec ./opt/executor.sh "$@"
+echo mounts before unshare:
+cat /proc/$$/mounts
+exec unshare -m -- ./opt/executor.sh "$@"
 __ARCHIVE_BELOW__'
 
 (cat executor-extractor; tar czf - -C / opt etc/leapsecs.dat usr bin sbin) >executor-installer.sh

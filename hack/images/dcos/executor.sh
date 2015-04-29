@@ -4,8 +4,13 @@
 #
 env
 
+echo mounts after unshare:
+cat /proc/$$/mounts
+
 sandbox=${MESOS_SANDBOX:-${MESOS_DIRECTORY}}
 test -n "$sandbox" || die failed to identify mesos sandbox. neither MESOS_DIRECTORY or MESOS_SANDBOX was specified
+
+cp ${sandbox}/opt/.version ${sandbox}
 
 execlineb_home=$sandbox
 . ${sandbox}/opt/functions.sh
@@ -20,6 +25,47 @@ export LD_LIBRARY_PATH
 #LD_DEBUG=all
 #export LD_DEBUG
 
+set -vx
+
+copy_deps() {
+  echo copying file deps to root filesystem BAD BAD BAD
+  #TODO(jdef): until there is a better way.. skalibs hardcodes the location of this file
+  test -f /etc/leapsecs.dat || cp etc/leapsecs.dat /etc/
+  test -d /usr/libexec || mkdir -p /usr/libexec
+  test -L /usr/libexec/s6lockd-helper || ln -s ${sandbox}/usr/libexec/s6lockd-helper /usr/libexec/
+}
+bind_mount_deps() {
+  local d
+  local files="etc/leapsecs.dat usr/libexec/s6lockd-helper"
+  echo bind_mount_deps checking files/directories
+  for i in $files; do
+    d=$(dirname /$i)
+    if test ! -d $d; then
+      mkdir -p $d || return 3
+    fi
+    touch /$i || return 4
+  done
+  echo bind_mount_deps bind mounting files
+  for i in $files; do
+    mount --bind ${sandbox}/$i /$i
+  done
+  echo bind mounted filesystem deps
+}
+setup_filesystem() {
+  echo setup filesystem
+  mount --make-rslave /
+
+  if bind_mount_deps; then
+    echo bind mounts succeeded
+    return 0
+  else
+    echo bind mounts failed
+    copy_deps
+  fi
+}
+
+setup_filesystem
+
 #TODO(jdef) if I uncomment this then things break, but I don't understand why - is something (the containerizer?)
 #messing with the argv list?
 #
@@ -31,11 +77,6 @@ export LD_LIBRARY_PATH
 shutdown_fifo=${sandbox}/shutdown_fifo
 
 mkdir -p ${log_dir}
-
-#TODO(jdef): until there is a better way.. skalibs hardcodes the location of this file
-test -f /etc/leapsecs.dat || cp etc/leapsecs.dat /etc/
-test -d /usr/libexec || mkdir -p /usr/libexec
-test -L /usr/libexec/s6lockd-helper || ln -s ${sandbox}/usr/libexec/s6lockd-helper /usr/libexec/
 
 #
 # If shutdown_fd is specified, executor startup should block, waiting for shutdown_fd to be read from.
@@ -58,18 +99,23 @@ EOF
 
 # split this from 'run' because foreground gets confused with multiple blocks present
 # when not using execlineb
-prepare_service_script ${service_dir} executor run-stage2 <<EOF
+prepare_executor_stage2() {
+  local gatedev=$(ip route show|grep -e '^default'|head -1|cut -f5 -d' ')
+  local ipaddr=$(ip -o -f inet addr show dev $gatedev|sed -e 's,^.*inet ,,g'|cut -f1 -d/)
+  local bind=${LIBPROCESS_IP:-${ipaddr:-0.0.0.0}}
+  prepare_service_script ${service_dir} executor run-stage2 <<EOF
 #!/bin/sh
 exec 2>&1
 exec \\
   foreground s6-svc -u ${service_dir}/shutdown '' \\
   ${sandbox}/opt/km executor ${@} \\
     --run_proxy=false \\
-    --hostname_override=$LIBPROCESS_IP \\
-    --address=$LIBPROCESS_IP \\
+    --address=$bind \\
     --shutdown_fd=3 \\
     --shutdown_fifo=$shutdown_fifo
 EOF
+}
+prepare_executor_stage2 $@
 
 prepare_service_script ${service_dir} executor finish <<EOF
 #!/bin/sh

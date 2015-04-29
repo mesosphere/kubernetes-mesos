@@ -33,6 +33,7 @@ deps: $(S6_BINS) $(ETCD_BINS)
 
 build: deps
 	cp -pv $(TARGET) .
+	date -Iseconds >.version
 	$(SUDO) docker build -t $(REPO):$(TAG) .
 
 push:	build
