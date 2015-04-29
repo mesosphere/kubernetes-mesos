@@ -164,17 +164,26 @@ EOF
 # --api_servers and if the IPs change (because this container changes
 # hosts) then the executors become zombies.
 #
+mesos_role="${K8SM_MESOS_ROLE}"
+test -n "$mesos_role" || mesos_role="*"
+failover_timeout="${K8SM_FAILOVER_TIMEOUT}"
+if test -n "$failover_timeout"; then
+  failover_timeout="--failover_timeout=$failover_timeout"
+else
+  unset failover_timeout
+fi
 prepare_service ${monitor_dir} ${service_dir} scheduler ${SCHEDULER_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
 $apply_uids
-/opt/km scheduler
+/opt/km scheduler $failover_timeout
   --address=$HOST
   --port=$scheduler_port
   --mesos_master=${mesos_master}
   --api_servers=http://${apiserver_host}:${apiserver_port}
   --etcd_servers=${etcd_server_list}
   --mesos_user=${K8SM_MESOS_USER:-root}
+  --mesos_role="$mesos_role"
   --v=${SCHEDULER_GLOG_v:-${logv}}
   --km_path=${sandbox}/executor-installer.sh
   --advertised_address=${scheduler_host}:${scheduler_port}
