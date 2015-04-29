@@ -64,9 +64,11 @@ prepare_service_script ${service_dir} .s6-svscan finish <<EOF
   foreground { if { test -L ${hostpath} } rm -f ${hostpath} } exit 0
 EOF
 
-#TODO(jdef) don't run this as root
-test -n "$DISABLE_ETCD_SERVER" || prepare_service ${monitor_dir} ${service_dir} etcd-server ${ETCD_SERVER_RESPAWN_DELAY:-3} << EOF
+prepare_etcd_service() {
+  prepare_service ${monitor_dir} ${service_dir} etcd-server ${ETCD_SERVER_RESPAWN_DELAY:-1} << EOF
 #!/bin/sh
+#TODO(jdef) don't run this as root
+#TODO(jdef) would be super-cool to have socket-activation here so that clients can connect before etcd is really ready
 exec 2>&1
 mkdir -p $etcd_server_data
 echo starting etcd
@@ -81,6 +83,46 @@ exec /opt/etcd \\
   -listen-client-urls ${etcd_listen_client_urls} \\
   -listen-peer-urls ${etcd_listen_peer_urls}
 EOF
+
+  # down by default because we need to catch the signal when it's up and running
+  touch ${service_dir}/etcd-server/down
+  # we only want to start these services after we know that etcd is up and running
+  touch ${service_dir}/apiserver/down
+  touch ${service_dir}/scheduler/down
+  touch ${service_dir}/controller-manager/down
+
+  # 1. startup etcd, waiting for an U signal
+  # 2. upon receving the signal, start up apiserver and scheduler
+  # 3. block forever (TODO: should just terminate and not restart)
+  prepare_service_script ${service_dir} etcd-server-watcher run <<EOF
+#!/bin/sh
+exec 2>&1
+set -vx
+echo \$(date -Iseconds) sending start signal to etcd-server
+s6-svc -u ${service_dir}/etcd-server
+
+version_check() {
+  wget -q -O - ${etcd_server_list}/version >/dev/null 2>&1 && sleep 2 || exit 2
+}
+
+# HACK(jdef): no super-reliable way to tell if etcd will stay up for long, so
+# check that 5 seqential version checks pass and if so assume the world is good
+version_check; version_check; version_check; version_check; version_check
+
+echo \$(date -Iseconds) starting apiserver, scheduler, controller-manager services...
+s6-svc -u ${service_dir}/apiserver
+s6-svc -u ${service_dir}/scheduler
+s6-svc -u ${service_dir}/controller-manager
+touch down
+EOF
+
+  prepare_service_script ${service_dir} etcd-server-watcher finish <<EOF
+#!/bin/sh
+exec 2>&1
+echo \$(date -Iseconds) etcd-server-watcher-finish \$*
+test -f down && exec s6-svc -d \$(pwd) || exec sleep 4
+EOF
+}
 
 #
 # apiserver, uses frontend service proxy to connect with etcd
@@ -137,6 +179,8 @@ $apply_uids
   --km_path=${sandbox}/executor-installer.sh
   --advertised_address=${scheduler_host}:${scheduler_port}
 EOF
+
+test -n "$DISABLE_ETCD_SERVER" || prepare_etcd_service
 
 cd ${sandbox}
 

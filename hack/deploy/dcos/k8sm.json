@@ -5,7 +5,7 @@
   "container": {
     "type": "DOCKER",
     "docker": {
-      "image": "jdef/k8sm-km-dcos:0.14.2-0.5-dev",
+      "image": "mesosphere/kubernetes:k8s-0.14.2-k8sm-0.5-dcos-dev",
       "forcePullImage": true
     }
   },
@@ -24,7 +24,7 @@
   "healthChecks": [
     {
       "command": { "value": "curl -f -XGET http://$HOST:$APISERVER_PORT/healthz" },
-      "intervalSeconds": 60,
+      "intervalSeconds": 90,
       "maxConsecutiveFailures": 2,
       "protocol": "COMMAND"
     }

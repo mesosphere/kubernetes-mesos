@@ -1,7 +1,7 @@
 TARGET	?= /target/km
-IMAGE	?= km-dcos
-REPO	?= jdef/k8sm-$(IMAGE)
-TAG	?= 0.14.2-0.5-dev
+IMAGE	?= kubernetes
+REPO	?= mesosphere/$(IMAGE)
+TAG	?= k8s-0.14.2-k8sm-0.5-dcos-dev
 SUDO	?= $(shell test "$$(whoami)" = "root" || echo sudo)
 
 COMMON_ARCH ?= linux-amd64
@@ -53,6 +53,6 @@ etcd:
 		curl -L -O $(ETCD_SOURCE) && tar xzvf $(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz)
 
 $(ETCD_BINS): etcd
-	cp $@ .
+	test -f "$$(basename $@)" || cp -v $@ .
 
 all:	push
