@@ -11,6 +11,8 @@
   },
   "env":{
     "GLOG_v": "1",
+    "ETCD_SERVER_PORT": "4001",
+    "ETCD_SERVER_PEER_PORT": "4002",
     "APISERVER_PORT": "8888",
     "APISERVER_RO_PORT": "8889",
     "SCHEDULER_PORT": "10251",
