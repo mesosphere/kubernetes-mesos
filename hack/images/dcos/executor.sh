@@ -154,7 +154,6 @@ EOF
 #
 # pattern is this: open a fifo for writing, instant success even there is no reader
 #   redirfd -w -nb n fifo prog..
-#
 #   redirfd -w n fifo ...  # (blocks until the fifo is read)
 # ... later
 #   redirfd -rnb 0 fifo ... # Opening a fifo for reading, with instant success even if there is no writer, and blocking at the first attempt to read from it
@@ -175,9 +174,8 @@ EOF
 #
 
 #--- shutdown watcher
-# 0) waits for shutdown FIFO
-# 1) waits for them to terminate
-#
+# 1) waits for shutdown FIFO stream to close,
+# 2) and then delegates to post-run to coordinate service shutdown
 prepare_service_script ${service_dir} shutdown run <<EOF
 #!/bin/sh
 exec 2>&1
@@ -188,7 +186,7 @@ exec \\
   ./post-run
 EOF
 
-# post-run may take longer than 5s to complete so do some cleanup work here
+# post-run may take longer than 5s to complete, so do some cleanup work here
 # instead of in the finish script (which is time constrained)
 prepare_service_script ${service_dir} shutdown post-run <<EOF
 #!/bin/sh
@@ -200,8 +198,9 @@ touch down \\
 exec s6-svc -Dd ${service_dir}/executor
 EOF
 
-# 2) sends termination signal to k8s service s6 supervisor.
-# the finish script can only live for 5s at most
+# 3) sends termination signal to k8s service s6 supervisor.
+# the finish script can only live for 5s at most. the executor should
+# be terminated at this point so this script should execute fairly quickly.
 prepare_service_script ${service_dir} shutdown finish <<EOF
 #!/bin/sh
 exec 2>&1

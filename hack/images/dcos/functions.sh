@@ -23,6 +23,9 @@ leading_master_ip() {
   echo leader.mesos
 }
 
+# NOTE: this is really intended only for the apiserver since it runs in a
+# docker CT and has r/w access to the root file system, unlike the executor
+# proxy services.
 prepare_var_run() {
   local hostpath=/var/run/kubernetes
   local run=${sandbox}/run

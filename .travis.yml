@@ -13,5 +13,5 @@ install:
   - make
 
 script:
-  - make test.cover
+  - make test.cover test.integration
   - test -n "$COVERALLS_TOKEN" && $(go env GOPATH | awk 'BEGIN{FS=":"} {print $1}')/bin/goveralls -coverprofile=all.coverage.out -service=travis-ci -repotoken $COVERALLS_TOKEN || true
