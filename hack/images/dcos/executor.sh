@@ -97,25 +97,22 @@ exec \\
   ./run-stage2
 EOF
 
+gatedev=$(ip route show|grep -e '^default'|head -1|cut -f5 -d' ')
+ipaddr=$(ip -o -f inet addr show dev $gatedev|sed -e 's,^.*inet ,,g'|cut -f1 -d/)
+binding_ip=${LIBPROCESS_IP:-${ipaddr:-0.0.0.0}}
 # split this from 'run' because foreground gets confused with multiple blocks present
 # when not using execlineb
-prepare_executor_stage2() {
-  local gatedev=$(ip route show|grep -e '^default'|head -1|cut -f5 -d' ')
-  local ipaddr=$(ip -o -f inet addr show dev $gatedev|sed -e 's,^.*inet ,,g'|cut -f1 -d/)
-  local bind=${LIBPROCESS_IP:-${ipaddr:-0.0.0.0}}
-  prepare_service_script ${service_dir} executor run-stage2 <<EOF
+prepare_service_script ${service_dir} executor run-stage2 <<EOF
 #!/bin/sh
 exec 2>&1
 exec \\
   foreground s6-svc -u ${service_dir}/shutdown '' \\
   ${sandbox}/opt/km executor ${@} \\
     --run_proxy=false \\
-    --address=$bind \\
+    --address=$binding_ip \\
     --shutdown_fd=3 \\
     --shutdown_fifo=$shutdown_fifo
 EOF
-}
-prepare_executor_stage2 $@
 
 prepare_service_script ${service_dir} executor finish <<EOF
 #!/bin/sh
@@ -143,7 +140,7 @@ prepare_service_script ${service_dir} proxy run <<EOF
 exec 2>&1
 unset LD_LIBRARY_PATH
 exec ${sandbox}/opt/km proxy \\
-  --bind_address=${LIBPROCESS_IP:-0.0.0.0} \\
+  --bind_address=$binding_ip \\
   --logtostderr=true \\
   --master=${KUBERNETES_MASTER}
 EOF
