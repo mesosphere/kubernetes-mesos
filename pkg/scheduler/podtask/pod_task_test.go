@@ -154,3 +154,24 @@ func TestAcceptOfferPorts(t *testing.T) {
 		t.Fatalf("accepted offer %v:", offer)
 	}
 }
+
+func TestGeneratePodName(t *testing.T) {
+	p := &api.Pod{
+		ObjectMeta: api.ObjectMeta{
+			Name:      "foo",
+			Namespace: "bar",
+		},
+	}
+	name := generateTaskName(p)
+	expected := "foo.bar.pods"
+	if name != expected {
+		t.Fatalf("expected %q instead of %q", expected, name)
+	}
+
+	p.Namespace = ""
+	name = generateTaskName(p)
+	expected = "foo.default.pods"
+	if name != expected {
+		t.Fatalf("expected %q instead of %q", expected, name)
+	}
+}

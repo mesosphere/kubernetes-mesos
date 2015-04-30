@@ -106,7 +106,9 @@ func (s *KubeletExecutorServer) AddHyperkubeFlags(fs *pflag.FlagSet) {
 	s.addCoreFlags(fs)
 }
 
-// returns a Closer that should be closed to signal impending shutdown, but only if ShutdownFD and ShutdownFIFO were specified.
+// returns a Closer that should be closed to signal impending shutdown, but only if ShutdownFD
+// and ShutdownFIFO were specified. if they are specified, then this func blocks until there's
+// a reader on the FIFO stream.
 func (s *KubeletExecutorServer) syncExternalShutdownWatcher() (io.Closer, error) {
 	if s.ShutdownFD == -1 || s.ShutdownFIFO == "" {
 		return nil, nil

@@ -97,7 +97,7 @@ type KubernetesExecutor struct {
 	dockerClient        dockertools.DockerInterface
 	suicideWatch        suicideWatcher
 	suicideTimeout      time.Duration
-	shutdownAlert       func()          // invoked just prior to executor shutdown by suicide
+	shutdownAlert       func()          // invoked just prior to executor shutdown
 	kubeletFinished     <-chan struct{} // signals that kubelet Run() died
 	initialRegistration sync.Once
 }
