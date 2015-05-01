@@ -203,6 +203,8 @@ ARCHIVE=`awk "/^__ARCHIVE_BELOW__/ {print NR + 1; exit 0; }" $0`
 tail -n+$ARCHIVE $0 | tar xzv
 echo mounts before unshare:
 cat /proc/$$/mounts
+KUBERNETES_MASTER=http://'"${apiserver_host}:${apiserver_port}"'
+export KUBERNETES_MASTER
 exec unshare -m -- ./opt/executor.sh "$@"
 __ARCHIVE_BELOW__'
 
