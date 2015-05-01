@@ -15,6 +15,7 @@ cp ${sandbox}/opt/.version ${sandbox}
 execlineb_home=$sandbox
 . ${sandbox}/opt/functions.sh
 
+PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 PATH=${sandbox}/bin:$PATH
 PATH=${sandbox}/sbin:$PATH
 PATH=${sandbox}/usr/bin:$PATH
