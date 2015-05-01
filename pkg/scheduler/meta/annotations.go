@@ -8,7 +8,7 @@ const (
 	OfferIdKey               = "k8s.mesosphere.io/offerId"
 	ExecutorIdKey            = "k8s.mesosphere.io/executorId"
 	PortMappingKeyPrefix     = "k8s.mesosphere.io/port_"
-	PortMappingKeyFormat     = PortMappingKeyPrefix + "%d"
+	PortMappingKeyFormat     = PortMappingKeyPrefix + "%s_%d"
 	PortNameMappingKeyPrefix = "k8s.mesosphere.io/portName_"
-	PortNameMappingKeyFormat = PortNameMappingKeyPrefix + "%s"
+	PortNameMappingKeyFormat = PortNameMappingKeyPrefix + "%s_%s"
 )

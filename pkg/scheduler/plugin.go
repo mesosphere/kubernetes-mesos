@@ -194,9 +194,9 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *pod
 		p := &ports[entry.PortIdx]
 		p.HostPort = int(entry.OfferPort)
 		op := strconv.FormatUint(entry.OfferPort, 10)
-		pod.Annotations[fmt.Sprintf(annotation.PortMappingKeyFormat, p.ContainerPort)] = op
+		pod.Annotations[fmt.Sprintf(annotation.PortMappingKeyFormat, p.Protocol, p.ContainerPort)] = op
 		if p.Name != "" {
-			pod.Annotations[fmt.Sprintf(annotation.PortNameMappingKeyFormat, p.Name)] = op
+			pod.Annotations[fmt.Sprintf(annotation.PortNameMappingKeyFormat, p.Protocol, p.Name)] = op
 		}
 		pod.Spec.Containers[entry.ContainerIdx].Ports = ports
 	}

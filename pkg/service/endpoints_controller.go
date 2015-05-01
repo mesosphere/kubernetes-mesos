@@ -158,12 +158,12 @@ func (e *endpointController) SyncServiceEndpoints() error {
 	return resultErr
 }
 
-// HACK(jdef): return the HostPort instead of the ContainerPort for generic mesos compat.
+// returns the default mapped HostPort instead of the ContainerPort for mesos compat
 func findDefaultPort(pod *api.Pod, servicePort int, proto api.Protocol) int {
 	for _, container := range pod.Spec.Containers {
 		for _, port := range container.Ports {
-			if port.Protocol == proto && port.HostPort != 0 {
-				return port.HostPort
+			if p, err := findMappedPort(pod, proto, port.ContainerPort); err == nil {
+				return p
 			}
 		}
 	}
@@ -190,7 +190,7 @@ func findPort(pod *api.Pod, service *api.Service) (int, error) {
 		for _, container := range pod.Spec.Containers {
 			for _, port := range container.Ports {
 				if port.Name == name && port.Protocol == service.Spec.Protocol {
-					return findMappedPortName(pod, name)
+					return findMappedPortName(pod, port.Protocol, name)
 				}
 			}
 		}
@@ -208,7 +208,7 @@ func findPort(pod *api.Pod, service *api.Service) (int, error) {
 		for _, container := range pod.Spec.Containers {
 			for _, port := range container.Ports {
 				if port.ContainerPort == p {
-					return findMappedPort(pod, p)
+					return findMappedPort(pod, port.Protocol, p)
 				}
 			}
 		}
@@ -218,22 +218,22 @@ func findPort(pod *api.Pod, service *api.Service) (int, error) {
 	return -1, fmt.Errorf("no suitable port for manifest: %s", pod.UID)
 }
 
-func findMappedPort(pod *api.Pod, port int) (int, error) {
+func findMappedPort(pod *api.Pod, protocol api.Protocol, port int) (int, error) {
 	if len(pod.Annotations) > 0 {
-		key := fmt.Sprintf(meta.PortMappingKeyFormat, port)
+		key := fmt.Sprintf(meta.PortMappingKeyFormat, string(protocol), port)
 		if value, found := pod.Annotations[key]; found {
 			return strconv.Atoi(value)
 		}
 	}
-	return -1, fmt.Errorf("failed to find mapped container port: %d", port)
+	return -1, fmt.Errorf("failed to find mapped container %s port: %d", protocol, port)
 }
 
-func findMappedPortName(pod *api.Pod, portName string) (int, error) {
+func findMappedPortName(pod *api.Pod, protocol api.Protocol, portName string) (int, error) {
 	if len(pod.Annotations) > 0 {
-		key := fmt.Sprintf(meta.PortNameMappingKeyFormat, portName)
+		key := fmt.Sprintf(meta.PortNameMappingKeyFormat, string(protocol), portName)
 		if value, found := pod.Annotations[key]; found {
 			return strconv.Atoi(value)
 		}
 	}
-	return -1, fmt.Errorf("failed to find mapped container port name: %q", portName)
+	return -1, fmt.Errorf("failed to find mapped container %s port name: %q", protocol, portName)
 }
