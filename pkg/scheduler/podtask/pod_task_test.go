@@ -64,46 +64,6 @@ func TestNoPortsInPodOrOffer(t *testing.T) {
 	}
 }
 
-func TestDefaultHostPortMatching(t *testing.T) {
-	t.Parallel()
-	task, _ := fakePodTask("foo")
-	pod := &task.Pod
-
-	offer := &mesos.Offer{
-		Resources: []*mesos.Resource{
-			rangeResource("ports", []uint64{1, 1}),
-		},
-	}
-	mapping, err := defaultHostPortMapping(task, offer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(mapping) > 0 {
-		t.Fatalf("Found mappings for a pod without ports: %v", pod)
-	}
-
-	//--
-	pod.Spec = api.PodSpec{
-		Containers: []api.Container{{
-			Ports: []api.ContainerPort{{
-				HostPort: 123,
-			}, {
-				HostPort: 123,
-			}},
-		}},
-	}
-	task, err = New(api.NewDefaultContext(), "", *pod, &mesos.ExecutorInfo{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = defaultHostPortMapping(task, offer)
-	if err, _ := err.(*DuplicateHostPortError); err == nil {
-		t.Fatal("Expected duplicate port error")
-	} else if err.m1.OfferPort != 123 {
-		t.Fatal("Expected duplicate host port 123")
-	}
-}
-
 func TestAcceptOfferPorts(t *testing.T) {
 	t.Parallel()
 	task, _ := fakePodTask("foo")
@@ -145,8 +105,8 @@ func TestAcceptOfferPorts(t *testing.T) {
 		mutil.NewScalarResource("cpus", t_min_cpu),
 		mutil.NewScalarResource("mem", t_min_mem),
 	}
-	if ok := task.AcceptOffer(offer); !ok {
-		t.Fatalf("did not accepted offer %v:", offer)
+	if ok := task.AcceptOffer(offer); ok {
+		t.Fatalf("accepted offer %v:", offer)
 	}
 
 	pod.Spec.Containers[0].Ports[0].HostPort = 1

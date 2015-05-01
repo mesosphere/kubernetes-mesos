@@ -27,3 +27,15 @@ func newRanges(ports []uint64) *mesos.Value_Ranges {
 	}
 	return &mesos.Value_Ranges{Range: r}
 }
+
+func foreachRange(offer *mesos.Offer, resourceName string, f func(begin, end uint64)) {
+	for _, resource := range offer.Resources {
+		if resource.GetName() == resourceName {
+			for _, r := range (*resource).GetRanges().Range {
+				bp := r.GetBegin()
+				ep := r.GetEnd()
+				f(bp, ep)
+			}
+		}
+	}
+}

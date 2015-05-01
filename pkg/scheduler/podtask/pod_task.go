@@ -54,7 +54,7 @@ type T struct {
 	podKey     string
 	launchTime time.Time
 	bindTime   time.Time
-	mapper     HostPortMappingFunc
+	mapper     HostPortMappingType
 }
 
 type Spec struct {
@@ -151,7 +151,7 @@ func (t *T) FillFromDetails(details *mesos.Offer) error {
 		Memory:  containerMem,
 	}
 
-	if mapping, err := t.mapper(t, details); err != nil {
+	if mapping, err := t.mapper.Generate(t, details); err != nil {
 		t.Reset()
 		return err
 	} else {
@@ -209,7 +209,7 @@ func (t *T) AcceptOffer(offer *mesos.Offer) bool {
 			mem = *resource.GetScalar().Value
 		}
 	}
-	if _, err := t.mapper(t, offer); err != nil {
+	if _, err := t.mapper.Generate(t, offer); err != nil {
 		log.V(3).Info(err)
 		return false
 	}
@@ -250,7 +250,7 @@ func New(ctx api.Context, id string, pod api.Pod, executor *mesos.ExecutorInfo) 
 		Pod:      pod,
 		State:    StatePending,
 		podKey:   key,
-		mapper:   defaultHostPortMapping,
+		mapper:   mappingTypeForPod(&pod),
 		Flags:    make(map[FlagType]struct{}),
 		executor: proto.Clone(executor).(*mesos.ExecutorInfo),
 	}
@@ -308,7 +308,7 @@ func RecoverFrom(pod api.Pod) (*T, bool, error) {
 		podKey:     key,
 		State:      StatePending, // possibly running? mesos will tell us during reconciliation
 		Flags:      make(map[FlagType]struct{}),
-		mapper:     defaultHostPortMapping,
+		mapper:     mappingTypeForPod(&pod),
 		launchTime: now,
 		bindTime:   now,
 	}
@@ -346,83 +346,4 @@ func RecoverFrom(pod api.Pod) (*T, bool, error) {
 	t.Flags[Launched] = struct{}{}
 	t.Flags[Bound] = struct{}{}
 	return t, true, nil
-}
-
-type HostPortMapping struct {
-	ContainerIdx int // index of the container in the pod spec
-	PortIdx      int // index of the port in a container's port spec
-	OfferPort    uint64
-}
-
-// abstracts the way that host ports are mapped to pod container ports
-type HostPortMappingFunc func(t *T, offer *mesos.Offer) ([]HostPortMapping, error)
-
-type PortAllocationError struct {
-	PodId string
-	Ports []uint64
-}
-
-func (err *PortAllocationError) Error() string {
-	return fmt.Sprintf("Could not schedule pod %s: %d port(s) could not be allocated", err.PodId, len(err.Ports))
-}
-
-type DuplicateHostPortError struct {
-	m1, m2 HostPortMapping
-}
-
-func (err *DuplicateHostPortError) Error() string {
-	return fmt.Sprintf(
-		"Host port %d is specified for container %d, pod %d and container %d, pod %d",
-		err.m1.OfferPort, err.m1.ContainerIdx, err.m1.PortIdx, err.m2.ContainerIdx, err.m2.PortIdx)
-}
-
-// default k8s host port mapping implementation: hostPort == 0 means containerPort remains pod-private
-func defaultHostPortMapping(t *T, offer *mesos.Offer) ([]HostPortMapping, error) {
-	requiredPorts := make(map[uint64]HostPortMapping)
-	mapping := []HostPortMapping{}
-	for i, container := range t.Pod.Spec.Containers {
-		// strip all port==0 from this array; k8s already knows what to do with zero-
-		// ports (it does not create 'port bindings' on the minion-host); we need to
-		// remove the wildcards from this array since they don't consume host resources
-		for pi, port := range container.Ports {
-			if port.HostPort == 0 {
-				continue // ignore
-			}
-			m := HostPortMapping{
-				ContainerIdx: i,
-				PortIdx:      pi,
-				OfferPort:    uint64(port.HostPort),
-			}
-			if entry, inuse := requiredPorts[uint64(port.HostPort)]; inuse {
-				return nil, &DuplicateHostPortError{entry, m}
-			}
-			requiredPorts[uint64(port.HostPort)] = m
-		}
-	}
-	for _, resource := range offer.Resources {
-		if resource.GetName() == "ports" {
-			for _, r := range (*resource).GetRanges().Range {
-				bp := r.GetBegin()
-				ep := r.GetEnd()
-				for port, _ := range requiredPorts {
-					log.V(3).Infof("evaluating port range {%d:%d} %d", bp, ep, port)
-					if (bp <= port) && (port <= ep) {
-						mapping = append(mapping, requiredPorts[port])
-						delete(requiredPorts, port)
-					}
-				}
-			}
-		}
-	}
-	unsatisfiedPorts := len(requiredPorts)
-	if unsatisfiedPorts > 0 {
-		err := &PortAllocationError{
-			PodId: t.Pod.Name,
-		}
-		for p, _ := range requiredPorts {
-			err.Ports = append(err.Ports, p)
-		}
-		return nil, err
-	}
-	return mapping, nil
 }
