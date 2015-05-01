@@ -10,8 +10,7 @@
         "name": "master",
         "image": "library/redis",
         "ports": [{
-          "containerPort": 6379,
-          "hostPort": 31010 
+          "containerPort": 6379
         }]
       }]
     }

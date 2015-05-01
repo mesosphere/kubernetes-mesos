@@ -25,8 +25,7 @@ Create a file named `redis-master.json` describing a single pod, which runs a re
         "name": "master",
         "image": "dockerfile/redis",
         "ports": [{
-          "containerPort": 6379,
-          "hostPort": 31010
+          "containerPort": 6379
         }]
       }]
     }
@@ -68,7 +67,7 @@ $ vagrant ssh mesos-2
 vagrant@mesos-2:~$ sudo docker ps
 CONTAINER ID  IMAGE                    COMMAND               CREATED  STATUS  PORTS                    NAMES
 bd1b823fe48d  dockerfile/redis:latest  "redis-server /etc/r  46m ago  Up 46m                           k8s_master.6be2adec_redis-master-2.default.mesos_56a2e404-bd11-11e4-90fa-42010adf71e3_420420b2
-de2457a1487a  kubernetes/pause:go      "/pause"              46m ago  Up 46m  0.0.0.0:31010->6379/tcp  k8s_POD.b0f8ea85_redis-master-2.default.mesos_56a2e404-bd11-11e4-90fa-42010adf71e3_fed7f14e
+de2457a1487a  kubernetes/pause:go      "/pause"              46m ago  Up 46m  0.0.0.0:1025->6379/tcp   k8s_POD.b0f8ea85_redis-master-2.default.mesos_56a2e404-bd11-11e4-90fa-42010adf71e3_fed7f14e
 ```
 
 (Note that initial `docker pull` may take a few minutes, depending on network conditions.)
@@ -137,7 +136,7 @@ Create a file named `redis-slave-controller.json` that contains:
            "containers": [{
              "name": "slave",
              "image": "jdef/redis-slave",
-             "ports": [{"containerPort": 6379, "hostPort": 31020}]
+             "ports": [{"containerPort": 6379}]
            }]
          }
        },
@@ -245,7 +244,7 @@ Create a file named `frontend-controller.json`:
            "containers": [{
              "name": "php-redis",
              "image": "jdef/php-redis",
-             "ports": [{"containerPort": 80, "hostPort": 31030}]
+             "ports": [{"containerPort": 80}]
            }]
          }
        },
@@ -324,10 +323,17 @@ if (isset($_GET['cmd']) === true) {
 } ?>
 ```
 
-To play with the service itself, find the IP address of a Mesos slave that is running a frontend pod and visit `http://<host-ip>:31030`.
+To play with the service itself, find an endpoint of the frontend service and enter it into a web browser.
 ```shell
+$ kc get endpoints
+NAME             ENDPOINTS
+frontend         10.150.52.19:3889,10.22.211.18:3889,10.72.72.178:2182
+redismaster      10.22.211.18:1025
+redisslave       10.150.52.19:2182,10.72.72.178:1025
+...
+
 # You'll actually want to interact with this app via a browser but you can test its access using curl:
-$ curl http://10.22.211.18:31030
+$ curl http://10.22.211.18:3889
 <html ng-app="redis">
   <head>
     <title>Guestbook</title>
@@ -376,7 +382,7 @@ $ curl http://${servicehost}:5050/master/state.json
                         "mem": 64,
                         "disk": 0,
                         "cpus": 0.25,
-                        "ports": "[31030-31030]"
+                        "ports": ...
                     }
                 },
 ...
@@ -394,7 +400,7 @@ $ curl http://${servicehost}:5050/master/state.json
                 "mem": 6475,
                 "disk": 4974,
                 "cpus": 2,
-                "ports": "[31000-32000]"
+                "ports": ...
             }
         },
 ...
