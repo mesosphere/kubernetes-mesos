@@ -367,7 +367,7 @@ $ make test.v
 To generate an HTML test coverage report:
 
 ```shell
-$ go get code.google.com/p/go.tools/cmd/cover
+$ go get golang.org/x/tools/cmd/cover
 $ make test.cover
 $ go tool cover -html=all.coverage.out -o coverage-report.html
 ```
