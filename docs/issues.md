@@ -7,9 +7,10 @@ Kubernetes pod container specifications identify two types of ports, container p
 container ports are allocated from the network namespace of the pod, which is independent from that of the host, whereas;
 host ports are allocated from the network namespace of the host.
 The k8sm scheduler recognizes the declared host ports of each container in a pod/task and for each such port, attempts to allocate it from the offered ports listed in mesos resource offers.
+If no host port is declared, then the scheduler may choose any port from the offered ports ranges.
 
-If slaves are configured to offer a `ports` resource range, for example [31000-32000], then the host ports declared in the pod container specification must fall within that range.
-Ports declared outside that range will never match resource offers received by the k8sm scheduler, and so pod specifications that declare such ports will never be executed as tasks on the cluster.
+If slaves are configured to offer a `ports` resource range, for example [31000-32000], then any host ports declared in the pod container specification must fall within that range.
+Ports declared outside that range (other than zero) will never match resource offers received by the k8sm scheduler, and so pod specifications that declare such ports will never be executed as tasks on the cluster.
 
 As in Kubernetes proper, a missing pod container host port specification or a host port set to zero will skip allocation of a host port.
 
