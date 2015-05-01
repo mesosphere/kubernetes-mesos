@@ -170,19 +170,19 @@ func TestMappingTypeForPod(t *testing.T) {
 			Labels: map[string]string{},
 		},
 	}
-	mt := mappingTypeForPod(pod)
+	mt := MappingTypeForPod(pod)
 	if mt != HostPortMappingWildcard {
 		t.Fatalf("expected wildcard mapping")
 	}
 
 	pod.Labels[PortMappingLabelKey] = string(HostPortMappingFixed)
-	mt = mappingTypeForPod(pod)
+	mt = MappingTypeForPod(pod)
 	if mt != HostPortMappingFixed {
 		t.Fatalf("expected fixed mapping")
 	}
 
 	pod.Labels[PortMappingLabelKey] = string(HostPortMappingWildcard)
-	mt = mappingTypeForPod(pod)
+	mt = MappingTypeForPod(pod)
 	if mt != HostPortMappingWildcard {
 		t.Fatalf("expected wildcard mapping")
 	}

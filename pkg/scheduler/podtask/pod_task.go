@@ -250,7 +250,7 @@ func New(ctx api.Context, id string, pod api.Pod, executor *mesos.ExecutorInfo) 
 		Pod:      pod,
 		State:    StatePending,
 		podKey:   key,
-		mapper:   mappingTypeForPod(&pod),
+		mapper:   MappingTypeForPod(&pod),
 		Flags:    make(map[FlagType]struct{}),
 		executor: proto.Clone(executor).(*mesos.ExecutorInfo),
 	}
@@ -308,7 +308,7 @@ func RecoverFrom(pod api.Pod) (*T, bool, error) {
 		podKey:     key,
 		State:      StatePending, // possibly running? mesos will tell us during reconciliation
 		Flags:      make(map[FlagType]struct{}),
-		mapper:     mappingTypeForPod(&pod),
+		mapper:     MappingTypeForPod(&pod),
 		launchTime: now,
 		bindTime:   now,
 	}

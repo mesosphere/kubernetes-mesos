@@ -190,10 +190,7 @@ func findPort(pod *api.Pod, service *api.Service) (int, error) {
 		for _, container := range pod.Spec.Containers {
 			for _, port := range container.Ports {
 				if port.Name == name && port.Protocol == service.Spec.Protocol {
-					if port.HostPort == 0 {
-						return findMappedPortName(pod, name)
-					}
-					return port.HostPort, nil
+					return findMappedPortName(pod, name)
 				}
 			}
 		}
@@ -204,17 +201,14 @@ func findPort(pod *api.Pod, service *api.Service) (int, error) {
 		}
 		// HACK(jdef): slightly different semantics from upstream here:
 		// we ensure that if the user spec'd a port in the service that
-		// it actually maps to a host-port declared in the pod. upstream
-		// doesn't check this and happily returns the port spec'd in the
-		// service.
+		// it actually maps to a host-port assigned to the pod. upstream
+		// doesn't check this and happily returns the container port spec'd
+		// in the service, but that doesn't align w/ mesos port mgmt.
 		p := portName.IntVal
 		for _, container := range pod.Spec.Containers {
 			for _, port := range container.Ports {
 				if port.ContainerPort == p {
-					if port.HostPort == 0 {
-						return findMappedPort(pod, p)
-					}
-					return port.HostPort, nil
+					return findMappedPort(pod, p)
 				}
 			}
 		}
@@ -231,7 +225,7 @@ func findMappedPort(pod *api.Pod, port int) (int, error) {
 			return strconv.Atoi(value)
 		}
 	}
-	return -1, fmt.Errorf("failed to find annotation for mapped container port: %d", port)
+	return -1, fmt.Errorf("failed to find mapped container port: %d", port)
 }
 
 func findMappedPortName(pod *api.Pod, portName string) (int, error) {
@@ -241,5 +235,5 @@ func findMappedPortName(pod *api.Pod, portName string) (int, error) {
 			return strconv.Atoi(value)
 		}
 	}
-	return -1, fmt.Errorf("failed to find annotation for mapped container port name: %q", portName)
+	return -1, fmt.Errorf("failed to find mapped container port name: %q", portName)
 }

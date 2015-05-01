@@ -157,7 +157,7 @@ func defaultHostPortMapping(t *T, offer *mesos.Offer) ([]HostPortMapping, error)
 
 const PortMappingLabelKey = "k8s.mesosphere.io/portMapping"
 
-func mappingTypeForPod(pod *api.Pod) HostPortMappingType {
+func MappingTypeForPod(pod *api.Pod) HostPortMappingType {
 	filter := map[string]string{
 		PortMappingLabelKey: string(HostPortMappingFixed),
 	}
