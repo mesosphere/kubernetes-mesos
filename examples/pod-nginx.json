@@ -9,7 +9,8 @@
         "name": "nginx-01",
         "image": "library/nginx",
         "ports": [{
-          "containerPort": 80
+          "containerPort": 80,
+          "name": "http"
         }],
         "livenessProbe": {
           "enabled": true,

@@ -3,7 +3,7 @@
   "kind": "Service",
   "apiVersion": "v1beta1",
   "port": 8000,
-  "containerPort": 80,
+  "containerPort": "http",
   "selector": {
     "name": "foo"
   }
