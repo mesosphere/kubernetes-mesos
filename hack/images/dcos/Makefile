@@ -1,4 +1,5 @@
-TARGET	?= /target/km
+FROM	?= /target
+TARGET_OBJ = km kubectl
 IMAGE	?= kubernetes
 REPO	?= mesosphere/$(IMAGE)
 TAG	?= k8s-0.14.2-k8sm-0.5-dcos-dev
@@ -21,18 +22,21 @@ ETCD_OUTPUT_DIR = $(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64
 ETCD_BINS = $(ETCD_OUTPUT_DIR)/etcd $(ETCD_OUTPUT_DIR)/etcdctl
 ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz
 
+KUBE_DNS_TEMPLATES = skydns-rc.yaml.in skydns-svc.yaml.in
+KUBE_DNS_TEMPLATES_SOURCES = $(KUBE_DNS_TEMPLATES:%=../dns/%)
+
 S6_BINS ?= $(S6_OBJ) $(EXECLINE_OBJ)
 
-.PHONY:	clean build push s6 $(S6_BINS) deps etcd $(ETCD_BINS)
+.PHONY:	clean build push s6 $(S6_BINS) deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES)
 
 #	rm -rf km $(ETCD_OUTPUT_DIR) usr _build etcd*
 clean:
 	rm -rf km
 
-deps: $(S6_BINS) $(ETCD_BINS)
+deps: $(S6_BINS) $(ETCD_BINS) $(KUBE_DNS_TEMPLATES)
 
 build: deps
-	cp -pv $(TARGET) .
+	cp -pv $(TARGET_OBJ:%=$(FROM)/%) .
 	date -Iseconds >.version
 	$(SUDO) docker build -t $(REPO):$(TAG) .
 
@@ -55,5 +59,10 @@ etcd:
 
 $(ETCD_BINS): etcd
 	test -f "$$(basename $@)" || cp -v $@ .
+
+$(KUBE_DNS_TEMPLATES): $(KUBE_DNS_TEMPLATES_SOURCES)
+	@if test -f $@ -a ../dns/$@ -ot $@; then true; else cp -v ../dns/$@ $@; fi
+
+$(KUBE_DNS_TEMPLATES_SOURCES):
 
 all:	push

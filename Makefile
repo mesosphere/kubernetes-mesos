@@ -46,7 +46,7 @@ _GOPATH		:= $(shell uname | grep -e ^CYGWIN >/dev/null && cygpath --mixed "$(BUI
 
 TEST_OBJ	:= $(subst /,___,$(TESTS))
 
-.PHONY: all error require-godep require-vendor install info bootstrap format test patch.v patch version test.v test.vv test.cover clean lint vet fix prepare update $(TEST_OBJ) test.integration
+.PHONY: all error require-godep require-vendor install info bootstrap format test patch.v patch version test.v test.vv test.cover clean lint vet fix prepare update $(TEST_OBJ) test.integration kube2sky
 
 # FRAMEWORK_FLAGS := -v -x -tags '$(TAGS)'
 FRAMEWORK_FLAGS := -tags '$(TAGS)'
@@ -143,3 +143,6 @@ $(PATCH_SCRIPT):
 update:
 	@egrep -e 'code.google.com|github.com|bitbucket.org' $(current_dir)/Godeps/Godeps.json | grep -v -e '$(K8SM_GO_PACKAGE)' | \
 		sed -e 's/^.*Path": "\(.*\)",/\1/g' | cut -f1-3 -d/|sort|uniq|xargs -t -I{} godep update {}/...
+
+kube2sky: prepare
+	env GOPATH=$(_GOPATH) $(MAKE) -C $(current_dir)/hack/images/dns/kube2sky

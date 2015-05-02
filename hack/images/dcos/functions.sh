@@ -89,11 +89,59 @@ prepare_service() {
   prepare_monitor_script ${mond} ${svcd} ${name}
   prepare_service_script ${svcd} ${name} finish <<EOF
 #!/bin/sh
+exec 2>&1
 test "\$1" != "256" &&
     printf "I%s %7d respawn.xx:0] sleeping ${respawnSec}s before respawning ${name}\\n" \\
       "\$(date '+%m%d %H:%M:%S.999999')" "\${2}" &&
     sleep ${respawnSec}
 exit 0
+EOF
+}
+
+# usage: $0 {wait-for-service} {version-check-url} {dependent-services}
+prepare_service_depends() {
+  local watchedService=$1
+  local watcher=${watchedService}-depends
+  local versionCheckUrl=$2
+  shift
+  shift
+
+  # down by default because we need to catch the signal when it's up and running
+  touch ${service_dir}/$watchedService/down
+  # we only want to start these services after we know that etcd is up and running
+  for i in $*; do
+    touch ${service_dir}/$i/down
+  done
+
+  # 1. startup waited-on service, waiting for an U signal
+  # 2. upon receving the signal, start up dependent services
+  prepare_service_script ${service_dir} ${watcher} run <<EOF
+#!/bin/sh
+exec 2>&1
+set -vx
+echo \$(date -Iseconds) sending start signal to ${watchedService}
+s6-svc -u ${service_dir}/${watchedService}
+
+version_check() {
+  wget -q -O - $versionCheckUrl >/dev/null 2>&1 && sleep 2 || exit 2
+}
+
+# HACK(jdef): no super-reliable way to tell if waited-on service will stay up for long, so
+# check that 5 seqential version checks pass and if so assume the world is good
+version_check; version_check; version_check; version_check; version_check
+
+echo \$(date -Iseconds) starting $* services...
+for i in $*; do
+  s6-svc -u ${service_dir}/\$i
+done
+touch down
+EOF
+
+  prepare_service_script ${service_dir} ${watcher} finish <<EOF
+#!/bin/sh
+exec 2>&1
+echo \$(date -Iseconds) ${watcher}-finish \$*
+test -f down && exec s6-svc -d \$(pwd) || exec sleep 4
 EOF
 }
 
