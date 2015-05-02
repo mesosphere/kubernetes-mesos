@@ -690,35 +690,35 @@
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/auth",
-			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
+			"Rev": "4b1767c0dfc51020e01f35da5b38472f40ce572a"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/detector",
-			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
+			"Rev": "4b1767c0dfc51020e01f35da5b38472f40ce572a"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/executor",
-			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
+			"Rev": "4b1767c0dfc51020e01f35da5b38472f40ce572a"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/mesosproto",
-			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
+			"Rev": "4b1767c0dfc51020e01f35da5b38472f40ce572a"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/mesosutil",
-			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
+			"Rev": "4b1767c0dfc51020e01f35da5b38472f40ce572a"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/messenger",
-			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
+			"Rev": "4b1767c0dfc51020e01f35da5b38472f40ce572a"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/scheduler",
-			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
+			"Rev": "4b1767c0dfc51020e01f35da5b38472f40ce572a"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/upid",
-			"Rev": "6a19badfefc9ddec8c0c8c6ef39aec9fbed78f90"
+			"Rev": "4b1767c0dfc51020e01f35da5b38472f40ce572a"
 		},
 		{
 			"ImportPath": "github.com/mitchellh/goamz/aws",
@@ -763,7 +763,7 @@
 		},
 		{
 			"ImportPath": "github.com/samuel/go-zookeeper/zk",
-			"Rev": "ad552be7b78b762b4a8040ffc5518bdaf5b7225d"
+			"Rev": "d0e0d8e11f318e000a8cc434616d69e329edc374"
 		},
 		{
 			"ImportPath": "github.com/spf13/cobra",

@@ -59,11 +59,15 @@ func clearEnvironments(t *testing.T) {
 	assert.NoError(t, os.Setenv("MESOS_EXECUTOR_ID", ""))
 }
 
-func newTestExecutorDriver(exec Executor) (*MesosExecutorDriver, error) {
+func newTestExecutorDriver(t *testing.T, exec Executor) *MesosExecutorDriver {
 	dconfig := DriverConfig{
 		Executor: exec,
 	}
-	return NewMesosExecutorDriver(dconfig)
+	driver, err := NewMesosExecutorDriver(dconfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return driver
 }
 
 func createTestExecutorDriver(t *testing.T) (
@@ -74,9 +78,7 @@ func createTestExecutorDriver(t *testing.T) (
 	exec := NewMockedExecutor()
 
 	setEnvironments(t, "", false)
-	driver, err := newTestExecutorDriver(exec)
-	assert.NoError(t, err)
-	assert.NotNil(t, driver)
+	driver := newTestExecutorDriver(t, exec)
 
 	messenger := messenger.NewMockedMessenger()
 	messenger.On("Start").Return(nil)
@@ -96,8 +98,7 @@ func TestExecutorDriverStartFailedToParseEnvironment(t *testing.T) {
 	clearEnvironments(t)
 	exec := NewMockedExecutor()
 	exec.On("Error").Return(nil)
-	driver, err := newTestExecutorDriver(exec)
-	assert.Error(t, err)
+	driver := newTestExecutorDriver(t, exec)
 	assert.Nil(t, driver)
 }
 
@@ -105,8 +106,7 @@ func TestExecutorDriverStartFailedToStartMessenger(t *testing.T) {
 	exec := NewMockedExecutor()
 
 	setEnvironments(t, "", false)
-	driver, err := newTestExecutorDriver(exec)
-	assert.NoError(t, err)
+	driver := newTestExecutorDriver(t, exec)
 	assert.NotNil(t, driver)
 	messenger := messenger.NewMockedMessenger()
 	driver.messenger = messenger
@@ -129,9 +129,7 @@ func TestExecutorDriverStartFailedToSendRegisterMessage(t *testing.T) {
 	exec := NewMockedExecutor()
 
 	setEnvironments(t, "", false)
-	driver, err := newTestExecutorDriver(exec)
-	assert.NoError(t, err)
-	assert.NotNil(t, driver)
+	driver := newTestExecutorDriver(t, exec)
 	messenger := messenger.NewMockedMessenger()
 	driver.messenger = messenger
 
@@ -157,9 +155,7 @@ func TestExecutorDriverStartSucceed(t *testing.T) {
 	exec := NewMockedExecutor()
 	exec.On("Error").Return(nil)
 
-	driver, err := newTestExecutorDriver(exec)
-	assert.NoError(t, err)
-	assert.NotNil(t, driver)
+	driver := newTestExecutorDriver(t, exec)
 
 	messenger := messenger.NewMockedMessenger()
 	driver.messenger = messenger
@@ -196,9 +192,8 @@ func TestExecutorDriverRun(t *testing.T) {
 	exec := NewMockedExecutor()
 	exec.On("Error").Return(nil)
 
-	driver, err := newTestExecutorDriver(exec)
+	driver := newTestExecutorDriver(t, exec)
 	driver.messenger = messenger
-	assert.NoError(t, err)
 	assert.True(t, driver.stopped)
 
 	checker := healthchecker.NewMockedHealthChecker()
@@ -233,9 +228,8 @@ func TestExecutorDriverJoin(t *testing.T) {
 	exec := NewMockedExecutor()
 	exec.On("Error").Return(nil)
 
-	driver, err := newTestExecutorDriver(exec)
+	driver := newTestExecutorDriver(t, exec)
 	driver.messenger = messenger
-	assert.NoError(t, err)
 	assert.True(t, driver.stopped)
 
 	checker := healthchecker.NewMockedHealthChecker()

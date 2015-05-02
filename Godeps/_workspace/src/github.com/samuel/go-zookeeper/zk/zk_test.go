@@ -3,7 +3,6 @@ package zk
 import (
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"strings"
 	"testing"
@@ -18,7 +17,7 @@ func TestCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ts.Stop()
-	zk, err := ts.ConnectAll()
+	zk, _, err := ts.ConnectAll()
 	if err != nil {
 		t.Fatalf("Connect returned error: %+v", err)
 	}
@@ -49,7 +48,7 @@ func TestMulti(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ts.Stop()
-	zk, err := ts.ConnectAll()
+	zk, _, err := ts.ConnectAll()
 	if err != nil {
 		t.Fatalf("Connect returned error: %+v", err)
 	}
@@ -60,19 +59,16 @@ func TestMulti(t *testing.T) {
 	if err := zk.Delete(path, -1); err != nil && err != ErrNoNode {
 		t.Fatalf("Delete returned error: %+v", err)
 	}
-	ops := MultiOps{
-		Create: []CreateRequest{
-			{Path: path, Data: []byte{1, 2, 3, 4}, Acl: WorldACL(PermAll)},
-		},
-		SetData: []SetDataRequest{
-			{Path: path, Data: []byte{1, 2, 3, 4}, Version: -1},
-		},
-		// Delete: []DeleteRequest{
-		// 	{Path: path, Version: -1},
-		// },
+	ops := []interface{}{
+		&CreateRequest{Path: path, Data: []byte{1, 2, 3, 4}, Acl: WorldACL(PermAll)},
+		&SetDataRequest{Path: path, Data: []byte{1, 2, 3, 4}, Version: -1},
 	}
-	if err := zk.Multi(ops); err != nil {
+	if res, err := zk.Multi(ops...); err != nil {
 		t.Fatalf("Multi returned error: %+v", err)
+	} else if len(res) != 2 {
+		t.Fatalf("Expected 2 responses got %d", len(res))
+	} else {
+		t.Logf("%+v", res)
 	}
 	if data, stat, err := zk.Get(path); err != nil {
 		t.Fatalf("Get returned error: %+v", err)
@@ -89,7 +85,7 @@ func TestGetSetACL(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ts.Stop()
-	zk, err := ts.ConnectAll()
+	zk, _, err := ts.ConnectAll()
 	if err != nil {
 		t.Fatalf("Connect returned error: %+v", err)
 	}
@@ -143,7 +139,7 @@ func TestAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ts.Stop()
-	zk, err := ts.ConnectAll()
+	zk, _, err := ts.ConnectAll()
 	if err != nil {
 		t.Fatalf("Connect returned error: %+v", err)
 	}
@@ -193,7 +189,7 @@ func TestChildWatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ts.Stop()
-	zk, err := ts.ConnectAll()
+	zk, _, err := ts.ConnectAll()
 	if err != nil {
 		t.Fatalf("Connect returned error: %+v", err)
 	}
@@ -264,7 +260,7 @@ func TestSetWatchers(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ts.Stop()
-	zk, err := ts.ConnectAll()
+	zk, _, err := ts.ConnectAll()
 	if err != nil {
 		t.Fatalf("Connect returned error: %+v", err)
 	}
@@ -272,7 +268,7 @@ func TestSetWatchers(t *testing.T) {
 
 	zk.reconnectDelay = time.Second
 
-	zk2, err := ts.ConnectAll()
+	zk2, _, err := ts.ConnectAll()
 	if err != nil {
 		t.Fatalf("Connect returned error: %+v", err)
 	}
@@ -344,7 +340,7 @@ func TestExpiringWatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ts.Stop()
-	zk, err := ts.ConnectAll()
+	zk, _, err := ts.ConnectAll()
 	if err != nil {
 		t.Fatalf("Connect returned error: %+v", err)
 	}
@@ -494,7 +490,7 @@ func startSlowProxy(t *testing.T, up, down throttle.Rate, upstream string, adj f
 				defer cn.Close()
 				upcn, err := net.Dial("tcp", upstream)
 				if err != nil {
-					log.Print(err)
+					t.Log(err)
 					return
 				}
 				// This will leave hanging goroutines util stopCh is closed
