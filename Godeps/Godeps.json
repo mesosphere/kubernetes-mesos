@@ -721,6 +721,10 @@
 			"Rev": "4b1767c0dfc51020e01f35da5b38472f40ce572a"
 		},
 		{
+			"ImportPath": "github.com/miekg/dns",
+			"Rev": "031d041ced95fa41a428471f2b869749b032e3c9"
+		},
+		{
 			"ImportPath": "github.com/mitchellh/goamz/aws",
 			"Rev": "703cfb45985762869e465f37ed030ff01615ff1e"
 		},
@@ -764,6 +768,10 @@
 		{
 			"ImportPath": "github.com/samuel/go-zookeeper/zk",
 			"Rev": "d0e0d8e11f318e000a8cc434616d69e329edc374"
+		},
+		{
+			"ImportPath": "github.com/skynetservices/skydns/msg",
+			"Rev": "4984bf5485a0df13f6ccf7a9edb1fa8d37f912e7"
 		},
 		{
 			"ImportPath": "github.com/spf13/cobra",

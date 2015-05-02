@@ -105,6 +105,7 @@ type SchedulerServer struct {
 	FrameworkWebURI               string
 	HA                            bool
 	AdvertisedAddress             string
+	ServiceAddress                util.IP
 	HADomain                      string
 	KMPath                        string
 	ClusterDNS                    util.IP
@@ -146,13 +147,9 @@ func NewSchedulerServer() *SchedulerServer {
 		Checkpoint:             true,
 		FrameworkName:          defaultFrameworkName,
 		HA:                     false,
-		// TODO(jdef) hard dependency on schedcfg.DefaultInfoName, also assumes
-		// that mesos-dns has a k8s plugin that registers services there.
-		// ClusterDomain: lower(schedcfg.DefaultInfoName)+".mesos" -- probably "kubernetes.mesos"
-		// HADomain: {service-namespace}.ClusterDomain -- based on kube2sky naming rules
-		mux:                  http.NewServeMux(),
-		KubeletCadvisorPort:  4194, // copied from github.com/GoogleCloudPlatform/kubernetes/blob/release-0.14/cmd/kubelet/app/server.go
-		KubeletSyncFrequency: 10 * time.Second,
+		mux:                    http.NewServeMux(),
+		KubeletCadvisorPort:    4194, // copied from github.com/GoogleCloudPlatform/kubernetes/blob/release-0.14/cmd/kubelet/app/server.go
+		KubeletSyncFrequency:   10 * time.Second,
 	}
 	// cache this for later use. also useful in case the original binary gets deleted, e.g.
 	// during upgrades, development deployments, etc.
@@ -196,6 +193,7 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.FrameworkName, "framework_name", s.FrameworkName, "The framework name to register with Mesos.")
 	fs.StringVar(&s.FrameworkWebURI, "framework_weburi", s.FrameworkWebURI, "A URI that points to a web-based interface for interacting with the framework.")
 	fs.StringVar(&s.AdvertisedAddress, "advertised_address", s.AdvertisedAddress, "host:port address that is advertised to clients. May be used to construct artifact download URIs.")
+	fs.Var(&s.ServiceAddress, "service_address", "The service portal IP address that the scheduler should register with (if unset, chooses randomly)")
 
 	fs.BoolVar(&s.ExecutorBindall, "executor_bindall", s.ExecutorBindall, "When true will set -address of the executor to 0.0.0.0.")
 	fs.IntVar(&s.ExecutorLogV, "executor_logv", s.ExecutorLogV, "Logging verbosity of spawned executor processes.")
