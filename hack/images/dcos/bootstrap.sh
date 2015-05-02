@@ -19,6 +19,8 @@ apiserver_ro_host=${APISERVER_RO_HOST:-${default_dns_name}}
 scheduler_host=${SCHEDULER_HOST:-${default_dns_name}}
 scheduler_port=${SCHEDULER_PORT:-10251}
 
+framework_weburi=${FRAMEWORK_WEBURI:-http://${apiserver_host}:${apiserver_port}/static/}
+
 controller_manager_host=${CONTROLLER_MANAGER_HOST:-${default_dns_name}}
 controller_manager_port=${CONTROLLER_MANAGER_PORT:-10252}
 
@@ -191,6 +193,7 @@ $apply_uids
   --v=${SCHEDULER_GLOG_v:-${logv}}
   --km_path=${sandbox}/executor-installer.sh
   --advertised_address=${scheduler_host}:${scheduler_port}
+  --framework_weburi=${framework_weburi}
 EOF
 
 test -n "$DISABLE_ETCD_SERVER" || prepare_etcd_service
