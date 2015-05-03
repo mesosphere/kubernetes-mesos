@@ -80,6 +80,7 @@ func TestSlaveStorage_getSlaveIds(t *testing.T) {
 
 }
 
+//get number of non-expired offers from  offer registry
 func getNumberOffers(os offers.Registry) int {
 	//walk offers and check it is stored in registry
 	walked := 0
@@ -105,9 +106,9 @@ func TestResourceOffer_Add(t *testing.T) {
 				return proc.ErrorChan(nil)
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
-			LingerTTL:     5 * defaultOfferLingerTTL * time.Second,
-			TTL:           10 * defaultOfferTTL * time.Second,
-			ListenerDelay: 0 * defaultListenerDelay * time.Second,
+			LingerTTL:     defaultOfferLingerTTL * time.Second,
+			TTL:           defaultOfferTTL * time.Second,
+			ListenerDelay: defaultListenerDelay * time.Second,
 		}),
 		slaves: newSlaveStorage(),
 	}
@@ -148,9 +149,9 @@ func TestResourceOffer_Add_Rescind(t *testing.T) {
 				return proc.ErrorChan(nil)
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
-			LingerTTL:     5 * defaultOfferLingerTTL * time.Second,
-			TTL:           10 * defaultOfferTTL * time.Second,
-			ListenerDelay: 0 * defaultListenerDelay * time.Second,
+			LingerTTL:     defaultOfferLingerTTL * time.Second,
+			TTL:           defaultOfferTTL * time.Second,
+			ListenerDelay: defaultListenerDelay * time.Second,
 		}),
 		slaves: newSlaveStorage(),
 	}
@@ -202,7 +203,7 @@ func TestSlave_Lost(t *testing.T) {
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
 			LingerTTL:     defaultOfferLingerTTL * time.Second,
-			TTL:           10 * defaultOfferTTL * time.Second,
+			TTL:           defaultOfferTTL * time.Second,
 			ListenerDelay: defaultListenerDelay * time.Second,
 		}),
 		slaves: newSlaveStorage(),
@@ -259,7 +260,7 @@ func TestDisconnect(t *testing.T) {
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
 			LingerTTL:     defaultOfferLingerTTL * time.Second,
-			TTL:           10 * defaultOfferTTL * time.Second,
+			TTL:           defaultOfferTTL * time.Second,
 			ListenerDelay: defaultListenerDelay * time.Second,
 		}),
 		slaves: newSlaveStorage(),
@@ -302,7 +303,7 @@ func TestStatus_Update(t *testing.T) {
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
 			LingerTTL:     defaultOfferLingerTTL * time.Second,
-			TTL:           10 * defaultOfferTTL * time.Second,
+			TTL:           defaultOfferTTL * time.Second,
 			ListenerDelay: defaultListenerDelay * time.Second,
 		}),
 		slaves:       newSlaveStorage(),
