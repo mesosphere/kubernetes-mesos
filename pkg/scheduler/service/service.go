@@ -533,7 +533,9 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProce
 		log.Fatalf("misconfigured etcd: %v", err)
 	}
 
+	sc := schedcfg.CreateDefaultConfig()
 	mesosPodScheduler := scheduler.New(scheduler.Config{
+		Schedcfg:          *sc,
 		Executor:          executor,
 		ScheduleFunc:      scheduler.FCFSScheduleFunc,
 		Client:            client,

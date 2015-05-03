@@ -26,24 +26,11 @@ import (
 	offerMetrics "github.com/mesosphere/kubernetes-mesos/pkg/offers/metrics"
 	"github.com/mesosphere/kubernetes-mesos/pkg/proc"
 	"github.com/mesosphere/kubernetes-mesos/pkg/runtime"
+	schedcfg "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/uid"
-)
-
-const (
-	defaultOfferTTL                    = 5                // seconds that an offer is viable, prior to being expired
-	defaultOfferLingerTTL              = 120              // seconds that an expired offer lingers in history
-	defaultListenerDelay               = 1                // number of seconds between offer listener notifications
-	defaultUpdatesBacklog              = 2048             // size of the pod updates channel
-	defaultFrameworkIdRefreshInterval  = 30               // every X number of seconds we update the frameworkId stored in etcd
-	initialImplicitReconciliationDelay = 15 * time.Second // wait this amount of time after initial registration before attempting implicit reconciliation
-	explicitReconciliationMaxBackoff   = 2 * time.Minute  // interval in between internal task status checks/updates
-	explicitReconciliationAbortTimeout = 30 * time.Second // waiting period after attempting to cancel an ongoing reconciliation
-	defaultInitialPodBackoff           = 1 * time.Second
-	defaultMaxPodBackoff               = 60 * time.Second
-	defaultHttpHandlerTimeout          = 10 * time.Second
 )
 
 type Slave struct {
@@ -116,6 +103,7 @@ type KubernetesScheduler struct {
 
 	// Config related, write-once
 
+	schedcfg          *schedcfg.Config
 	executor          *mesos.ExecutorInfo
 	executorGroup     uint64
 	scheduleFunc      PodScheduleFunc
@@ -149,6 +137,7 @@ type KubernetesScheduler struct {
 }
 
 type Config struct {
+	Schedcfg          schedcfg.Config
 	Executor          *mesos.ExecutorInfo
 	ScheduleFunc      PodScheduleFunc
 	Client            *client.Client
@@ -162,6 +151,7 @@ type Config struct {
 func New(config Config) *KubernetesScheduler {
 	var k *KubernetesScheduler
 	k = &KubernetesScheduler{
+		schedcfg:          &config.Schedcfg,
 		RWMutex:           new(sync.RWMutex),
 		executor:          config.Executor,
 		executorGroup:     uid.Parse(config.Executor.ExecutorId.GetValue()).Group(),
@@ -194,9 +184,9 @@ func New(config Config) *KubernetesScheduler {
 				return errOnce.Send(errOuter).Err()
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
-			LingerTTL:     defaultOfferLingerTTL * time.Second,
-			TTL:           defaultOfferTTL * time.Second,
-			ListenerDelay: defaultListenerDelay * time.Second,
+			LingerTTL:     config.Schedcfg.OfferLingerTTL.Duration,
+			TTL:           config.Schedcfg.OfferTTL.Duration,
+			ListenerDelay: config.Schedcfg.ListenerDelay.Duration,
 		}),
 		slaves:            newSlaveStorage(),
 		taskRegistry:      podtask.NewInMemoryRegistry(),
@@ -245,7 +235,7 @@ func (k *KubernetesScheduler) InstallDebugHandlers(mux *http.ServeMux) {
 				w.WriteHeader(http.StatusServiceUnavailable)
 			}, k.terminate)
 			select {
-			case <-time.After(defaultHttpHandlerTimeout):
+			case <-time.After(k.schedcfg.HttpHandlerTimeout.Duration):
 				log.Warningf("timed out waiting for request to be processed")
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
@@ -321,8 +311,8 @@ func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDri
 	defer close(k.registration)
 
 	if k.failoverTimeout > 0 {
-		refreshInterval := defaultFrameworkIdRefreshInterval * time.Second
-		if k.failoverTimeout < defaultFrameworkIdRefreshInterval {
+		refreshInterval := k.schedcfg.FrameworkIdRefreshInterval.Duration
+		if k.failoverTimeout < k.schedcfg.FrameworkIdRefreshInterval.Duration.Seconds() {
 			refreshInterval = time.Duration(math.Max(1, k.failoverTimeout/2)) * time.Second
 		}
 		go runtime.Until(k.storeFrameworkId, refreshInterval, k.terminate)
@@ -331,13 +321,14 @@ func (k *KubernetesScheduler) onInitialRegistration(driver bindings.SchedulerDri
 	r1 := k.makeTaskRegistryReconciler()
 	r2 := k.makePodRegistryReconciler()
 
-	k.reconciler = newReconciler(k.asRegisteredMaster, k.makeCompositeReconciler(r1, r2), k.reconcileCooldown, k.terminate)
+	k.reconciler = newReconciler(k.asRegisteredMaster, k.makeCompositeReconciler(r1, r2),
+		k.reconcileCooldown, k.schedcfg.ExplicitReconciliationAbortTimeout.Duration, k.terminate)
 	go k.reconciler.Run(driver)
 
 	if k.reconcileInterval > 0 {
 		ri := time.Duration(k.reconcileInterval) * time.Second
-		time.AfterFunc(initialImplicitReconciliationDelay, func() { runtime.Until(k.reconciler.RequestImplicit, ri, k.terminate) })
-		log.Infof("will perform implicit task reconciliation at interval: %v after %v", ri, initialImplicitReconciliationDelay)
+		time.AfterFunc(k.schedcfg.InitialImplicitReconciliationDelay.Duration, func() { runtime.Until(k.reconciler.RequestImplicit, ri, k.terminate) })
+		log.Infof("will perform implicit task reconciliation at interval: %v after %v", ri, k.schedcfg.InitialImplicitReconciliationDelay)
 	}
 }
 
@@ -712,8 +703,8 @@ func (k *KubernetesScheduler) explicitlyReconcileTasks(driver bindings.Scheduler
 	for backoff := 1 * time.Second; first || remaining.Len() > 0; backoff = backoff * 2 {
 		first = false
 		// nothing to do here other than wait for status updates..
-		if backoff > explicitReconciliationMaxBackoff {
-			backoff = explicitReconciliationMaxBackoff
+		if backoff > k.schedcfg.ExplicitReconciliationMaxBackoff.Duration {
+			backoff = k.schedcfg.ExplicitReconciliationMaxBackoff.Duration
 		}
 		select {
 		case <-cancel:
@@ -744,9 +735,11 @@ type Reconciler struct {
 	implicit chan struct{}   // send an empty struct to trigger implicit reconciliation
 	done     <-chan struct{} // close this when you want the reconciler to exit
 	cooldown time.Duration
+	explicitReconciliationAbortTimeout time.Duration
 }
 
-func newReconciler(doer proc.Doer, action ReconcilerAction, cooldown time.Duration, done <-chan struct{}) *Reconciler {
+func newReconciler(doer proc.Doer, action ReconcilerAction, cooldown time.Duration,
+		explicitReconciliationAbortTimeout time.Duration, done <-chan struct{}) *Reconciler {
 	return &Reconciler{
 		Doer:     doer,
 		explicit: make(chan struct{}, 1),
@@ -847,7 +840,7 @@ requestLoop:
 			case <-r.done:
 				return
 			case <-finished: // noop, expected
-			case <-time.After(explicitReconciliationAbortTimeout): // very unexpected
+			case <-time.After(r.explicitReconciliationAbortTimeout): // very unexpected
 				log.Error("reconciler action failed to stop upon cancellation")
 			}
 		}
