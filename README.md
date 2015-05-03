@@ -126,6 +126,45 @@ $ export KUBERNETES_MASTER=http://${servicehost}:8888
 You can increase the verbosity of the logging for the API server, scheduler, and/or the controller-manager by including, for example, `--v=2`.
 This can be very helpful while debugging.
 
+#### Scheduler Configuration
+
+The scheduler configuration can be fine-tuned using an ini-style configuration file. The filename is passed via `--scheduler_config` to the `km scheduler` command. The following settings are the default:
+
+```
+[scheduler]
+; intended to be mesos FrameworkInfo.Name
+info-name = Kubernetes
+
+; duration an offer is viable, prior to being expired
+offer-ttl = 5s
+
+; duration an expired offer lingers in history
+offer-linger-ttl = 2m
+
+; duration between offer listener notifications
+listener-delay = 1s
+
+; size of the pod updates channel
+updates-backlog = 2048
+
+; interval we update the frameworkId stored in etcd
+framework-id-refresh-interval = 30s
+
+; wait this amount of time after initial registration before attempting
+; implicit reconciliation
+initial-implicit-reconciliation-delay = 15s
+
+; interval in between internal task status checks/updates
+explicit-reconciliation-max-backoff = 2m
+
+; waiting period after attempting to cancel an ongoing reconciliation
+explicit-reconciliation-abort-timeout = 30s
+
+initial-pod-backoff = 1s
+max-pod-backoff = 60s
+http-handler-timeout = 10s
+```
+
 ###Launch a Pod
 
 Assuming your framework is running on `${KUBERNETES_MASTER}`, then:
