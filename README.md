@@ -132,9 +132,6 @@ The scheduler configuration can be fine-tuned using an ini-style configuration f
 
 ```
 [scheduler]
-; intended to be mesos FrameworkInfo.Name
-info-name = Kubernetes
-
 ; duration an offer is viable, prior to being expired
 offer-ttl = 5s
 

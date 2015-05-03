@@ -69,6 +69,7 @@ const (
 	defaultReconcileInterval = 300    // 5m default task reconciliation interval
 	defaultReconcileCooldown = 15 * time.Second
 	defaultHttpBindInterval  = 5 * time.Second
+	defaultFrameworkName     = "Kubernetes"
 )
 
 type SchedulerServer struct {
@@ -140,7 +141,7 @@ func NewSchedulerServer() *SchedulerServer {
 		ReconcileInterval:      defaultReconcileInterval,
 		ReconcileCooldown:      defaultReconcileCooldown,
 		Checkpoint:             true,
-		FrameworkName:          schedcfg.DefaultInfoName,
+		FrameworkName:          defaultFrameworkName,
 		HA:                     false,
 		// TODO(jdef) hard dependency on schedcfg.DefaultInfoName, also assumes
 		// that mesos-dns has a k8s plugin that registers services there.

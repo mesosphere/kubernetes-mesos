@@ -8,7 +8,6 @@ import (
 )
 
 const (
-	DefaultInfoName                           = "Kubernetes"	   // intended to be mesos FrameworkInfo.Name
 	DefaultOfferTTL                           = 5 * time.Second    // duration an offer is viable, prior to being expired
 	DefaultOfferLingerTTL                     = 120  * time.Second // duration an expired offer lingers in history
 	DefaultListenerDelay                      = 1 * time.Second    // duration between offer listener notifications
@@ -34,7 +33,6 @@ type ConfigWrapper struct {
 }
 
 type Config struct {
-	InfoName                           string          `gcfg:"info-name"`
 	OfferTTL                           WrappedDuration `gcfg:"offer-ttl"`
 	OfferLingerTTL                     WrappedDuration `gcfg:"offer-linger-ttl"`
 	ListenerDelay                      WrappedDuration `gcfg:"listener-delay"`
@@ -61,7 +59,6 @@ func (wd *WrappedDuration) UnmarshalText(data []byte) error {
 }
 
 func (c *Config) SetDefaults() {
-	c.InfoName = DefaultInfoName
 	c.OfferTTL = WrappedDuration{Duration: DefaultOfferTTL}
 	c.OfferLingerTTL = WrappedDuration{Duration: DefaultOfferLingerTTL}
 	c.ListenerDelay = WrappedDuration{Duration: DefaultListenerDelay}
