@@ -362,6 +362,18 @@ Run test suite with:
 $ make test.v
 ```
 
+#### Test Coverage
+
+To generate an HTML test coverage report:
+
+```shell
+$ go get golang.org/x/tools/cmd/cover
+$ make test.cover
+$ go tool cover -html=all.coverage.out -o coverage-report.html
+```
+
+To view the report, open the file `coverage-report.html` in a web browser.
+
 [1]: DEVELOP.md
 [2]: https://github.com/GoogleCloudPlatform/kubernetes
 [3]: http://mesos.apache.org/
