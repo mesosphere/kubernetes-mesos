@@ -17,6 +17,7 @@ limitations under the License.
 package service
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -97,6 +98,7 @@ type SchedulerServer struct {
 	HostnameOverride              string
 	ReconcileInterval             int64
 	ReconcileCooldown             time.Duration
+	SchedulerConfigFileName       string
 	Graceful                      bool
 	FrameworkName                 string
 	HA                            bool
@@ -183,6 +185,7 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.HostnameOverride, "hostname_override", s.HostnameOverride, "If non-empty, will use this string as identification instead of the actual hostname.")
 	fs.Int64Var(&s.ReconcileInterval, "reconcile_interval", s.ReconcileInterval, "Interval at which to execute task reconciliation, in sec. Zero disables.")
 	fs.DurationVar(&s.ReconcileCooldown, "reconcile_cooldown", s.ReconcileCooldown, "Minimum rest period between task reconciliation operations.")
+	fs.StringVar(&s.SchedulerConfigFileName, "scheduler_config", s.SchedulerConfigFileName, "An ini-style configuration file with low-level scheduler settings.")
 	fs.BoolVar(&s.Graceful, "graceful", s.Graceful, "Indicator of a graceful failover, intended for internal use only.")
 	fs.BoolVar(&s.HA, "ha", s.HA, "Run the scheduler in high availability mode with leader election. All peers should be configured exactly the same.")
 	fs.StringVar(&s.FrameworkName, "framework_name", s.FrameworkName, "The framework name to register with Mesos.")
@@ -534,6 +537,18 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProce
 	}
 
 	sc := schedcfg.CreateDefaultConfig()
+	if s.SchedulerConfigFileName != "" {
+		f, err := os.Open(s.SchedulerConfigFileName)
+		if err != nil {
+			log.Fatalf("Cannot open scheduler config file: %v", err)
+		}
+
+		err = sc.Read(bufio.NewReader(f))
+		if err != nil {
+			log.Fatalf("Invalid scheduler config file: %v", err)
+		}
+	}
+
 	mesosPodScheduler := scheduler.New(scheduler.Config{
 		Schedcfg:          *sc,
 		Executor:          executor,

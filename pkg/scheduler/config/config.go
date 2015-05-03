@@ -81,7 +81,7 @@ func CreateDefaultConfig() *Config {
 	return c
 }
 
-func (c *Config) read(configReader io.Reader) error {
+func (c *Config) Read(configReader io.Reader) error {
 	wrapper := &ConfigWrapper{Scheduler: *c}
 	if configReader != nil {
 		if err := gcfg.ReadInto(wrapper, configReader); err != nil {
