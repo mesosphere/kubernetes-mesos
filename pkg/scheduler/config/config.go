@@ -47,7 +47,7 @@ type Config struct {
 }
 
 type WrappedDuration struct {
-	Duration time.Duration `gcfg:"duration"`
+	time.Duration
 }
 
 func (wd *WrappedDuration) UnmarshalText(data []byte) error {
@@ -59,17 +59,17 @@ func (wd *WrappedDuration) UnmarshalText(data []byte) error {
 }
 
 func (c *Config) SetDefaults() {
-	c.OfferTTL = WrappedDuration{Duration: DefaultOfferTTL}
-	c.OfferLingerTTL = WrappedDuration{Duration: DefaultOfferLingerTTL}
-	c.ListenerDelay = WrappedDuration{Duration: DefaultListenerDelay}
+	c.OfferTTL = WrappedDuration{DefaultOfferTTL}
+	c.OfferLingerTTL = WrappedDuration{DefaultOfferLingerTTL}
+	c.ListenerDelay = WrappedDuration{DefaultListenerDelay}
 	c.UpdatesBacklog = DefaultUpdatesBacklog
-	c.FrameworkIdRefreshInterval = WrappedDuration{Duration: DefaultFrameworkIdRefreshInterval}
-	c.InitialImplicitReconciliationDelay = WrappedDuration{Duration: DefaultInitialImplicitReconciliationDelay}
-	c.ExplicitReconciliationMaxBackoff = WrappedDuration{Duration: DefaultExplicitReconciliationMaxBackoff}
-	c.ExplicitReconciliationAbortTimeout = WrappedDuration{Duration: DefaultExplicitReconciliationAbortTimeout}
-	c.InitialPodBackoff = WrappedDuration{Duration: DefaultInitialPodBackoff}
-	c.MaxPodBackoff = WrappedDuration{Duration: DefaultMaxPodBackoff}
-	c.HttpHandlerTimeout = WrappedDuration{Duration: DefaultHttpHandlerTimeout}
+	c.FrameworkIdRefreshInterval = WrappedDuration{DefaultFrameworkIdRefreshInterval}
+	c.InitialImplicitReconciliationDelay = WrappedDuration{DefaultInitialImplicitReconciliationDelay}
+	c.ExplicitReconciliationMaxBackoff = WrappedDuration{DefaultExplicitReconciliationMaxBackoff}
+	c.ExplicitReconciliationAbortTimeout = WrappedDuration{DefaultExplicitReconciliationAbortTimeout}
+	c.InitialPodBackoff = WrappedDuration{DefaultInitialPodBackoff}
+	c.MaxPodBackoff = WrappedDuration{DefaultMaxPodBackoff}
+	c.HttpHandlerTimeout = WrappedDuration{DefaultHttpHandlerTimeout}
 }
 
 func CreateDefaultConfig() *Config {
