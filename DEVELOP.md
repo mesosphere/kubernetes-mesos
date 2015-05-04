@@ -14,6 +14,25 @@ See the following sections for distro-specific instructions.
 
 The following distro-specific steps for installing prerequisites assume that you are logged in as `root`, otherwise you will need to insert `sudo` where appropriate.
 
+#### Mac OS X
+
+1. Install golang 1.4.2+ (usually via installer) via https://golang.org/dl/
+  1. Make a go workspace with `mkdir ~/go`
+  1. Add go environment variables to `~/.bash_profile`: 
+    
+    ```bash
+    export GOPATH=~/go
+    export PATH=$PATH:~/go/bin
+    ```
+      
+  1. Update current terminal with `source ~/.bash_profile` (or open a new terminal)
+1. Install homebrew via http://brew.sh/
+1. Install mercurial with `brew install hg`
+1. Install bash 4+ with `brew install bash`
+1. Install coreutils with `brew install coreutils`
+
+(Tested on Mac OS 10.10.2)
+
 #### Debian
 
 ```shell
