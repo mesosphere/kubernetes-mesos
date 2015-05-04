@@ -84,8 +84,8 @@ func TestOfferStorage(t *testing.T) {
 		Compat: func(o *mesos.Offer) bool {
 			return o.Hostname == nil || *o.Hostname != "incompatiblehost"
 		},
-		TTL:           ttl,
-		LingerTTL:     2 * ttl,
+		TTL:       ttl,
+		LingerTTL: 2 * ttl,
 	}
 	storage := CreateRegistry(config)
 
@@ -168,7 +168,7 @@ func TestOfferStorage(t *testing.T) {
 	// Incompatible offer is declined
 	id = util.NewOfferID("foo4")
 	incompatibleHostname := "incompatiblehost"
-	o = &mesos.Offer{Id: id, Hostname:&incompatibleHostname}
+	o = &mesos.Offer{Id: id, Hostname: &incompatibleHostname}
 	declinedNumBefore = declinedNum
 	storage.Add([]*mesos.Offer{o})
 	if obj, ok := storage.Get(id.GetValue()); obj != nil || ok {
@@ -213,7 +213,7 @@ func TestOfferStorage(t *testing.T) {
 	// InvalidateForSlave invalides all offers for that slave, but only those
 	id = util.NewOfferID("foo8")
 	slaveId := util.NewSlaveID("test-slave")
-	o = &mesos.Offer{Id: id, SlaveId:slaveId}
+	o = &mesos.Offer{Id: id, SlaveId: slaveId}
 	storage.Add([]*mesos.Offer{o})
 	id2 = util.NewOfferID("foo9")
 	o2 = &mesos.Offer{Id: id2}
@@ -243,7 +243,7 @@ func TestListen(t *testing.T) {
 	}
 	storage := CreateRegistry(config)
 
-	done := make(chan struct {})
+	done := make(chan struct{})
 	storage.Init(done)
 
 	// Create two listeners with a hostname filter
@@ -258,7 +258,7 @@ func TestListen(t *testing.T) {
 
 	// Add hostname1 offer
 	id := util.NewOfferID("foo")
-	o := &mesos.Offer{Id: id, Hostname:&hostname1}
+	o := &mesos.Offer{Id: id, Hostname: &hostname1}
 	storage.Add([]*mesos.Offer{o})
 
 	// listener1 is notified by closing channel
@@ -271,9 +271,9 @@ func TestListen(t *testing.T) {
 
 	// listener2 is not notified within ttl
 	select {
-		case <-listener2:
-			t.Error("listener2 is notified")
-		case <-time.After(ttl):
+	case <-listener2:
+		t.Error("listener2 is notified")
+	case <-time.After(ttl):
 	}
 
 	close(done)

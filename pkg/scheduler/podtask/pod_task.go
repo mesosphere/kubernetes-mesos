@@ -109,9 +109,17 @@ func (t *T) GetOfferId() string {
 	return t.Offer.Details().Id.GetValue()
 }
 
+func generateTaskName(pod *api.Pod) string {
+	ns := pod.Namespace
+	if ns == "" {
+		ns = api.NamespaceDefault
+	}
+	return fmt.Sprintf("%s.%s.pods", pod.Name, ns)
+}
+
 func (t *T) BuildTaskInfo() *mesos.TaskInfo {
 	info := &mesos.TaskInfo{
-		Name:     proto.String("pod"), // TODO(jdef) encode pod namespace,name
+		Name:     proto.String(generateTaskName(&t.Pod)),
 		TaskId:   mutil.NewTaskID(t.ID),
 		SlaveId:  mutil.NewSlaveID(t.Spec.SlaveID),
 		Executor: t.executor,

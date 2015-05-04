@@ -82,14 +82,18 @@ func (c *MesosCloud) ipAddress(name string) (net.IP, error) {
 	if name == "" {
 		return nil, noHostNameSpecified
 	}
-	if iplist, err := net.LookupIP(name); err != nil {
-		log.V(2).Infof("failed to resolve IP from host name '%v': %v", name, err)
-		return nil, err
-	} else {
-		ipaddr := iplist[0]
-		log.V(2).Infof("resolved host '%v' to '%v'", name, ipaddr)
+	ipaddr := net.ParseIP(name)
+	if ipaddr != nil {
 		return ipaddr, nil
 	}
+	iplist, err := net.LookupIP(name)
+	if err != nil {
+		log.V(2).Infof("failed to resolve IP from host name '%v': %v", name, err)
+		return nil, err
+	}
+	ipaddr = iplist[0]
+	log.V(2).Infof("resolved host '%v' to '%v'", name, ipaddr)
+	return ipaddr, nil
 }
 
 // ExternalID returns the cloud provider ID of the specified instance.

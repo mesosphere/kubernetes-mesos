@@ -4,11 +4,15 @@ MAINTAINER James DeFelice <james.defelice@gmail.com>
 RUN echo 'nobody:x:99:99:Nobody:/:/sbin/false' >>/etc/passwd
 RUN echo 'nobody::99:' >>/etc/group
 
-ADD usr /usr/
-ADD km /km
-ADD leapsecs.dat /etc/
-
 CMD [ ]
-ENTRYPOINT [ "/bootstrap.sh" ]
+ENTRYPOINT [ "/opt/bootstrap.sh" ]
 
-ADD bootstrap.sh /bootstrap.sh
+ADD usr			/usr/
+ADD leapsecs.dat	/etc/
+ADD etcd		/opt/
+ADD etcdctl		/opt/
+ADD km			/opt/
+ADD functions.sh	/opt/
+ADD bootstrap.sh	/opt/
+ADD executor.sh		/opt/
+ADD .version		/opt/

@@ -46,7 +46,7 @@ _GOPATH		:= $(shell uname | grep -e ^CYGWIN >/dev/null && cygpath --mixed "$(BUI
 
 TEST_OBJ	:= $(subst /,___,$(TESTS))
 
-.PHONY: all error require-godep require-vendor install info bootstrap format test patch.v patch version test.v test.vv test.cover clean lint vet fix prepare update $(TEST_OBJ)
+.PHONY: all error require-godep require-vendor install info bootstrap format test patch.v patch version test.v test.vv test.cover clean lint vet fix prepare update $(TEST_OBJ) test.integration
 
 # FRAMEWORK_FLAGS := -v -x -tags '$(TAGS)'
 FRAMEWORK_FLAGS := -tags '$(TAGS)'
@@ -90,7 +90,7 @@ test test.v: patch
 		test -n "$(WITH_RACE)" && args="$$args -race" || true; \
 		env GOPATH=$(_GOPATH) go test $$args -tags unit_test $(TESTS:%=${K8SM_GO_PACKAGE}/%)
 
-test.vv:
+test.vv: patch
 	test -n "$(WITH_RACE)" && args="$$args -race" || args=""; \
 		env GOPATH=$(_GOPATH) go test -test.v $$args -tags unit_test $(TESTS:%=${K8SM_GO_PACKAGE}/%) -logtostderr=true -vmodule=$(TESTS_VV)
 
@@ -100,6 +100,9 @@ test.cover: $(TEST_OBJ)
 $(TEST_OBJ):
 	@test -n "$(WITH_RACE)" && args="$$args -race" || args=""; \
 		env GOPATH=$(_GOPATH) go test -v $$args -covermode=count -coverprofile=.$@.coverage.out -tags unit_test $(K8SM_GO_PACKAGE)/$(subst ___,/,$@)
+
+test.integration:
+	$(current_dir)/hack/test_redirfd.sh
 
 install: all
 	mkdir -p $(DESTDIR)

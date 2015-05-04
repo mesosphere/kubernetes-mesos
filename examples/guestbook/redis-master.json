@@ -8,7 +8,7 @@
       "id": "redis-master-2",
       "containers": [{
         "name": "master",
-        "image": "dockerfile/redis",
+        "image": "library/redis",
         "ports": [{
           "containerPort": 6379,
           "hostPort": 31010 
