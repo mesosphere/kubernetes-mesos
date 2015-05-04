@@ -104,7 +104,7 @@ $(TEST_OBJ):
 install: all
 	mkdir -p $(DESTDIR)
 	(pkg="$(BUILDDIR)"; for x in $(notdir $(K8S_CMD) $(FRAMEWORK_CMD)); do \
-	 /bin/cp -vpf -t $(DESTDIR) "$${pkg}"/bin/$$x; done)
+	 /bin/cp -vpf "$${pkg}"/bin/$$x $(DESTDIR); done)
 
 info:
 	@echo RACE_FLAGS=$${WITH_RACE:+-race}
