@@ -328,4 +328,7 @@ func TestStatus_Update(t *testing.T) {
 		mesos.TaskState_TASK_FAILED,
 	)
 	testScheduler.StatusUpdate(testScheduler.driver, taskStatus_task_failed)
+
+	//assert that mock was invoked
+	mockdriver.AssertExpectations(t)
 }
