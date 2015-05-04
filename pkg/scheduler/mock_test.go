@@ -133,29 +133,33 @@ func (m *MockSchedulerDriver) Run() (mesos.Status, error) {
 	args := m.Called()
 	return status(args, 0), args.Error(1)
 }
-func (m *MockSchedulerDriver) RequestResources(r []*mesos.Request) error {
+func (m *MockSchedulerDriver) RequestResources(r []*mesos.Request) (mesos.Status, error) {
 	args := m.Called(r)
-	return args.Error(0)
+	return status(args, 0), args.Error(1)
 }
-func (m *MockSchedulerDriver) LaunchTasks(oid *mesos.OfferID, ti []*mesos.TaskInfo, f *mesos.Filters) error {
-	args := m.Called(oid, ti, f)
-	return args.Error(0)
+func (m *MockSchedulerDriver) ReconcileTasks(statuses []*mesos.TaskStatus) (mesos.Status, error) {
+	args := m.Called(statuses)
+	return status(args, 0), args.Error(1)
 }
-func (m *MockSchedulerDriver) KillTask(tid *mesos.TaskID) error {
+func (m *MockSchedulerDriver) LaunchTasks(offerIds []*mesos.OfferID, ti []*mesos.TaskInfo, f *mesos.Filters) (mesos.Status, error) {
+	args := m.Called(offerIds, ti, f)
+	return status(args, 0), args.Error(1)
+}
+func (m *MockSchedulerDriver) KillTask(tid *mesos.TaskID) (mesos.Status, error) {
 	args := m.Called(tid)
-	return args.Error(0)
+	return status(args, 0), args.Error(1)
 }
-func (m *MockSchedulerDriver) DeclineOffer(oid *mesos.OfferID, f *mesos.Filters) error {
+func (m *MockSchedulerDriver) DeclineOffer(oid *mesos.OfferID, f *mesos.Filters) (mesos.Status, error) {
 	args := m.Called(oid, f)
-	return args.Error(0)
+	return status(args, 0), args.Error(1)
 }
-func (m *MockSchedulerDriver) ReviveOffers() error {
+func (m *MockSchedulerDriver) ReviveOffers() (mesos.Status, error) {
 	args := m.Called()
-	return args.Error(0)
+	return status(args, 0), args.Error(0)
 }
-func (m *MockSchedulerDriver) SendFrameworkMessage(eid *mesos.ExecutorID, sid *mesos.SlaveID, s string) error {
+func (m *MockSchedulerDriver) SendFrameworkMessage(eid *mesos.ExecutorID, sid *mesos.SlaveID, s string) (mesos.Status, error) {
 	args := m.Called(eid, sid, s)
-	return args.Error(0)
+	return status(args, 0), args.Error(1)
 }
 func (m *MockSchedulerDriver) Destroy() {
 	m.Called()
