@@ -37,7 +37,7 @@ type Config struct {
 	OfferLingerTTL                     WrappedDuration `gcfg:"offer-linger-ttl"`
 	ListenerDelay                      WrappedDuration `gcfg:"listener-delay"`
 	UpdatesBacklog                     int             `gcfg:"updates-backlog"`
-	FrameworkIdRefreshInterval         WrappedDuration `gcfg:"listener-delay"`
+	FrameworkIdRefreshInterval         WrappedDuration `gcfg:"framework-id-refresh-interval"`
 	InitialImplicitReconciliationDelay WrappedDuration `gcfg:"initial-implicit-reconciliation-delay"`
 	ExplicitReconciliationMaxBackoff   WrappedDuration `gcfg:"explicit-reconciliantion-max-backoff"`
 	ExplicitReconciliationAbortTimeout WrappedDuration `gcfg:"explicit-reconciliantion-abort-timeout"`
