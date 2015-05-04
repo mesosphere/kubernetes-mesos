@@ -84,6 +84,7 @@ func (c *Config) Read(configReader io.Reader) error {
 		if err := gcfg.ReadInto(wrapper, configReader); err != nil {
 			return err
 		}
+		*c = wrapper.Scheduler
 	}
 	return nil
 }
