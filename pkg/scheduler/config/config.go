@@ -25,7 +25,7 @@ const (
 //
 // [scheduler]
 //  info-name        = Kubernetes
-//	offer-ttl        = 5s
+//  offer-ttl        = 5s
 //  offer-linger-ttl = 2m
 
 type ConfigWrapper struct {
