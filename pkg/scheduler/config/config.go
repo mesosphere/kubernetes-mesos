@@ -19,6 +19,7 @@ const (
 	DefaultInitialPodBackoff                  = 1 * time.Second
 	DefaultMaxPodBackoff                      = 60 * time.Second
 	DefaultHttpHandlerTimeout                 = 10 * time.Second
+	DefaultHttpBindInterval                   = 5 * time.Second
 )
 
 // Example scheduler configuration file:
@@ -44,6 +45,7 @@ type Config struct {
 	InitialPodBackoff                  WrappedDuration `gcfg:"initial-pod-backoff"`
 	MaxPodBackoff                      WrappedDuration `gcfg:"max-pod-backoff"`
 	HttpHandlerTimeout                 WrappedDuration `gcfg:"http-handler-timeout"`
+	HttpBindInterval                   WrappedDuration `gcfg:"http-bind-interval"`
 }
 
 type WrappedDuration struct {
@@ -70,6 +72,7 @@ func (c *Config) SetDefaults() {
 	c.InitialPodBackoff = WrappedDuration{DefaultInitialPodBackoff}
 	c.MaxPodBackoff = WrappedDuration{DefaultMaxPodBackoff}
 	c.HttpHandlerTimeout = WrappedDuration{DefaultHttpHandlerTimeout}
+	c.HttpBindInterval = WrappedDuration{DefaultHttpBindInterval}
 }
 
 func CreateDefaultConfig() *Config {

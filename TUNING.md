@@ -37,4 +37,5 @@ explicit-reconciliation-abort-timeout = 30s
 initial-pod-backoff = 1s
 max-pod-backoff = 60s
 http-handler-timeout = 10s
+http-bind-interval = 5s
 ```

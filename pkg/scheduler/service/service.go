@@ -68,7 +68,6 @@ const (
 	defaultMesosUser         = "root" // should have privs to execute docker and iptables commands
 	defaultReconcileInterval = 300    // 5m default task reconciliation interval
 	defaultReconcileCooldown = 15 * time.Second
-	defaultHttpBindInterval  = 5 * time.Second
 	defaultFrameworkName     = "Kubernetes"
 )
 
@@ -423,7 +422,7 @@ func (s *SchedulerServer) Run(hks hyperkube.Interface, _ []string) error {
 	go runtime.Until(func() {
 		log.V(1).Info("Starting HTTP interface")
 		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), s.mux))
-	}, defaultHttpBindInterval, schedulerProcess.Terminal())
+	},  sc.HttpBindInterval.Duration, schedulerProcess.Terminal())
 
 	if s.HA {
 		validation := ha.ValidationFunc(validateLeadershipTransition)

@@ -22,6 +22,7 @@ func is_default(c *Config, t *testing.T) {
 	assert.Equal(DefaultInitialPodBackoff,                  c.InitialPodBackoff.Duration)
 	assert.Equal(DefaultMaxPodBackoff,                      c.MaxPodBackoff.Duration)
 	assert.Equal(DefaultHttpHandlerTimeout,                 c.HttpHandlerTimeout.Duration)
+	assert.Equal(DefaultHttpBindInterval,                   c.HttpBindInterval.Duration)
 }
 
 // Check that SetDefaults sets the default values
@@ -55,6 +56,7 @@ func TestConfig_Read(t *testing.T) {
 	initial-pod-backoff=42s
 	max-pod-backoff=42s
 	http-handler-timeout=42s
+	http-bind-interval=42s
 	`)
 	err := c.Read(reader)
 	if err != nil {
@@ -72,4 +74,5 @@ func TestConfig_Read(t *testing.T) {
 	assert.Equal(42 * time.Second, c.InitialPodBackoff.Duration)
 	assert.Equal(42 * time.Second, c.MaxPodBackoff.Duration)
 	assert.Equal(42 * time.Second, c.HttpHandlerTimeout.Duration)
+	assert.Equal(42 * time.Second, c.HttpBindInterval.Duration)
 }
