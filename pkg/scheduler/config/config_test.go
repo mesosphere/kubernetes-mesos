@@ -76,3 +76,21 @@ func TestConfig_Read(t *testing.T) {
 	assert.Equal(42 * time.Second, c.HttpHandlerTimeout.Duration)
 	assert.Equal(42 * time.Second, c.HttpBindInterval.Duration)
 }
+
+// check that an invalid config is rejected and non of the values to overwritten
+func TestConfig_ReadError(t *testing.T) {
+	assert := assert.New(t)
+
+	c := CreateDefaultConfig()
+	reader := strings.NewReader(`
+	[scheduler]
+	offer-ttl = 42s
+	invalid-setting = 42s
+	`)
+	err := c.Read(reader)
+	if err == nil {
+		t.Fatal("Invalid scheduler config should lead to an error")
+	}
+
+	assert.NotEqual(42 * time.Second, c.OfferTTL.Duration)
+}
