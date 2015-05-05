@@ -18,11 +18,11 @@ import (
 // Test data
 
 const (
-	masterId   = "master-12345"
-	masterIp   = 177048842
-	masterPort = 5050
+	TEST_MASTER_ID   = "master-12345"
+	TEST_MASTER_IP   = 177048842 // 10.141.141.10
+	TEST_MASTER_PORT = 5050
 
-	stateJson = `
+	TEST_STATE_JSON = `
 	{
 		"version": "0.22.0",
 		"unregistered_frameworks": [],
@@ -139,7 +139,7 @@ func (md FakeMasterDetector) Cancel() {
 
 func (md FakeMasterDetector) Detect(cb detector.MasterChanged) error {
 	md.callback = cb
-	leadingMaster := mesosutil.NewMasterInfo(masterId, masterIp, masterPort)
+	leadingMaster := mesosutil.NewMasterInfo(TEST_MASTER_ID, TEST_MASTER_IP, TEST_MASTER_PORT)
 	cb.OnMasterChanged(leadingMaster)
 	return nil
 }
@@ -156,7 +156,7 @@ func makeHttpMocks() (*httptest.Server, *http.Client, *http.Transport) {
 		if r.URL.Path == "/state.json" {
 			w.WriteHeader(200) // OK
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintln(w, stateJson)
+			fmt.Fprintln(w, TEST_STATE_JSON)
 		} else {
 			w.WriteHeader(400)
 			fmt.Fprintln(w, "Bad Request")
@@ -179,7 +179,7 @@ func makeHttpMocks() (*httptest.Server, *http.Client, *http.Transport) {
 
 // test mesos.parseMesosState
 func Test_parseMesosState(t *testing.T) {
-	state, err := parseMesosState([]byte(stateJson))
+	state, err := parseMesosState([]byte(TEST_STATE_JSON))
 
 	if err != nil {
 		t.Fatalf("parseMesosState does not yield an error")
@@ -198,7 +198,7 @@ func Test_listSlaves(t *testing.T) {
 	md := FakeMasterDetector{}
 	httpServer, httpClient, httpTransport := makeHttpMocks()
 	defer httpServer.Close()
-	cacheTTL, _ := time.ParseDuration("500ms")
+	cacheTTL := 500 * time.Millisecond
 	mesosClient, err := createMesosClient(md, httpClient, httpTransport, cacheTTL)
 
 	if err != nil {
@@ -236,7 +236,7 @@ func Test_clusterName(t *testing.T) {
 	md := FakeMasterDetector{}
 	httpServer, httpClient, httpTransport := makeHttpMocks()
 	defer httpServer.Close()
-	cacheTTL, _ := time.ParseDuration("500ms")
+	cacheTTL := 500 * time.Millisecond
 	mesosClient, err := createMesosClient(md, httpClient, httpTransport, cacheTTL)
 
 	name, err := mesosClient.clusterName(context.TODO())

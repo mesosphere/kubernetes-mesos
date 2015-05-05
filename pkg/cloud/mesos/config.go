@@ -13,22 +13,6 @@ const (
 	DefaultStateCacheTTL     = time.Duration(5) * time.Second
 )
 
-var (
-	config *Config
-)
-
-func getConfig() *Config {
-	return config
-}
-
-func resetConfigToDefault() {
-	config = createDefaultConfig()
-}
-
-func init() {
-	resetConfigToDefault()
-}
-
 // Example Mesos cloud provider configuration file:
 //
 // [mesos-cloud]
@@ -41,19 +25,19 @@ type ConfigWrapper struct {
 }
 
 type Config struct {
-	MesosMaster            string          `gcfg:"mesos-master"`
-	MesosHttpClientTimeout WrappedDuration `gcfg:"http-client-timeout"`
-	StateCacheTTL          WrappedDuration `gcfg:"state-cache-ttl"`
+	MesosMaster            string   `gcfg:"mesos-master"`
+	MesosHttpClientTimeout Duration `gcfg:"http-client-timeout"`
+	StateCacheTTL          Duration `gcfg:"state-cache-ttl"`
 }
 
-type WrappedDuration struct {
+type Duration struct {
 	Duration time.Duration `gcfg:"duration"`
 }
 
-func (wd *WrappedDuration) UnmarshalText(data []byte) error {
-	d, err := time.ParseDuration(string(data))
+func (d *Duration) UnmarshalText(data []byte) error {
+	underlying, err := time.ParseDuration(string(data))
 	if err == nil {
-		wd.Duration = d
+		d.Duration = underlying
 	}
 	return err
 }
@@ -61,19 +45,19 @@ func (wd *WrappedDuration) UnmarshalText(data []byte) error {
 func createDefaultConfig() *Config {
 	return &Config{
 		MesosMaster:            DefaultMesosMaster,
-		MesosHttpClientTimeout: WrappedDuration{Duration: DefaultHttpClientTimeout},
-		StateCacheTTL:          WrappedDuration{Duration: DefaultStateCacheTTL},
+		MesosHttpClientTimeout: Duration{Duration: DefaultHttpClientTimeout},
+		StateCacheTTL:          Duration{Duration: DefaultStateCacheTTL},
 	}
 }
 
-func readConfig(configReader io.Reader) error {
-	resetConfigToDefault()
+func readConfig(configReader io.Reader) (*Config, error) {
+	config := createDefaultConfig()
 	wrapper := &ConfigWrapper{Mesos_Cloud: *config}
 	if configReader != nil {
 		if err := gcfg.ReadInto(wrapper, configReader); err != nil {
-			return err
+			return nil, err
 		}
 		config = &(wrapper.Mesos_Cloud)
 	}
-	return nil
+	return config, nil
 }

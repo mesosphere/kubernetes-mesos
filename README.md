@@ -124,9 +124,10 @@ $ ./bin/km apiserver \
 
 $ ./bin/km controller-manager \
   --master=$servicehost:8888 \
- --cloud_config=./mesos-cloud.conf
+  --cloud_config=./mesos-cloud.conf
 
 $ ./bin/km scheduler \
+  --mesos_master=${mesos_masster} \
   --address=${servicehost} \
   --etcd_servers=http://${servicehost}:4001 \
   --mesos_user=root \

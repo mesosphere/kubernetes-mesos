@@ -14,15 +14,15 @@ func Test_createDefaultConfig(t *testing.T) {
 
 	config := createDefaultConfig()
 
-	if config.MesosMaster != "localhost:5050" {
+	if config.MesosMaster != DefaultMesosMaster {
 		t.Fatalf("Default config has the expected MesosMaster value")
 	}
 
-	if config.MesosHttpClientTimeout.Duration != time.Duration(10)*time.Second {
+	if config.MesosHttpClientTimeout.Duration != DefaultHttpClientTimeout {
 		t.Fatalf("Default config has the expected MesosHttpClientTimeout value")
 	}
 
-	if config.StateCacheTTL.Duration != time.Duration(5)*time.Second {
+	if config.StateCacheTTL.Duration != DefaultStateCacheTTL {
 		t.Fatalf("Default config has the expected StateCacheTTL value")
 	}
 }
@@ -39,21 +39,21 @@ func Test_readConfig(t *testing.T) {
 
 	reader := bytes.NewBufferString(configString)
 
-	err := readConfig(reader)
+	config, err := readConfig(reader)
 
 	if err != nil {
 		t.Fatalf("Reading configuration does not yield an error: %#v", err)
 	}
 
-	if getConfig().MesosMaster != "leader.mesos:5050" {
+	if config.MesosMaster != "leader.mesos:5050" {
 		t.Fatalf("Parsed config has the expected MesosMaster value")
 	}
 
-	if getConfig().MesosHttpClientTimeout.Duration != time.Duration(500)*time.Millisecond {
+	if config.MesosHttpClientTimeout.Duration != time.Duration(500)*time.Millisecond {
 		t.Fatalf("Parsed config has the expected MesosHttpClientTimeout value")
 	}
 
-	if getConfig().StateCacheTTL.Duration != time.Duration(1)*time.Hour {
+	if config.StateCacheTTL.Duration != time.Duration(1)*time.Hour {
 		t.Fatalf("Parsed config has the expected StateCacheTTL value")
 	}
 }

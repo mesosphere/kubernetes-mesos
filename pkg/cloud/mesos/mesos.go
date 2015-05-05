@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"regexp"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
@@ -14,7 +15,8 @@ import (
 )
 
 var (
-	PluginName = "mesos"
+	PluginName    = "mesos"
+	CloudProvider *MesosCloud
 
 	noHostNameSpecified = errors.New("No hostname specified")
 )
@@ -23,35 +25,40 @@ func init() {
 	cloudprovider.RegisterCloudProvider(
 		PluginName,
 		func(configReader io.Reader) (cloudprovider.Interface, error) {
-			return newMesosCloud(configReader)
+			provider, err := newMesosCloud(configReader)
+			if err == nil {
+				CloudProvider = provider
+			}
+			return provider, err
 		})
 }
 
 type MesosCloud struct {
 	client *mesosClient
+	config *Config
 }
 
-func MasterURI() string {
-	return getConfig().MesosMaster
+func (c *MesosCloud) MasterURI() string {
+	return c.config.MesosMaster
 }
 
 func newMesosCloud(configReader io.Reader) (*MesosCloud, error) {
-	err := readConfig(configReader)
+	config, err := readConfig(configReader)
 	if err != nil {
 		return nil, err
 	}
 
-	log.V(1).Infof("new mesos cloud, master='%v'", getConfig().MesosMaster)
-	if d, err := detector.New(getConfig().MesosMaster); err != nil {
+	log.V(1).Infof("new mesos cloud, master='%v'", config.MesosMaster)
+	if d, err := detector.New(config.MesosMaster); err != nil {
 		log.V(1).Infof("failed to create master detector: %v", err)
 		return nil, err
 	} else if cl, err := newMesosClient(d,
-		getConfig().MesosHttpClientTimeout.Duration,
-		getConfig().StateCacheTTL.Duration); err != nil {
+		config.MesosHttpClientTimeout.Duration,
+		config.StateCacheTTL.Duration); err != nil {
 		log.V(1).Infof("failed to create mesos cloud client: %v", err)
 		return nil, err
 	} else {
-		return &MesosCloud{client: cl}, nil
+		return &MesosCloud{client: cl, config: config}, nil
 	}
 }
 
@@ -153,9 +160,15 @@ func (c *MesosCloud) List(filter string) ([]string, error) {
 		log.V(2).Info("no slaves found, are any running?")
 		return nil, nil
 	}
+	filterRegex, err := regexp.Compile(filter)
+	if err != nil {
+		return nil, err
+	}
 	addr := []string{}
 	for _, node := range nodes {
-		addr = append(addr, node.hostname)
+		if filterRegex.MatchString(node.hostname) {
+			addr = append(addr, node.hostname)
+		}
 	}
 	return addr, err
 }

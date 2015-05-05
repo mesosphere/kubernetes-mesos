@@ -123,11 +123,7 @@ func createMesosClient(
 		} else if host := info.GetHostname(); host != "" {
 			client.master = host
 		} else {
-			// unpack IPv4
-			octets := make([]byte, 4, 4)
-			binary.BigEndian.PutUint32(octets, info.GetIp())
-			ipv4 := net.IP(octets)
-			client.master = ipv4.String()
+			client.master = unpackIPv4(info.GetIp())
 		}
 		if len(client.master) > 0 {
 			client.master = fmt.Sprintf("%s:%d", client.master, info.GetPort())
@@ -142,6 +138,13 @@ func createMesosClient(
 		return nil, err
 	}
 	return client, nil
+}
+
+func unpackIPv4(ip uint32) string {
+	octets := make([]byte, 4, 4)
+	binary.BigEndian.PutUint32(octets, ip)
+	ipv4 := net.IP(octets)
+	return ipv4.String()
 }
 
 // Return a (possibly cached) list of slave nodes.
