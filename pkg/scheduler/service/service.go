@@ -401,8 +401,21 @@ func (s *SchedulerServer) getDriver() (driver bindings.SchedulerDriver) {
 }
 
 func (s *SchedulerServer) Run(hks hyperkube.Interface, _ []string) error {
+	// get scheduler low-level config
+	sc := schedcfg.CreateDefaultConfig()
+	if s.SchedulerConfigFileName != "" {
+		f, err := os.Open(s.SchedulerConfigFileName)
+		if err != nil {
+			log.Fatalf("Cannot open scheduler config file: %v", err)
+		}
 
-	schedulerProcess, driverFactory, etcdClient, eid := s.bootstrap(hks)
+		err = sc.Read(bufio.NewReader(f))
+		if err != nil {
+			log.Fatalf("Invalid scheduler config file: %v", err)
+		}
+	}
+
+	schedulerProcess, driverFactory, etcdClient, eid := s.bootstrap(hks, sc)
 
 	if s.EnableProfiling {
 		profile.InstallHandler(s.mux)
@@ -494,7 +507,7 @@ func newEtcd(etcdConfigFile string, etcdServerList util.StringList) (client tool
 	return
 }
 
-func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProcess, ha.DriverFactory, tools.EtcdGetSet, *uid.UID) {
+func (s *SchedulerServer) bootstrap(hks hyperkube.Interface, sc *schedcfg.Config) (*ha.SchedulerProcess, ha.DriverFactory, tools.EtcdGetSet, *uid.UID) {
 
 	s.FrameworkName = strings.TrimSpace(s.FrameworkName)
 	if s.FrameworkName == "" {
@@ -535,19 +548,6 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProce
 	etcdClient, err := newEtcd(s.EtcdConfigFile, s.EtcdServerList)
 	if err != nil {
 		log.Fatalf("misconfigured etcd: %v", err)
-	}
-
-	sc := schedcfg.CreateDefaultConfig()
-	if s.SchedulerConfigFileName != "" {
-		f, err := os.Open(s.SchedulerConfigFileName)
-		if err != nil {
-			log.Fatalf("Cannot open scheduler config file: %v", err)
-		}
-
-		err = sc.Read(bufio.NewReader(f))
-		if err != nil {
-			log.Fatalf("Invalid scheduler config file: %v", err)
-		}
 	}
 
 	mesosPodScheduler := scheduler.New(scheduler.Config{
