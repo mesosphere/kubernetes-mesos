@@ -84,10 +84,16 @@ type testjob struct {
 	d time.Duration
 	t time.Time
 	deadline *time.Time
+	uid string
+	instance int
 }
 
 func (j *testjob) GetDelay() time.Duration {
 	return j.d
+}
+
+func (j testjob) GetUID() string {
+	return j.uid
 }
 
 func (td *testjob) Deadline() (deadline time.Time, ok bool) {
@@ -304,4 +310,80 @@ func TestDQ_negative_delay(t *testing.T) {
 	if item.d != delay {
 		t.Fatalf("d != delay")
 	}
+}
+
+func TestDFIFO_sanity_check(t *testing.T) {
+	t.Parallel()
+	assert := assert.New(t)
+
+	df := NewDelayFIFO()
+	delay := 2 * time.Second
+	df.Add(&testjob{d: delay, uid: "a", instance: 1}, ReplaceExisting)
+	assert.True(df.ContainedIDs().Has("a"))
+
+	// re-add by ReplaceExisting
+	df.Add(&testjob{d: delay, uid: "a", instance: 2}, ReplaceExisting)
+	assert.True(df.ContainedIDs().Has("a"))
+
+	a, ok := df.Get("a")
+	assert.True(ok)
+	assert.Equal(a.(*testjob).instance, 2)
+
+	// re-add by KeepExisting
+	df.Add(&testjob{d: delay, uid: "a", instance: 3}, KeepExisting)
+	assert.True(df.ContainedIDs().Has("a"))
+
+	a, ok = df.Get("a")
+	assert.True(ok)
+	assert.Equal(a.(*testjob).instance, 2)
+
+	// pop last
+	before := time.Now()
+	x := df.Pop()
+	assert.Equal(a.(*testjob).instance, 2)
+
+	now := time.Now()
+	waitPeriod := now.Sub(before)
+
+	if waitPeriod+tolerance < delay {
+		t.Fatalf("delay too short: %v, expected: %v", waitPeriod, delay)
+	}
+	if x == nil {
+		t.Fatalf("x is nil")
+	}
+	item := x.(*testjob)
+	if item.d != delay {
+		t.Fatalf("d != delay")
+	}
+}
+
+func TestDFIFO_Offer(t *testing.T) {
+	t.Parallel()
+	assert := assert.New(t)
+
+	dq := NewDelayFIFO()
+	delay := time.Second
+
+	added := dq.Offer(&testjob{instance: 1}, ReplaceExisting)
+	if added {
+		t.Fatalf("offered job without deadline added")
+	}
+
+	deadline := time.Now().Add(delay)
+	added = dq.Offer(&testjob{deadline: &deadline, instance: 2}, ReplaceExisting)
+	if !added {
+		t.Fatalf("offered job with deadline not added")
+	}
+
+	before := time.Now()
+	x := dq.Pop()
+
+	now := time.Now()
+	waitPeriod := now.Sub(before)
+
+	if waitPeriod+tolerance < delay {
+		t.Fatalf("delay too short: %v, expected: %v", waitPeriod, delay)
+	}
+	assert.NotNil(x)
+	assert.Equal(x.(*testjob).instance, 2)
 }
