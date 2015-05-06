@@ -7,11 +7,12 @@ Kubernetes pod container specifications identify two types of ports, container p
 container ports are allocated from the network namespace of the pod, which is independent from that of the host, whereas;
 host ports are allocated from the network namespace of the host.
 The k8sm scheduler recognizes the declared host ports of each container in a pod/task and for each such port, attempts to allocate it from the offered ports listed in mesos resource offers.
+If no host port is declared, then the scheduler may choose any port from the offered ports ranges.
 
-If slaves are configured to offer a `ports` resource range, for example [31000-32000], then the host ports declared in the pod container specification must fall within that range.
-Ports declared outside that range will never match resource offers received by the k8sm scheduler, and so pod specifications that declare such ports will never be executed as tasks on the cluster.
+If slaves are configured to offer a `ports` resource range, for example [31000-32000], then any host ports declared in the pod container specification must fall within that range.
+Ports declared outside that range (other than zero) will never match resource offers received by the k8sm scheduler, and so pod specifications that declare such ports will never be executed as tasks on the cluster.
 
-As in Kubernetes proper, a missing pod container host port specification or a host port set to zero will skip allocation of a host port.
+As opposed to Kubernetes proper, a missing pod container host port specification or a host port set to zero will allocate a host port from a resource offer.
 
 ### Service Endpoints
 
@@ -23,11 +24,9 @@ Kubernetes service endpoints terminate, by default, at a backing pod's IPv4 addr
 This is problematic when default Docker networking has been configured, such as in the case of typical Mesos clusters, because a pod's host-private IPv4 address is not intended to be reachable outside of its host.
 
 The k8sm project has implemented a work-around: service endpoints are terminated at HostIP:HostPort, where the HostIP resolves to the IP address of the Mesos slave and the HostPort resolves to the host port declared in the pod container port specification.
-Thus, this enforces a **new requirement** for Kubernetes services running on the k8sm framework:
+When using the `controller-manager` provided by this project there is no additional work required by the end user to take advantage of this work-around.
+Host ports that are not defined, or else defined as zero, will automatically be assigned a (host) port resource from a resource offer.
 
-* Pod containers that wish to expose a Port to a service must declare a host port in their specification.
-
-The ugly impact of this is that users are required to manually curate the service port space in order to avoid port resource starvation.
 To disable the work-around and revert to vanilla Kubernetes service endpoint termination:
 
 * execute the k8sm controller-manager with `-host_port_endpoints=false`

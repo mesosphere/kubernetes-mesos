@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -187,17 +188,16 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *pod
 	pod.Annotations[annotation.BindingHostKey] = machine
 	task.SaveRecoveryInfo(pod.Annotations)
 
-	//TODO(jdef) using anything other than the default k8s host-port mapping may
-	//confuse k8s pod rectification loops. in the future this point may become
-	//moot if the kubelet sync's directly against the apiserver /pods state (and
-	//eliminates bound pods all together) - since our version of the kubelet does
-	//not use the apiserver or etcd channels, we will be in control of all
-	//rectification. And BTW we probably want to store this information, somehow,
-	//in the binding annotations.
 	for _, entry := range task.Spec.PortMap {
 		oemPorts := pod.Spec.Containers[entry.ContainerIdx].Ports
 		ports := append([]api.ContainerPort{}, oemPorts...)
-		ports[entry.PortIdx].HostPort = int(entry.OfferPort)
+		p := &ports[entry.PortIdx]
+		p.HostPort = int(entry.OfferPort)
+		op := strconv.FormatUint(entry.OfferPort, 10)
+		pod.Annotations[fmt.Sprintf(annotation.PortMappingKeyFormat, p.Protocol, p.ContainerPort)] = op
+		if p.Name != "" {
+			pod.Annotations[fmt.Sprintf(annotation.PortNameMappingKeyFormat, p.Protocol, p.Name)] = op
+		}
 		pod.Spec.Containers[entry.ContainerIdx].Ports = ports
 	}
 

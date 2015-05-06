@@ -10,7 +10,7 @@
         "image": "library/nginx",
         "ports": [{
           "containerPort": 80,
-          "hostPort": 31000
+          "name": "http"
         }],
         "livenessProbe": {
           "enabled": true,

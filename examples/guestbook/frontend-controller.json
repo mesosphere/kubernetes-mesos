@@ -13,7 +13,7 @@
              "containers": [{
                "name": "php-redis",
                "image": "jdef/php-redis",
-               "ports": [{"containerPort": 80, "hostPort": 31030}]
+               "ports": [{"containerPort": 80}]
              }]
            }
          },

@@ -19,6 +19,7 @@ package service
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/endpoints"
@@ -30,6 +31,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
 
 	"github.com/golang/glog"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/meta"
 )
 
 type EndpointController interface {
@@ -156,12 +158,12 @@ func (e *endpointController) SyncServiceEndpoints() error {
 	return resultErr
 }
 
-// HACK(jdef): return the HostPort instead of the ContainerPort for generic mesos compat.
+// returns the default mapped HostPort instead of the ContainerPort for mesos compat
 func findDefaultPort(pod *api.Pod, servicePort int, proto api.Protocol) int {
 	for _, container := range pod.Spec.Containers {
 		for _, port := range container.Ports {
-			if port.Protocol == proto && port.HostPort != 0 {
-				return port.HostPort
+			if p, err := findMappedPort(pod, proto, port.ContainerPort); err == nil {
+				return p
 			}
 		}
 	}
@@ -188,7 +190,7 @@ func findPort(pod *api.Pod, service *api.Service) (int, error) {
 		for _, container := range pod.Spec.Containers {
 			for _, port := range container.Ports {
 				if port.Name == name && port.Protocol == service.Spec.Protocol {
-					return port.HostPort, nil
+					return findMappedPortName(pod, port.Protocol, name)
 				}
 			}
 		}
@@ -199,14 +201,14 @@ func findPort(pod *api.Pod, service *api.Service) (int, error) {
 		}
 		// HACK(jdef): slightly different semantics from upstream here:
 		// we ensure that if the user spec'd a port in the service that
-		// it actually maps to a host-port declared in the pod. upstream
-		// doesn't check this and happily returns the port spec'd in the
-		// service.
+		// it actually maps to a host-port assigned to the pod. upstream
+		// doesn't check this and happily returns the container port spec'd
+		// in the service, but that doesn't align w/ mesos port mgmt.
 		p := portName.IntVal
 		for _, container := range pod.Spec.Containers {
 			for _, port := range container.Ports {
-				if port.HostPort == p {
-					return p, nil
+				if port.ContainerPort == p {
+					return findMappedPort(pod, port.Protocol, p)
 				}
 			}
 		}
@@ -214,4 +216,24 @@ func findPort(pod *api.Pod, service *api.Service) (int, error) {
 	}
 	// should never get this far..
 	return -1, fmt.Errorf("no suitable port for manifest: %s", pod.UID)
+}
+
+func findMappedPort(pod *api.Pod, protocol api.Protocol, port int) (int, error) {
+	if len(pod.Annotations) > 0 {
+		key := fmt.Sprintf(meta.PortMappingKeyFormat, string(protocol), port)
+		if value, found := pod.Annotations[key]; found {
+			return strconv.Atoi(value)
+		}
+	}
+	return -1, fmt.Errorf("failed to find mapped container %s port: %d", protocol, port)
+}
+
+func findMappedPortName(pod *api.Pod, protocol api.Protocol, portName string) (int, error) {
+	if len(pod.Annotations) > 0 {
+		key := fmt.Sprintf(meta.PortNameMappingKeyFormat, string(protocol), portName)
+		if value, found := pod.Annotations[key]; found {
+			return strconv.Atoi(value)
+		}
+	}
+	return -1, fmt.Errorf("failed to find mapped container %s port name: %q", protocol, portName)
 }

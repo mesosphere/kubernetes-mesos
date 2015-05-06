@@ -13,7 +13,7 @@
              "containers": [{
                "name": "slave",
                "image": "mesosphere/kubernetes:guestbook-redis-slave",
-               "ports": [{"containerPort": 6379, "hostPort": 31020}]
+               "ports": [{"containerPort": 6379}]
              }]
            }
          },
