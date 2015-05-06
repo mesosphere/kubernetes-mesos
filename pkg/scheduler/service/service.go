@@ -99,6 +99,7 @@ type SchedulerServer struct {
 	ReconcileCooldown             time.Duration
 	Graceful                      bool
 	FrameworkName                 string
+	FrameworkWebURI               string
 	HA                            bool
 	AdvertisedAddress             string
 	HADomain                      string
@@ -187,6 +188,7 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&s.Graceful, "graceful", s.Graceful, "Indicator of a graceful failover, intended for internal use only.")
 	fs.BoolVar(&s.HA, "ha", s.HA, "Run the scheduler in high availability mode with leader election. All peers should be configured exactly the same.")
 	fs.StringVar(&s.FrameworkName, "framework_name", s.FrameworkName, "The framework name to register with Mesos.")
+	fs.StringVar(&s.FrameworkWebURI, "framework_weburi", s.FrameworkWebURI, "A URI that points to a web-based interface for interacting with the framework.")
 	fs.StringVar(&s.AdvertisedAddress, "advertised_address", s.AdvertisedAddress, "host:port address that is advertised to clients. May be used to construct artifact download URIs.")
 
 	fs.BoolVar(&s.ExecutorBindall, "executor_bindall", s.ExecutorBindall, "When true will set -address of the executor to 0.0.0.0.")
@@ -500,6 +502,7 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProce
 	if s.FrameworkName == "" {
 		log.Fatalf("framework_name must be a non-empty string")
 	}
+	s.FrameworkWebURI = strings.TrimSpace(s.FrameworkWebURI)
 
 	metrics.Register()
 	runtime.Register()
@@ -667,6 +670,9 @@ func (s *SchedulerServer) buildFrameworkInfo() (info *mesos.FrameworkInfo, cred 
 		Name:       proto.String(s.FrameworkName),
 		User:       proto.String(username),
 		Checkpoint: proto.Bool(s.Checkpoint),
+	}
+	if s.FrameworkWebURI != "" {
+		info.WebuiUrl = proto.String(s.FrameworkWebURI)
 	}
 	if s.FailoverTimeout > 0 {
 		info.FailoverTimeout = proto.Float64(s.FailoverTimeout)
