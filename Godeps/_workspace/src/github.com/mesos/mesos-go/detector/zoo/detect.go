@@ -36,7 +36,8 @@ import (
 
 const (
 	// prefix for nodes listed at the ZK URL path
-	nodePrefix = "info_"
+	nodePrefix                    = "info_"
+	defaultMinDetectorCyclePeriod = 1 * time.Second
 )
 
 // reasonable default for a noop change listener
@@ -44,10 +45,17 @@ var ignoreChanged = detector.OnMasterChanged(func(*mesos.MasterInfo) {})
 
 // Detector uses ZooKeeper to detect new leading master.
 type MasterDetector struct {
-	client          *Client
-	leaderNode      string
-	bootstrap       sync.Once // for one-time zk client initiation
-	ignoreInstalled int32     // only install, at most, one ignoreChanged listener; see MasterDetector.Detect
+	client     *Client
+	leaderNode string
+
+	// for one-time zk client initiation
+	bootstrap sync.Once
+
+	// latch: only install, at most, one ignoreChanged listener; see MasterDetector.Detect
+	ignoreInstalled int32
+
+	// detection should not signal master change listeners more frequently than this
+	minDetectorCyclePeriod time.Duration
 }
 
 // Internal constructor function
@@ -64,7 +72,8 @@ func NewMasterDetector(zkurls string) (*MasterDetector, error) {
 	}
 
 	detector := &MasterDetector{
-		client: client,
+		client:                 client,
+		minDetectorCyclePeriod: defaultMinDetectorCyclePeriod,
 	}
 
 	log.V(2).Infoln("Created new detector, watching ", zkHosts, zkPath)
@@ -154,8 +163,6 @@ func (md *MasterDetector) Detect(f detector.MasterChanged) (err error) {
 }
 
 func (md *MasterDetector) detect(f detector.MasterChanged) {
-
-	minCyclePeriod := 1 * time.Second
 detectLoop:
 	for {
 		started := time.Now()
@@ -190,7 +197,7 @@ detectLoop:
 			select {
 			case <-md.Done():
 				return
-			case <-time.After(minCyclePeriod - elapsed): // noop
+			case <-time.After(md.minDetectorCyclePeriod - elapsed): // noop
 			}
 		}
 	}

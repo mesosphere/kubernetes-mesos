@@ -131,7 +131,7 @@ func TestMasterDetectFlappingConnectionState(t *testing.T) {
 		watchEvents := make(chan zk.Event, 10)
 
 		connector.On("Get", fmt.Sprintf("%s/info_005", test_zk_path)).Return(newTestMasterInfo(1), &zk.Stat{}, nil).Once()
-		connector.On("ChildrenW", test_zk_path).Return([]string{test_zk_path}, &zk.Stat{}, (<-chan zk.Event)(watchEvents), nil).Once()
+		connector.On("ChildrenW", test_zk_path).Return([]string{test_zk_path}, &zk.Stat{}, (<-chan zk.Event)(watchEvents), nil)
 		go func() {
 			defer wg.Done()
 			time.Sleep(100 * time.Millisecond)
@@ -199,6 +199,13 @@ func TestMasterDetectFlappingConnector(t *testing.T) {
 	connector.On("Close").Return(nil)
 	connector.On("Children", test_zk_path).Return(initialChildren, &zk.Stat{}, nil)
 
+	// timing
+	// t=0         t=400ms     t=800ms     t=1200ms    t=1600ms    t=2000ms    t=2400ms
+	// |--=--=--=--|--=--=--=--|--=--=--=--|--=--=--=--|--=--=--=--|--=--=--=--|--=--=--=--|--=--=--=--
+	//  c1          d1               c3          d3                c5          d5             d6    ...
+	//                c2          d2                c4          d4                c6             c7 ...
+	//  M           M'   M        M'       M     M'
+
 	attempt := 0
 	c.setFactory(asFactory(func() (Connector, <-chan zk.Event, error) {
 		attempt++
@@ -210,7 +217,7 @@ func TestMasterDetectFlappingConnector(t *testing.T) {
 			State: zk.StateConnected,
 		}
 		connector.On("Get", fmt.Sprintf("%s/info_005", test_zk_path)).Return(newTestMasterInfo(attempt), &zk.Stat{}, nil).Once()
-		connector.On("ChildrenW", test_zk_path).Return([]string{test_zk_path}, &zk.Stat{}, (<-chan zk.Event)(watchEvents), nil).Once()
+		connector.On("ChildrenW", test_zk_path).Return([]string{test_zk_path}, &zk.Stat{}, (<-chan zk.Event)(watchEvents), nil)
 		go func(attempt int) {
 			defer close(sessionEvents)
 			defer close(watchEvents)
@@ -231,8 +238,11 @@ func TestMasterDetectFlappingConnector(t *testing.T) {
 		return connector, sessionEvents, nil
 	}))
 	c.reconnDelay = 100 * time.Millisecond
+	c.rewatchDelay = c.reconnDelay / 2
 
 	md, err := NewMasterDetector(zkurl)
+	md.minDetectorCyclePeriod = 600 * time.Millisecond
+
 	defer md.Cancel()
 	assert.NoError(t, err)
 
@@ -242,11 +252,11 @@ func TestMasterDetectFlappingConnector(t *testing.T) {
 	md.client = c
 
 	var wg sync.WaitGroup
-	wg.Add(4) // 2 x (connected, disconnected)
+	wg.Add(6) // 3 x (connected, disconnected)
 	detected := 0
 	startTime := time.Now()
 	md.Detect(detector.OnMasterChanged(func(master *mesos.MasterInfo) {
-		if detected > 3 {
+		if detected > 5 {
 			// ignore
 			return
 		}
