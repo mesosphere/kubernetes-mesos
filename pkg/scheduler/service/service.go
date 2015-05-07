@@ -249,7 +249,7 @@ func (s *SchedulerServer) serveFrameworkArtifact(path string) (string, string) {
 	return hostURI, base
 }
 
-func (s *SchedulerServer) prepareExecutorInfo(hks hyperkube.Interface) (*mesos.ExecutorInfo, *uid.UID, error) {
+func (s *SchedulerServer) prepareExecutorInfo(hks hyperkube.Interface) (*mesos.ExecutorInfo, uid.UID, error) {
 	ci := &mesos.CommandInfo{
 		Shell: proto.Bool(false),
 	}
@@ -265,7 +265,7 @@ func (s *SchedulerServer) prepareExecutorInfo(hks hyperkube.Interface) (*mesos.E
 		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(true)})
 		ci.Value = proto.String(fmt.Sprintf("./%s", executorCmd))
 	} else if !hks.FindServer(KM_EXECUTOR) {
-		return nil, nil, fmt.Errorf("either run this scheduler via km or else --executor_path is required")
+		return nil, uid.UID{}, fmt.Errorf("either run this scheduler via km or else --executor_path is required")
 	} else {
 		if strings.Index(s.KMPath, "://") > 0 {
 			// URI could point directly to executable, e.g. hdfs:///km
@@ -290,9 +290,9 @@ func (s *SchedulerServer) prepareExecutorInfo(hks hyperkube.Interface) (*mesos.E
 		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(true)})
 		ci.Arguments = append(ci.Arguments, fmt.Sprintf("--proxy_exec=./%s", proxyCmd))
 	} else if !hks.FindServer(KM_PROXY) {
-		return nil, nil, fmt.Errorf("either run this scheduler via km or else --proxy_path is required")
+		return nil, uid.UID{}, fmt.Errorf("either run this scheduler via km or else --proxy_path is required")
 	} else if s.ExecutorPath != "" {
-		return nil, nil, fmt.Errorf("proxy can only use km binary if executor does the same")
+		return nil, uid.UID{}, fmt.Errorf("proxy can only use km binary if executor does the same")
 	} // else, executor is smart enough to know when proxy_path is required, or to use km
 
 	//TODO(jdef): provide some way (env var?) for users to customize executor config
@@ -416,7 +416,7 @@ func (s *SchedulerServer) Run(hks hyperkube.Interface, _ []string) error {
 		validation := ha.ValidationFunc(validateLeadershipTransition)
 		srv := ha.NewCandidate(schedulerProcess, driverFactory, validation)
 		path := fmt.Sprintf(meta.DefaultElectionFormat, s.FrameworkName)
-		sid := uid.New(eid.Group(), "").String()
+		sid := uid.Generate(eid.Group()).String()
 		log.Infof("registering for election at %v with id %v", path, sid)
 		go election.Notify(election.NewEtcdMasterElector(etcdClient), path, sid, srv)
 	} else {
@@ -473,14 +473,25 @@ func (s *SchedulerServer) awaitFailover(schedulerProcess schedulerProcessInterfa
 
 func validateLeadershipTransition(desired, current string) {
 	log.Infof("validating leadership transition")
-	d := uid.Parse(desired).Group()
-	c := uid.Parse(current).Group()
-	if d == 0 {
+	desiredUID, err := uid.Parse(desired)
+	if err != nil {
+		log.Fatalf("Failed to parse desired scheduler UID %q: %v", desired, err)
+	}
+
+	desiredGroup := desiredUID.Group()
+	if desiredGroup == 0 {
 		// should *never* happen, but..
 		log.Fatalf("illegal scheduler UID: %q", desired)
 	}
-	if d != c && c != 0 {
-		log.Fatalf("desired scheduler group (%x) != current scheduler group (%x)", d, c)
+
+	currentUID, err := uid.Parse(desired)
+	if err != nil {
+		log.Fatalf("Failed to parse current scheduler UID %q: %v", desired, err)
+	}
+
+	currentGroup := currentUID.Group()
+	if desiredGroup != currentGroup && currentGroup != 0 {
+		log.Fatalf("desired scheduler group (%x) != current scheduler group (%x)", desiredGroup, currentGroup)
 	}
 }
 
@@ -494,7 +505,7 @@ func newEtcd(etcdConfigFile string, etcdServerList util.StringList) (client tool
 	return
 }
 
-func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProcess, ha.DriverFactory, tools.EtcdGetSet, *uid.UID) {
+func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProcess, ha.DriverFactory, tools.EtcdGetSet, uid.UID) {
 
 	s.FrameworkName = strings.TrimSpace(s.FrameworkName)
 	if s.FrameworkName == "" {
@@ -528,9 +539,6 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProce
 	}
 
 	executor, eid, err := s.prepareExecutorInfo(hks)
-	if err != nil {
-		log.Fatalf("misconfigured executor: %v", err)
-	}
 
 	etcdClient, err := newEtcd(s.EtcdConfigFile, s.EtcdServerList)
 	if err != nil {

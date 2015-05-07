@@ -160,39 +160,26 @@ type Config struct {
 
 // New create a new KubernetesScheduler
 func New(config Config) *KubernetesScheduler {
+	executorId := config.Executor.ExecutorId.GetValue()
+	executorUID, err := uid.Parse(executorId)
+	if err != nil {
+		//TODO(karl) push parsing out of the constructor or change this method to not be a constructor (return an error)
+		log.Fatalf("Failed to parse configured executor ID %p: %v", executorId, err)
+	}
+
 	var k *KubernetesScheduler
 	k = &KubernetesScheduler{
 		RWMutex:           new(sync.RWMutex),
 		executor:          config.Executor,
-		executorGroup:     uid.Parse(config.Executor.ExecutorId.GetValue()).Group(),
+		executorGroup:     executorUID.Group(),
 		scheduleFunc:      config.ScheduleFunc,
 		client:            config.Client,
 		etcdClient:        config.EtcdClient,
 		failoverTimeout:   config.FailoverTimeout,
 		reconcileInterval: config.ReconcileInterval,
 		offers: offers.CreateRegistry(offers.RegistryConfig{
-			Compat: func(o *mesos.Offer) bool {
-				// filter the offers: the executor IDs must not identify a kubelet-
-				// executor with a group that doesn't match ours
-				for _, eid := range o.GetExecutorIds() {
-					execuid := uid.Parse(eid.GetValue())
-					if execuid.Name() == execcfg.DefaultInfoID && execuid.Group() != k.executorGroup {
-						return false
-					}
-				}
-				return true
-			},
-			DeclineOffer: func(id string) <-chan error {
-				errOnce := proc.NewErrorOnce(k.terminate)
-				errOuter := k.asRegisteredMaster.Do(func() {
-					var err error
-					defer errOnce.Report(err)
-					offerId := mutil.NewOfferID(id)
-					filters := &mesos.Filters{}
-					_, err = k.driver.DeclineOffer(offerId, filters)
-				})
-				return errOnce.Send(errOuter).Err()
-			},
+			Compat: k.isOfferCompatible,
+			DeclineOffer: k.declineOffer,
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
 			LingerTTL:     defaultOfferLingerTTL * time.Second,
 			TTL:           defaultOfferTTL * time.Second,
@@ -207,6 +194,36 @@ func New(config Config) *KubernetesScheduler {
 		}),
 	}
 	return k
+}
+
+// isCompatible returns true if the specified offer is compatible with the scheduler's executor.
+// Offers are compatible unless name indicates a kubelet-executor but the group doesn't match ours.
+func (k *KubernetesScheduler) isOfferCompatible(o *mesos.Offer) bool {
+	for _, eid := range o.GetExecutorIds() {
+		executorId := eid.GetValue()
+		executorUID, err := uid.Parse(executorId)
+		if err != nil {
+			// offers with invalid executor IDs are assumed to be broken and thus incompatible
+			log.Errorf("Failed to parse offered executor ID %p: %v", executorId, err)
+			return false
+		}
+		if executorUID.Name() == execcfg.DefaultInfoID && executorUID.Group() != k.executorGroup {
+			return false
+		}
+	}
+	return true
+}
+
+func (k *KubernetesScheduler) declineOffer(id string) <-chan error {
+	errOnce := proc.NewErrorOnce(k.terminate)
+	errOuter := k.asRegisteredMaster.Do(func() {
+		var err error
+		defer errOnce.Report(err)
+		offerId := mutil.NewOfferID(id)
+		filters := &mesos.Filters{}
+		_, err = k.driver.DeclineOffer(offerId, filters)
+	})
+	return errOnce.Send(errOuter).Err()
 }
 
 func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterface, mux *http.ServeMux) error {
