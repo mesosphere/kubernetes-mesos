@@ -3,9 +3,9 @@ package podtask
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	"github.com/mesos/mesos-go/mesosutil"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestInMemoryRegistry_RegisterGetUnregister(t *testing.T) {
@@ -93,6 +93,8 @@ func TestInMemoryRegistry_RegisterGetUnregister(t *testing.T) {
 func fakeStatusUpdate(taskId string, state mesos.TaskState) *mesos.TaskStatus {
 	status := mesosutil.NewTaskStatus(mesosutil.NewTaskID(taskId), state)
 	status.Data = []byte("{}") // empty json
+	masterSource := mesos.TaskStatus_SOURCE_MASTER
+	status.Source = &masterSource
 	return status
 }
 
@@ -108,13 +110,99 @@ func TestInMemoryRegistry_State(t *testing.T) {
 	assert.Equal(a.State, a_clone.State)
 
 	// update the status
-	assert.Equal(a_clone.State,StatePending)
+	assert.Equal(a_clone.State, StatePending)
 	a_clone, state := registry.UpdateStatus(fakeStatusUpdate(a.ID, mesos.TaskState_TASK_RUNNING))
-	assert.Equal(state, StatePending) // old state
+	assert.Equal(state, StatePending)         // old state
 	assert.Equal(a_clone.State, StateRunning) // new state
 
 	// update unknown task
 	unknown_clone, state := registry.UpdateStatus(fakeStatusUpdate("unknown-task-id", mesos.TaskState_TASK_RUNNING))
 	assert.Nil(unknown_clone)
 	assert.Equal(state, StateUnknown)
+}
+
+type transition struct {
+	statusUpdate  mesos.TaskState
+	expectedState *StateType
+	expectPanic   bool
+}
+
+func NewTransition(statusUpdate mesos.TaskState, expectedState StateType) transition {
+	return transition{statusUpdate: statusUpdate, expectedState: &expectedState, expectPanic: false}
+}
+
+func NewTransitionToDeletedTask(statusUpdate mesos.TaskState) transition {
+	return transition{statusUpdate: statusUpdate, expectedState: nil, expectPanic: false}
+}
+
+func NewTransitionWhichPanics(statusUpdate mesos.TaskState) transition {
+	return transition{statusUpdate: statusUpdate, expectPanic: true}
+}
+
+func testStateTrace(t *testing.T, transitions []transition) *Registry {
+	assert := assert.New(t)
+
+	registry := NewInMemoryRegistry()
+	a, _ := fakePodTask("a")
+	a, _ = registry.Register(a, nil)
+
+	// initial pending state
+	assert.Equal(a.State, StatePending)
+
+	for _, transition := range transitions {
+		if transition.expectPanic {
+			assert.Panics(func() {
+				registry.UpdateStatus(fakeStatusUpdate(a.ID, transition.statusUpdate))
+			})
+		} else {
+			a, _ = registry.UpdateStatus(fakeStatusUpdate(a.ID, transition.statusUpdate))
+			if transition.expectedState == nil {
+				a, _ = registry.Get(a.ID)
+				assert.Nil(a, "expected task to be deleted from registry after status update to %v", transition.statusUpdate)
+			} else {
+				assert.Equal(a.State, *transition.expectedState)
+			}
+		}
+	}
+
+	return &registry
+}
+
+func TestInMemoryRegistry_TaskLifeCycle(t *testing.T) {
+	testStateTrace(t, []transition{
+		NewTransition(mesos.TaskState_TASK_STAGING, StatePending),
+		NewTransition(mesos.TaskState_TASK_STARTING, StatePending),
+		NewTransitionWhichPanics(mesos.TaskState_TASK_FINISHED),
+		NewTransition(mesos.TaskState_TASK_RUNNING, StateRunning),
+		NewTransition(mesos.TaskState_TASK_RUNNING, StateRunning),
+		NewTransition(mesos.TaskState_TASK_STARTING, StateRunning),
+		NewTransition(mesos.TaskState_TASK_FINISHED, StateFinished),
+		NewTransition(mesos.TaskState_TASK_FINISHED, StateFinished),
+		NewTransition(mesos.TaskState_TASK_RUNNING, StateFinished),
+	})
+}
+
+func TestInMemoryRegistry_NotFinished(t *testing.T) {
+	// all these behave the same
+	notFinishedStates := []mesos.TaskState{
+		mesos.TaskState_TASK_FAILED,
+		mesos.TaskState_TASK_KILLED,
+		mesos.TaskState_TASK_LOST,
+	}
+	for _, notFinishedState := range notFinishedStates {
+		testStateTrace(t, []transition{
+			NewTransitionToDeletedTask(notFinishedState),
+		})
+
+		testStateTrace(t, []transition{
+			NewTransition(mesos.TaskState_TASK_RUNNING, StateRunning),
+			NewTransitionToDeletedTask(notFinishedState),
+		})
+
+		testStateTrace(t, []transition{
+			NewTransition(mesos.TaskState_TASK_RUNNING, StateRunning),
+			NewTransition(mesos.TaskState_TASK_FINISHED, StateFinished),
+			NewTransition(notFinishedState, StateFinished),
+		})
+	}
 }
