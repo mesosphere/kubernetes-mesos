@@ -8,14 +8,14 @@ import (
 )
 
 const (
-	DefaultOfferTTL                           = 5 * time.Second    // duration an offer is viable, prior to being expired
-	DefaultOfferLingerTTL                     = 120  * time.Second // duration an expired offer lingers in history
-	DefaultListenerDelay                      = 1 * time.Second    // duration between offer listener notifications
-	DefaultUpdatesBacklog                     = 2048               // size of the pod updates channel
-	DefaultFrameworkIdRefreshInterval         = 30 * time.Second   // interval we update the frameworkId stored in etcd
-	DefaultInitialImplicitReconciliationDelay = 15 * time.Second   // wait this amount of time after initial registration before attempting implicit reconciliation
-	DefaultExplicitReconciliationMaxBackoff   = 2 * time.Minute    // interval in between internal task status checks/updates
-	DefaultExplicitReconciliationAbortTimeout = 30 * time.Second   // waiting period after attempting to cancel an ongoing reconciliation
+	DefaultOfferTTL                           = 5 * time.Second   // duration an offer is viable, prior to being expired
+	DefaultOfferLingerTTL                     = 120 * time.Second // duration an expired offer lingers in history
+	DefaultListenerDelay                      = 1 * time.Second   // duration between offer listener notifications
+	DefaultUpdatesBacklog                     = 2048              // size of the pod updates channel
+	DefaultFrameworkIdRefreshInterval         = 30 * time.Second  // interval we update the frameworkId stored in etcd
+	DefaultInitialImplicitReconciliationDelay = 15 * time.Second  // wait this amount of time after initial registration before attempting implicit reconciliation
+	DefaultExplicitReconciliationMaxBackoff   = 2 * time.Minute   // interval in between internal task status checks/updates
+	DefaultExplicitReconciliationAbortTimeout = 30 * time.Second  // waiting period after attempting to cancel an ongoing reconciliation
 	DefaultInitialPodBackoff                  = 1 * time.Second
 	DefaultMaxPodBackoff                      = 60 * time.Second
 	DefaultHttpHandlerTimeout                 = 10 * time.Second

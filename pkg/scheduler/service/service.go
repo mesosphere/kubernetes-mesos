@@ -422,7 +422,7 @@ func (s *SchedulerServer) Run(hks hyperkube.Interface, _ []string) error {
 	go runtime.Until(func() {
 		log.V(1).Info("Starting HTTP interface")
 		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), s.mux))
-	},  sc.HttpBindInterval.Duration, schedulerProcess.Terminal())
+	}, sc.HttpBindInterval.Duration, schedulerProcess.Terminal())
 
 	if s.HA {
 		validation := ha.ValidationFunc(validateLeadershipTransition)

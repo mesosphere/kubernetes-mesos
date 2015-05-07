@@ -11,18 +11,18 @@ import (
 func is_default(c *Config, t *testing.T) {
 	assert := assert.New(t)
 
-	assert.Equal(DefaultOfferTTL,                           c.OfferTTL.Duration)
-	assert.Equal(DefaultOfferLingerTTL,                     c.OfferLingerTTL.Duration)
-	assert.Equal(DefaultListenerDelay,                      c.ListenerDelay.Duration)
-	assert.Equal(DefaultUpdatesBacklog,                     c.UpdatesBacklog)
-	assert.Equal(DefaultFrameworkIdRefreshInterval,         c.FrameworkIdRefreshInterval.Duration)
+	assert.Equal(DefaultOfferTTL, c.OfferTTL.Duration)
+	assert.Equal(DefaultOfferLingerTTL, c.OfferLingerTTL.Duration)
+	assert.Equal(DefaultListenerDelay, c.ListenerDelay.Duration)
+	assert.Equal(DefaultUpdatesBacklog, c.UpdatesBacklog)
+	assert.Equal(DefaultFrameworkIdRefreshInterval, c.FrameworkIdRefreshInterval.Duration)
 	assert.Equal(DefaultInitialImplicitReconciliationDelay, c.InitialImplicitReconciliationDelay.Duration)
-	assert.Equal(DefaultExplicitReconciliationMaxBackoff,   c.ExplicitReconciliationMaxBackoff.Duration)
+	assert.Equal(DefaultExplicitReconciliationMaxBackoff, c.ExplicitReconciliationMaxBackoff.Duration)
 	assert.Equal(DefaultExplicitReconciliationAbortTimeout, c.ExplicitReconciliationAbortTimeout.Duration)
-	assert.Equal(DefaultInitialPodBackoff,                  c.InitialPodBackoff.Duration)
-	assert.Equal(DefaultMaxPodBackoff,                      c.MaxPodBackoff.Duration)
-	assert.Equal(DefaultHttpHandlerTimeout,                 c.HttpHandlerTimeout.Duration)
-	assert.Equal(DefaultHttpBindInterval,                   c.HttpBindInterval.Duration)
+	assert.Equal(DefaultInitialPodBackoff, c.InitialPodBackoff.Duration)
+	assert.Equal(DefaultMaxPodBackoff, c.MaxPodBackoff.Duration)
+	assert.Equal(DefaultHttpHandlerTimeout, c.HttpHandlerTimeout.Duration)
+	assert.Equal(DefaultHttpBindInterval, c.HttpBindInterval.Duration)
 }
 
 // Check that SetDefaults sets the default values
@@ -63,18 +63,18 @@ func TestConfig_Read(t *testing.T) {
 		t.Fatal("Cannot parse scheduler config: " + err.Error())
 	}
 
-	assert.Equal(42 * time.Second, c.OfferTTL.Duration)
-	assert.Equal(42 * time.Second, c.OfferLingerTTL.Duration)
-	assert.Equal(42 * time.Second, c.ListenerDelay.Duration)
-	assert.Equal(42,               c.UpdatesBacklog)
-	assert.Equal(42 * time.Second, c.FrameworkIdRefreshInterval.Duration)
-	assert.Equal(42 * time.Second, c.InitialImplicitReconciliationDelay.Duration)
-	assert.Equal(42 * time.Second, c.ExplicitReconciliationMaxBackoff.Duration)
-	assert.Equal(42 * time.Second, c.ExplicitReconciliationAbortTimeout.Duration)
-	assert.Equal(42 * time.Second, c.InitialPodBackoff.Duration)
-	assert.Equal(42 * time.Second, c.MaxPodBackoff.Duration)
-	assert.Equal(42 * time.Second, c.HttpHandlerTimeout.Duration)
-	assert.Equal(42 * time.Second, c.HttpBindInterval.Duration)
+	assert.Equal(42*time.Second, c.OfferTTL.Duration)
+	assert.Equal(42*time.Second, c.OfferLingerTTL.Duration)
+	assert.Equal(42*time.Second, c.ListenerDelay.Duration)
+	assert.Equal(42, c.UpdatesBacklog)
+	assert.Equal(42*time.Second, c.FrameworkIdRefreshInterval.Duration)
+	assert.Equal(42*time.Second, c.InitialImplicitReconciliationDelay.Duration)
+	assert.Equal(42*time.Second, c.ExplicitReconciliationMaxBackoff.Duration)
+	assert.Equal(42*time.Second, c.ExplicitReconciliationAbortTimeout.Duration)
+	assert.Equal(42*time.Second, c.InitialPodBackoff.Duration)
+	assert.Equal(42*time.Second, c.MaxPodBackoff.Duration)
+	assert.Equal(42*time.Second, c.HttpHandlerTimeout.Duration)
+	assert.Equal(42*time.Second, c.HttpBindInterval.Duration)
 }
 
 // check that an invalid config is rejected and non of the values to overwritten
@@ -92,5 +92,5 @@ func TestConfig_ReadError(t *testing.T) {
 		t.Fatal("Invalid scheduler config should lead to an error")
 	}
 
-	assert.NotEqual(42 * time.Second, c.OfferTTL.Duration)
+	assert.NotEqual(42*time.Second, c.OfferTTL.Duration)
 }

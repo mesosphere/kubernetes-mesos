@@ -730,23 +730,23 @@ type ReconcilerAction func(driver bindings.SchedulerDriver, cancel <-chan struct
 
 type Reconciler struct {
 	proc.Doer
-	Action   ReconcilerAction
-	explicit chan struct{}   // send an empty struct to trigger explicit reconciliation
-	implicit chan struct{}   // send an empty struct to trigger implicit reconciliation
-	done     <-chan struct{} // close this when you want the reconciler to exit
-	cooldown time.Duration
+	Action                             ReconcilerAction
+	explicit                           chan struct{}   // send an empty struct to trigger explicit reconciliation
+	implicit                           chan struct{}   // send an empty struct to trigger implicit reconciliation
+	done                               <-chan struct{} // close this when you want the reconciler to exit
+	cooldown                           time.Duration
 	explicitReconciliationAbortTimeout time.Duration
 }
 
 func newReconciler(doer proc.Doer, action ReconcilerAction,
-		cooldown,explicitReconciliationAbortTimeout time.Duration, done <-chan struct{}) *Reconciler {
+	cooldown, explicitReconciliationAbortTimeout time.Duration, done <-chan struct{}) *Reconciler {
 	return &Reconciler{
 		Doer:     doer,
 		explicit: make(chan struct{}, 1),
 		implicit: make(chan struct{}, 1),
 		cooldown: cooldown,
 		explicitReconciliationAbortTimeout: explicitReconciliationAbortTimeout,
-		done:     done,
+		done: done,
 		Action: func(driver bindings.SchedulerDriver, cancel <-chan struct{}) <-chan error {
 			// trigged the reconciler action in the doer's execution context,
 			// but it could take a while and the scheduler needs to be able to

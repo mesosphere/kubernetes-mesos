@@ -7,8 +7,8 @@ import (
 	util "github.com/mesos/mesos-go/mesosutil"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 	"github.com/mesosphere/kubernetes-mesos/pkg/proc"
-	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	schedcfg "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"github.com/stretchr/testify/assert"
 )
 
