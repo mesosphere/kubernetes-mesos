@@ -47,7 +47,6 @@ import (
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	mutil "github.com/mesos/mesos-go/mesosutil"
 	bindings "github.com/mesos/mesos-go/scheduler"
-	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/election"
 	execcfg "github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/hyperkube"
@@ -65,6 +64,7 @@ import (
 )
 
 const (
+	defaultMesosMaster       = "localhost:5050"
 	defaultMesosUser         = "root" // should have privs to execute docker and iptables commands
 	defaultReconcileInterval = 300    // 5m default task reconciliation interval
 	defaultReconcileCooldown = 15 * time.Second
@@ -82,6 +82,7 @@ type SchedulerServer struct {
 	AllowPrivileged               bool
 	ExecutorPath                  string
 	ProxyPath                     string
+	MesosMaster                   string
 	MesosUser                     string
 	MesosRole                     string
 	MesosAuthPrincipal            string
@@ -138,6 +139,7 @@ func NewSchedulerServer() *SchedulerServer {
 		ExecutorRunProxy:       true,
 		ExecutorSuicideTimeout: execcfg.DefaultSuicideTimeout,
 		MesosAuthProvider:      sasl.ProviderName,
+		MesosMaster:            defaultMesosMaster,
 		MesosUser:              defaultMesosUser,
 		ReconcileInterval:      defaultReconcileInterval,
 		ReconcileCooldown:      defaultReconcileCooldown,
@@ -174,8 +176,9 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.EtcdConfigFile, "etcd_config", s.EtcdConfigFile, "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
 	fs.BoolVar(&s.AllowPrivileged, "allow_privileged", s.AllowPrivileged, "If true, allow privileged containers.")
 	fs.StringVar(&s.ClusterDomain, "cluster_domain", s.ClusterDomain, "Domain for this cluster.  If set, kubelet will configure all containers to search this domain in addition to the host's search domains")
-	fs.Var(&s.ClusterDNS, "cluster_dns", "IP address for a cluster DNS server.  If set, kubelet will configure all containers to use this for DNS resolution in addition to the host's DNS servers")
+	fs.Var(&s.ClusterDNS, "cluster_dns", "IP address for a cluster DNS server. If set, kubelet will configure all containers to use this for DNS resolution in addition to the host's DNS servers")
 
+	fs.StringVar(&s.MesosMaster, "mesos_master", s.MesosMaster, "Location of the Mesos master. The format is a comma-delimited list of of hosts like zk://host1:port,host2:port/mesos. If using ZooKeeper, pay particular attention to the leading zk:// and trailing /mesos! If not using ZooKeeper, standard URLs like http://localhost are also acceptable.")
 	fs.StringVar(&s.MesosUser, "mesos_user", s.MesosUser, "Mesos user for this framework, defaults to root.")
 	fs.StringVar(&s.MesosRole, "mesos_role", s.MesosRole, "Mesos role for this framework, defaults to none.")
 	fs.StringVar(&s.MesosAuthPrincipal, "mesos_authentication_principal", s.MesosAuthPrincipal, "Mesos authentication principal.")
@@ -567,7 +570,7 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface, sc *schedcfg.Config
 		ReconcileCooldown: s.ReconcileCooldown,
 	})
 
-	masterUri := kmcloud.MasterURI()
+	masterUri := s.MesosMaster
 	info, cred, err := s.buildFrameworkInfo()
 	if err != nil {
 		log.Fatalf("Misconfigured mesos framework: %v", err)

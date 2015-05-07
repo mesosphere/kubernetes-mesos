@@ -85,34 +85,50 @@ If you are running an older version of etcd you may want to consider an upgrade.
 #### kubernetes-mesos
 
 Ensure that your Mesos cluster is started.
-If you're running a standalone Mesos master on `${servicehost}` then set:
+
+Create a configuration file for the Mesos cloud provider:
+
 ```shell
-$ export mesos_master=${servicehost}:5050
+$ edit ./mesos-cloud.conf
 ```
 
-Or if you have multiple Mesos masters registered with a Zookeeper cluster then set:
-```shell
-$ export mesos_master=zk://${zkserver1}:2181,${zkserver2}:2181,${zkserver3}:2181/mesos
+The file content should have the following format:
+
+```ini
+[mesos-cloud]
+	mesos-master        = host:port
+	http-client-timeout = 5s
+	state-cache-ttl     = 20s
 ```
+
+**Mesos Cloud Provider Configuration Options:**
+
+- `mesos-master`: Location of the Mesos master.  This value can take the
+  form `host:port` or a canonical Zookeeper URL
+(`zk://host1:port1,host2:port2/your/znode/path`)
+- `http-client-timeout`: Time to wait for a response from the Mesos
+  master when querying the state.
+- `state-cache-ttl`: Maximum age of the cached Mesos state, after which
+  new values will be fetched.
 
 Fire up the kubernetes-mesos framework components (yes, these are **all** required for a working framework):
 
 ```shell
 $ ./bin/km apiserver \
   --address=${servicehost} \
-  --mesos_master=${mesos_master} \
   --etcd_servers=http://${servicehost}:4001 \
   --portal_net=10.10.10.0/24 \
   --port=8888 \
   --cloud_provider=mesos
+  --cloud_config=./mesos-cloud.conf
 
 $ ./bin/km controller-manager \
   --master=$servicehost:8888 \
-  --mesos_master=${mesos_master}
+  --cloud_config=./mesos-cloud.conf
 
 $ ./bin/km scheduler \
+  --mesos_master=${mesos_masster} \
   --address=${servicehost} \
-  --mesos_master=${mesos_master} \
   --etcd_servers=http://${servicehost}:4001 \
   --mesos_user=root \
   --api_servers=$servicehost:8888
