@@ -413,7 +413,11 @@ func (s *SchedulerServer) Run(hks hyperkube.Interface, _ []string) error {
 	}, defaultHttpBindInterval, schedulerProcess.Terminal())
 
 	if s.HA {
-		validation := ha.ValidationFunc(validateLeadershipTransition)
+		validation := func(desired, current string) {
+			if err := validateLeadershipTransition(desired, current); err != nil {
+				log.Fatalln(err.Error())
+			}
+		}
 		srv := ha.NewCandidate(schedulerProcess, driverFactory, validation)
 		path := fmt.Sprintf(meta.DefaultElectionFormat, s.FrameworkName)
 		sid := uid.Generate(eid.Group()).String()
@@ -471,28 +475,36 @@ func (s *SchedulerServer) awaitFailover(schedulerProcess schedulerProcessInterfa
 	return <-errCh
 }
 
-func validateLeadershipTransition(desired, current string) {
+// validateLeadershipTransition logs and panics if the leadership transition fails.
+// Ideally an external process monitor will re-start the process.
+func validateLeadershipTransition(desired, current string) error {
 	log.Infof("validating leadership transition")
 	desiredUID, err := uid.Parse(desired)
 	if err != nil {
-		log.Fatalf("Failed to parse desired scheduler UID %q: %v", desired, err)
+		return fmt.Errorf("Failed to parse desired scheduler UID %q: %v", desired, err)
 	}
 
 	desiredGroup := desiredUID.Group()
 	if desiredGroup == 0 {
 		// should *never* happen, but..
-		log.Fatalf("illegal scheduler UID: %q", desired)
+		return fmt.Errorf("Illegal scheduler UID: %q", desired)
 	}
 
-	currentUID, err := uid.Parse(desired)
+	if current == "" {
+		return nil
+	}
+
+	currentUID, err := uid.Parse(current)
 	if err != nil {
-		log.Fatalf("Failed to parse current scheduler UID %q: %v", desired, err)
+		return fmt.Errorf("Failed to parse current scheduler UID %q: %v", desired, err)
 	}
 
 	currentGroup := currentUID.Group()
 	if desiredGroup != currentGroup && currentGroup != 0 {
-		log.Fatalf("desired scheduler group (%x) != current scheduler group (%x)", desiredGroup, currentGroup)
+		return fmt.Errorf("desired scheduler group (%x) != current scheduler group (%x)", desiredGroup, currentGroup)
 	}
+
+	return nil
 }
 
 // hacked from https://github.com/GoogleCloudPlatform/kubernetes/blob/release-0.14/cmd/kube-apiserver/app/server.go
