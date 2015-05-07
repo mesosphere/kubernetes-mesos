@@ -5,7 +5,10 @@ import (
 
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	"github.com/mesos/mesos-go/mesosutil"
+	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
+	"github.com/mesosphere/kubernetes-mesos/pkg/proc"
 	"github.com/stretchr/testify/assert"
+	"time"
 )
 
 func TestInMemoryRegistry_RegisterGetUnregister(t *testing.T) {
@@ -119,6 +122,99 @@ func TestInMemoryRegistry_State(t *testing.T) {
 	unknown_clone, state := registry.UpdateStatus(fakeStatusUpdate("unknown-task-id", mesos.TaskState_TASK_RUNNING))
 	assert.Nil(unknown_clone)
 	assert.Equal(state, StateUnknown)
+}
+
+func TestInMemoryRegistry_Update(t *testing.T) {
+	assert := assert.New(t)
+
+	// create offers registry
+	ttl := time.Second / 4
+	config := offers.RegistryConfig{
+		DeclineOffer: func(offerId string) <-chan error {
+			return proc.ErrorChan(nil)
+		},
+		Compat: func(o *mesos.Offer) bool {
+			return true
+		},
+		TTL:       ttl,
+		LingerTTL: 2 * ttl,
+	}
+	storage := offers.CreateRegistry(config)
+
+	// Add offer
+	offerId := mesosutil.NewOfferID("foo")
+	mesosOffer := &mesos.Offer{Id: offerId}
+	storage.Add([]*mesos.Offer{mesosOffer})
+	offer, ok := storage.Get(offerId.GetValue())
+	assert.True(ok)
+
+	// create registry
+	registry := NewInMemoryRegistry()
+	a, _ := fakePodTask("a")
+	registry.Register(a.Clone(), nil) // here clone a because we change it below
+
+	// state changes are ignored
+	a.State = StateRunning
+	err := registry.Update(a)
+	assert.NoError(err)
+	a_clone, _ := registry.Get(a.ID)
+	assert.Equal(StatePending, a_clone.State)
+
+	// offer is updated while pending
+	a.Offer = offer
+	err = registry.Update(a)
+	assert.NoError(err)
+	a_clone, _ = registry.Get(a.ID)
+	assert.Equal(offer.Id(), a_clone.Offer.Id())
+
+	// spec is updated while pending
+	a.Spec = Spec{SlaveID: "slave-1"}
+	err = registry.Update(a)
+	assert.NoError(err)
+	a_clone, _ = registry.Get(a.ID)
+	assert.Equal("slave-1", a_clone.Spec.SlaveID)
+
+	// flags are updated while pending
+	a.Flags[FlagType("launched")] = struct{}{}
+	err = registry.Update(a)
+	assert.NoError(err)
+	a_clone, _ = registry.Get(a.ID)
+
+	_, found_launched := a_clone.Flags[FlagType("launched")]
+	assert.True(found_launched)
+
+	// flags are updated while running
+	registry.UpdateStatus(fakeStatusUpdate(a.ID, mesos.TaskState_TASK_RUNNING))
+	a.Flags[FlagType("bound")] = struct{}{}
+	err = registry.Update(a)
+	assert.NoError(err)
+	a_clone, _ = registry.Get(a.ID)
+
+	_, found_launched = a_clone.Flags[FlagType("launched")]
+	assert.True(found_launched)
+	_, found_bound := a_clone.Flags[FlagType("bound")]
+	assert.True(found_bound)
+
+	// spec is ignored while running
+	a.Spec = Spec{SlaveID: "slave-2"}
+	err = registry.Update(a)
+	assert.NoError(err)
+	a_clone, _ = registry.Get(a.ID)
+	assert.Equal("slave-1", a_clone.Spec.SlaveID)
+
+	// error when finished
+	registry.UpdateStatus(fakeStatusUpdate(a.ID, mesos.TaskState_TASK_FINISHED))
+	err = registry.Update(a)
+	assert.Error(err)
+
+	// update unknown task
+	unknown_task, _ := fakePodTask("unknown-task")
+	err = registry.Update(unknown_task)
+	assert.Error(err)
+
+	// update nil task
+	err = registry.Update(nil)
+	assert.Nil(err)
 }
 
 type transition struct {
