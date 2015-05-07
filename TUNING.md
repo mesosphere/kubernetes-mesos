@@ -1,7 +1,7 @@
 # Tuning
 
 There are more settings which can be customized to adapt k8sm's behaviour to you environment. Be warned though that some them are pretty low-level and one has to know the inner workings of k8sm to find sensible values. Moreover, these
-setting may change or even disappear from version to version without further notice.
+settings may change or even disappear from version to version without further notice.
 
 ## Scheduler Configuration
 
