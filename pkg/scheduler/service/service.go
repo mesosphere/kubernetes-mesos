@@ -17,6 +17,7 @@ limitations under the License.
 package service
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -67,7 +68,7 @@ const (
 	defaultMesosUser         = "root" // should have privs to execute docker and iptables commands
 	defaultReconcileInterval = 300    // 5m default task reconciliation interval
 	defaultReconcileCooldown = 15 * time.Second
-	defaultHttpBindInterval  = 5 * time.Second
+	defaultFrameworkName     = "Kubernetes"
 )
 
 type SchedulerServer struct {
@@ -97,6 +98,7 @@ type SchedulerServer struct {
 	HostnameOverride              string
 	ReconcileInterval             int64
 	ReconcileCooldown             time.Duration
+	SchedulerConfigFileName       string
 	Graceful                      bool
 	FrameworkName                 string
 	FrameworkWebURI               string
@@ -140,7 +142,7 @@ func NewSchedulerServer() *SchedulerServer {
 		ReconcileInterval:      defaultReconcileInterval,
 		ReconcileCooldown:      defaultReconcileCooldown,
 		Checkpoint:             true,
-		FrameworkName:          schedcfg.DefaultInfoName,
+		FrameworkName:          defaultFrameworkName,
 		HA:                     false,
 		// TODO(jdef) hard dependency on schedcfg.DefaultInfoName, also assumes
 		// that mesos-dns has a k8s plugin that registers services there.
@@ -185,6 +187,7 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.HostnameOverride, "hostname_override", s.HostnameOverride, "If non-empty, will use this string as identification instead of the actual hostname.")
 	fs.Int64Var(&s.ReconcileInterval, "reconcile_interval", s.ReconcileInterval, "Interval at which to execute task reconciliation, in sec. Zero disables.")
 	fs.DurationVar(&s.ReconcileCooldown, "reconcile_cooldown", s.ReconcileCooldown, "Minimum rest period between task reconciliation operations.")
+	fs.StringVar(&s.SchedulerConfigFileName, "scheduler_config", s.SchedulerConfigFileName, "An ini-style configuration file with low-level scheduler settings.")
 	fs.BoolVar(&s.Graceful, "graceful", s.Graceful, "Indicator of a graceful failover, intended for internal use only.")
 	fs.BoolVar(&s.HA, "ha", s.HA, "Run the scheduler in high availability mode with leader election. All peers should be configured exactly the same.")
 	fs.StringVar(&s.FrameworkName, "framework_name", s.FrameworkName, "The framework name to register with Mesos.")
@@ -403,8 +406,21 @@ func (s *SchedulerServer) getDriver() (driver bindings.SchedulerDriver) {
 }
 
 func (s *SchedulerServer) Run(hks hyperkube.Interface, _ []string) error {
+	// get scheduler low-level config
+	sc := schedcfg.CreateDefaultConfig()
+	if s.SchedulerConfigFileName != "" {
+		f, err := os.Open(s.SchedulerConfigFileName)
+		if err != nil {
+			log.Fatalf("Cannot open scheduler config file: %v", err)
+		}
 
-	schedulerProcess, driverFactory, etcdClient, eid := s.bootstrap(hks)
+		err = sc.Read(bufio.NewReader(f))
+		if err != nil {
+			log.Fatalf("Invalid scheduler config file: %v", err)
+		}
+	}
+
+	schedulerProcess, driverFactory, etcdClient, eid := s.bootstrap(hks, sc)
 
 	if s.EnableProfiling {
 		profile.InstallHandler(s.mux)
@@ -412,7 +428,7 @@ func (s *SchedulerServer) Run(hks hyperkube.Interface, _ []string) error {
 	go runtime.Until(func() {
 		log.V(1).Info("Starting HTTP interface")
 		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), s.mux))
-	}, defaultHttpBindInterval, schedulerProcess.Terminal())
+	}, sc.HttpBindInterval.Duration, schedulerProcess.Terminal())
 
 	if s.HA {
 		validation := ha.ValidationFunc(validateLeadershipTransition)
@@ -496,7 +512,7 @@ func newEtcd(etcdConfigFile string, etcdServerList util.StringList) (client tool
 	return
 }
 
-func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProcess, ha.DriverFactory, tools.EtcdGetSet, *uid.UID) {
+func (s *SchedulerServer) bootstrap(hks hyperkube.Interface, sc *schedcfg.Config) (*ha.SchedulerProcess, ha.DriverFactory, tools.EtcdGetSet, *uid.UID) {
 
 	s.FrameworkName = strings.TrimSpace(s.FrameworkName)
 	if s.FrameworkName == "" {
@@ -541,6 +557,7 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProce
 	}
 
 	mesosPodScheduler := scheduler.New(scheduler.Config{
+		Schedcfg:          *sc,
 		Executor:          executor,
 		ScheduleFunc:      scheduler.FCFSScheduleFunc,
 		Client:            client,
