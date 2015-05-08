@@ -72,7 +72,7 @@ func (k *k8smScheduler) tasks() podtask.Registry {
 }
 
 func (k *k8smScheduler) createPodTask(ctx api.Context, pod *api.Pod) (*podtask.T, error) {
-	return podtask.New(ctx, "", *pod, k.internal.executor.ToProto())
+	return podtask.New(ctx, "", *pod, k.internal.executor.Proto())
 }
 
 func (k *k8smScheduler) slaveFor(id string) (slave *Slave, ok bool) {

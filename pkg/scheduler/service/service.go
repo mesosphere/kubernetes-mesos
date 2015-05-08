@@ -565,7 +565,7 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface, sc *schedcfg.Config
 		log.Fatalf("misconfigured etcd: %v", err)
 	}
 
-	executor := scheduler.NewExecutorClient(executorCmd)
+	executor := scheduler.NewExecutorRef(executorCmd)
 
 	etcdClient, err := newEtcd(s.EtcdConfigFile, s.EtcdServerList)
 	if err != nil {

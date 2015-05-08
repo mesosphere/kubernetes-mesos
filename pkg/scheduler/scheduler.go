@@ -103,7 +103,7 @@ type KubernetesScheduler struct {
 	// Config related, write-once
 	
 	schedcfg          *schedcfg.Config
-	executor          *ExecutorClient
+	executor          *ExecutorRef
 	executorGroup     uint64
 	scheduleFunc      PodScheduleFunc
 	client            *client.Client
@@ -137,7 +137,7 @@ type KubernetesScheduler struct {
 
 type Config struct {
 	Schedcfg          schedcfg.Config
-	Executor          *ExecutorClient
+	Executor          *ExecutorRef
 	ScheduleFunc      PodScheduleFunc
 	Client            *client.Client
 	EtcdClient        tools.EtcdGetSet
@@ -265,7 +265,7 @@ func (k *KubernetesScheduler) InstallDebugHandlers(mux *http.ServeMux) {
 		slaves := k.slaves.getSlaveIds()
 		for _, slaveId := range slaves {
 			_, err := k.driver.SendFrameworkMessage(
-				k.executor.ToProto().ExecutorId,
+				k.executor.Proto().ExecutorId,
 				mutil.NewSlaveID(slaveId),
 				messages.Kamikaze)
 			if err != nil {
