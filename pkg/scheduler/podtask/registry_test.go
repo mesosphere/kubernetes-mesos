@@ -175,24 +175,24 @@ func TestInMemoryRegistry_Update(t *testing.T) {
 	assert.Equal("slave-1", a_clone.Spec.SlaveID)
 
 	// flags are updated while pending
-	a.Flags[FlagType("launched")] = struct{}{}
+	a.Flags[Launched] = struct{}{}
 	err = registry.Update(a)
 	assert.NoError(err)
 	a_clone, _ = registry.Get(a.ID)
 
-	_, found_launched := a_clone.Flags[FlagType("launched")]
+	_, found_launched := a_clone.Flags[Launched]
 	assert.True(found_launched)
 
 	// flags are updated while running
 	registry.UpdateStatus(fakeStatusUpdate(a.ID, mesos.TaskState_TASK_RUNNING))
-	a.Flags[FlagType("bound")] = struct{}{}
+	a.Flags[Bound] = struct{}{}
 	err = registry.Update(a)
 	assert.NoError(err)
 	a_clone, _ = registry.Get(a.ID)
 
-	_, found_launched = a_clone.Flags[FlagType("launched")]
+	_, found_launched = a_clone.Flags[Launched]
 	assert.True(found_launched)
-	_, found_bound := a_clone.Flags[FlagType("bound")]
+	_, found_bound := a_clone.Flags[Bound]
 	assert.True(found_bound)
 
 	// spec is ignored while running
