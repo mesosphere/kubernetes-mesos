@@ -138,13 +138,13 @@ func TestDQ_Offer(t *testing.T) {
 
 	added := dq.Offer(&testjob{})
 	if added {
-		t.Fatalf("offered job without deadline added")
+		t.Fatalf("DelayQueue should not add offered job without deadline")
 	}
 
 	deadline := time.Now().Add(delay)
 	added = dq.Offer(&testjob{deadline: &deadline})
 	if !added {
-		t.Fatalf("offered job with deadline not added")
+		t.Fatalf("DelayQueue should add offered job with deadline")
 	}
 
 	before := time.Now()
@@ -366,13 +366,13 @@ func TestDFIFO_Offer(t *testing.T) {
 
 	added := dq.Offer(&testjob{instance: 1}, ReplaceExisting)
 	if added {
-		t.Fatalf("offered job without deadline added")
+		t.Fatalf("DelayFIFO should not add offered job without deadline")
 	}
 
 	deadline := time.Now().Add(delay)
 	added = dq.Offer(&testjob{deadline: &deadline, instance: 2}, ReplaceExisting)
 	if !added {
-		t.Fatalf("offered job with deadline not added")
+		t.Fatalf("DelayFIFO should add offered job with deadline")
 	}
 
 	before := time.Now()
