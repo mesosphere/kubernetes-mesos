@@ -4,6 +4,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -81,10 +83,25 @@ func TestPopEmptyPQ(t *testing.T) {
 type testjob struct {
 	d time.Duration
 	t time.Time
+	deadline *time.Time
+	uid string
+	instance int
 }
 
 func (j *testjob) GetDelay() time.Duration {
 	return j.d
+}
+
+func (j testjob) GetUID() string {
+	return j.uid
+}
+
+func (td *testjob) Deadline() (deadline time.Time, ok bool) {
+	if td.deadline != nil {
+		return *td.deadline, true
+	} else {
+		return time.Now(), false
+	}
 }
 
 func TestDQ_sanity_check(t *testing.T) {
@@ -110,6 +127,37 @@ func TestDQ_sanity_check(t *testing.T) {
 	if item.d != delay {
 		t.Fatalf("d != delay")
 	}
+}
+
+func TestDQ_Offer(t *testing.T) {
+	t.Parallel()
+	assert := assert.New(t)
+
+	dq := NewDelayQueue()
+	delay := time.Second
+
+	added := dq.Offer(&testjob{})
+	if added {
+		t.Fatalf("DelayQueue should not add offered job without deadline")
+	}
+
+	deadline := time.Now().Add(delay)
+	added = dq.Offer(&testjob{deadline: &deadline})
+	if !added {
+		t.Fatalf("DelayQueue should add offered job with deadline")
+	}
+
+	before := time.Now()
+	x := dq.Pop()
+
+	now := time.Now()
+	waitPeriod := now.Sub(before)
+
+	if waitPeriod+tolerance < delay {
+		t.Fatalf("delay too short: %v, expected: %v", waitPeriod, delay)
+	}
+	assert.NotNil(x)
+	assert.Equal(x.(*testjob).deadline, &deadline)
 }
 
 func TestDQ_ordered_add_pop(t *testing.T) {
@@ -262,4 +310,80 @@ func TestDQ_negative_delay(t *testing.T) {
 	if item.d != delay {
 		t.Fatalf("d != delay")
 	}
+}
+
+func TestDFIFO_sanity_check(t *testing.T) {
+	t.Parallel()
+	assert := assert.New(t)
+
+	df := NewDelayFIFO()
+	delay := 2 * time.Second
+	df.Add(&testjob{d: delay, uid: "a", instance: 1}, ReplaceExisting)
+	assert.True(df.ContainedIDs().Has("a"))
+
+	// re-add by ReplaceExisting
+	df.Add(&testjob{d: delay, uid: "a", instance: 2}, ReplaceExisting)
+	assert.True(df.ContainedIDs().Has("a"))
+
+	a, ok := df.Get("a")
+	assert.True(ok)
+	assert.Equal(a.(*testjob).instance, 2)
+
+	// re-add by KeepExisting
+	df.Add(&testjob{d: delay, uid: "a", instance: 3}, KeepExisting)
+	assert.True(df.ContainedIDs().Has("a"))
+
+	a, ok = df.Get("a")
+	assert.True(ok)
+	assert.Equal(a.(*testjob).instance, 2)
+
+	// pop last
+	before := time.Now()
+	x := df.Pop()
+	assert.Equal(a.(*testjob).instance, 2)
+
+	now := time.Now()
+	waitPeriod := now.Sub(before)
+
+	if waitPeriod+tolerance < delay {
+		t.Fatalf("delay too short: %v, expected: %v", waitPeriod, delay)
+	}
+	if x == nil {
+		t.Fatalf("x is nil")
+	}
+	item := x.(*testjob)
+	if item.d != delay {
+		t.Fatalf("d != delay")
+	}
+}
+
+func TestDFIFO_Offer(t *testing.T) {
+	t.Parallel()
+	assert := assert.New(t)
+
+	dq := NewDelayFIFO()
+	delay := time.Second
+
+	added := dq.Offer(&testjob{instance: 1}, ReplaceExisting)
+	if added {
+		t.Fatalf("DelayFIFO should not add offered job without deadline")
+	}
+
+	deadline := time.Now().Add(delay)
+	added = dq.Offer(&testjob{deadline: &deadline, instance: 2}, ReplaceExisting)
+	if !added {
+		t.Fatalf("DelayFIFO should add offered job with deadline")
+	}
+
+	before := time.Now()
+	x := dq.Pop()
+
+	now := time.Now()
+	waitPeriod := now.Sub(before)
+
+	if waitPeriod+tolerance < delay {
+		t.Fatalf("delay too short: %v, expected: %v", waitPeriod, delay)
+	}
+	assert.NotNil(x)
+	assert.Equal(x.(*testjob).instance, 2)
 }
