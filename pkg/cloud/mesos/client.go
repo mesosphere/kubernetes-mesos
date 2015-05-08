@@ -19,8 +19,7 @@ import (
 )
 
 const (
-	mesosHttpClientTimeout = 10 * time.Second //TODO(jdef) configurable via fiag?
-	nodesCacheTTL          = 5 * time.Second  //TODO(jdef) configurable somehow?
+	defaultClusterName = "mesos"
 )
 
 var (
@@ -30,10 +29,10 @@ var (
 type mesosClient struct {
 	masterLock    sync.RWMutex
 	master        string // host:port formatted address
-	client        *http.Client
+	httpClient    *http.Client
 	tr            *http.Transport
 	initialMaster <-chan struct{} // signal chan, closes once an initial, non-nil master is found
-	nodes         *nodesCache
+	state         *stateCache
 }
 
 type slaveNode struct {
@@ -41,44 +40,80 @@ type slaveNode struct {
 	resources *api.NodeResources
 }
 
-type nodesCache struct {
-	sync.Mutex
-	expiresAt time.Time
-	cached    []*slaveNode
-	err       error
-	ttl       time.Duration
-	refill    func(context.Context) ([]*slaveNode, error)
+type mesosState struct {
+	clusterName string
+	nodes       []*slaveNode
 }
 
-// return the cached list of slave nodes. if needed, the cache is refreshed prior to returning the results.
-func (c *nodesCache) get(ctx context.Context) ([]*slaveNode, error) {
+type stateCache struct {
+	sync.Mutex
+	expiresAt time.Time
+	cached    *mesosState
+	err       error
+	ttl       time.Duration
+	refill    func(context.Context) (*mesosState, error)
+}
+
+// Reload the state cache if it has expired.
+func (c *stateCache) reloadCache(ctx context.Context) {
 	now := time.Now()
 	c.Lock()
 	defer c.Unlock()
 	if c.expiresAt.Before(now) {
+		log.V(4).Infof("Reloading cached Mesos state")
 		c.cached, c.err = c.refill(ctx)
 		c.expiresAt = now.Add(c.ttl)
 	} else {
-		log.V(4).Infof("returning cached slave list")
+		log.V(4).Infof("Using cached Mesos state")
 	}
+}
+
+// Returns the cached Mesos state.
+func (c *stateCache) getCachedState(ctx context.Context) (*mesosState, error) {
+	c.reloadCache(ctx)
 	return c.cached, c.err
 }
 
-func newMesosClient(md detector.Master) (*mesosClient, error) {
+// Returns the cached Mesos cluster name.
+func (c *stateCache) getClusterName(ctx context.Context) (string, error) {
+	cached, err := c.getCachedState(ctx)
+	return cached.clusterName, err
+}
+
+// Returns the cached list of slave nodes.
+func (c *stateCache) getNodes(ctx context.Context) ([]*slaveNode, error) {
+	cached, err := c.getCachedState(ctx)
+	return cached.nodes, err
+}
+
+func newMesosClient(
+	md detector.Master,
+	mesosHttpClientTimeout, stateCacheTTL time.Duration) (*mesosClient, error) {
+
 	tr := &http.Transport{}
+	httpClient := &http.Client{
+		Transport: tr,
+		Timeout:   mesosHttpClientTimeout,
+	}
+	return createMesosClient(md, httpClient, tr, stateCacheTTL)
+}
+
+func createMesosClient(
+	md detector.Master,
+	httpClient *http.Client,
+	tr *http.Transport,
+	stateCacheTTL time.Duration) (*mesosClient, error) {
+
 	initialMaster := make(chan struct{})
 	client := &mesosClient{
-		client: &http.Client{
-			Transport: tr,
-			Timeout:   mesosHttpClientTimeout,
-		},
+		httpClient:    httpClient,
 		tr:            tr,
 		initialMaster: initialMaster,
-		nodes: &nodesCache{
-			ttl: nodesCacheTTL,
+		state: &stateCache{
+			ttl: stateCacheTTL,
 		},
 	}
-	client.nodes.refill = client.pollMasterForSlaves
+	client.state.refill = client.pollMasterForState
 	first := true
 	if err := md.Detect(detector.OnMasterChanged(func(info *mesos.MasterInfo) {
 		client.masterLock.Lock()
@@ -88,11 +123,7 @@ func newMesosClient(md detector.Master) (*mesosClient, error) {
 		} else if host := info.GetHostname(); host != "" {
 			client.master = host
 		} else {
-			// unpack IPv4
-			octets := make([]byte, 4, 4)
-			binary.BigEndian.PutUint32(octets, info.GetIp())
-			ipv4 := net.IP(octets)
-			client.master = ipv4.String()
+			client.master = unpackIPv4(info.GetIp())
 		}
 		if len(client.master) > 0 {
 			client.master = fmt.Sprintf("%s:%d", client.master, info.GetPort())
@@ -109,13 +140,26 @@ func newMesosClient(md detector.Master) (*mesosClient, error) {
 	return client, nil
 }
 
-// return a (possibly) cached list of slaves nodes. it's expected the callers will not modify the contents of the returned slice.
+func unpackIPv4(ip uint32) string {
+	octets := make([]byte, 4, 4)
+	binary.BigEndian.PutUint32(octets, ip)
+	ipv4 := net.IP(octets)
+	return ipv4.String()
+}
+
+// Return a (possibly cached) list of slave nodes.
+// Callers must not mutate the contents of the returned slice.
 func (c *mesosClient) listSlaves(ctx context.Context) ([]*slaveNode, error) {
-	return c.nodes.get(ctx)
+	return c.state.getNodes(ctx)
+}
+
+// Return a (possibly cached) cluster name.
+func (c *mesosClient) clusterName(ctx context.Context) (string, error) {
+	return c.state.getClusterName(ctx)
 }
 
 // return an array of slave nodes
-func (c *mesosClient) pollMasterForSlaves(ctx context.Context) ([]*slaveNode, error) {
+func (c *mesosClient) pollMasterForState(ctx context.Context) (*mesosState, error) {
 	// wait for initial master detection
 	select {
 	case <-c.initialMaster: // noop
@@ -139,7 +183,7 @@ func (c *mesosClient) pollMasterForSlaves(ctx context.Context) ([]*slaveNode, er
 	if err != nil {
 		return nil, err
 	}
-	var nodes []*slaveNode
+	var state *mesosState
 	err = c.httpDo(ctx, req, func(res *http.Response, err error) error {
 		if err != nil {
 			return err
@@ -153,22 +197,23 @@ func (c *mesosClient) pollMasterForSlaves(ctx context.Context) ([]*slaveNode, er
 			return err1
 		}
 		log.V(3).Infof("Got mesos state, content length %v", len(blob))
-		nodes, err1 = parseSlaveNodes(blob)
+		state, err1 = parseMesosState(blob)
 		return err1
 	})
-	return nodes, err
+	return state, err
 }
 
-func parseSlaveNodes(blob []byte) ([]*slaveNode, error) {
+func parseMesosState(blob []byte) (*mesosState, error) {
 	type State struct {
-		Slaves []*struct {
+		ClusterName string `json:"cluster"`
+		Slaves      []*struct {
 			Id        string                 `json:"id"`        // ex: 20150106-162714-3815890698-5050-2453-S2
 			Pid       string                 `json:"pid"`       // ex: slave(1)@10.22.211.18:5051
 			Hostname  string                 `json:"hostname"`  // ex: 10.22.211.18, or slave-123.nowhere.com
 			Resources map[string]interface{} `json:"resources"` // ex: {"mem": 123, "ports": "[31000-3200]"}
 		} `json:"slaves"`
 	}
-	state := &State{}
+	state := &State{ClusterName: defaultClusterName}
 	if err := json.Unmarshal(blob, state); err != nil {
 		return nil, err
 	}
@@ -208,7 +253,13 @@ func parseSlaveNodes(blob []byte) ([]*slaveNode, error) {
 		}
 		nodes = append(nodes, node)
 	}
-	return nodes, nil
+
+	result := &mesosState{
+		clusterName: state.ClusterName,
+		nodes:       nodes,
+	}
+
+	return result, nil
 }
 
 type responseHandler func(*http.Response, error) error
@@ -217,7 +268,7 @@ type responseHandler func(*http.Response, error) error
 func (c *mesosClient) httpDo(ctx context.Context, req *http.Request, f responseHandler) error {
 	// Run the HTTP request in a goroutine and pass the response to f.
 	ch := make(chan error, 1)
-	go func() { ch <- f(c.client.Do(req)) }()
+	go func() { ch <- f(c.httpClient.Do(req)) }()
 	select {
 	case <-ctx.Done():
 		c.tr.CancelRequest(req)

@@ -17,6 +17,7 @@ limitations under the License.
 package service
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -46,7 +47,6 @@ import (
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	mutil "github.com/mesos/mesos-go/mesosutil"
 	bindings "github.com/mesos/mesos-go/scheduler"
-	kmcloud "github.com/mesosphere/kubernetes-mesos/pkg/cloud/mesos"
 	"github.com/mesosphere/kubernetes-mesos/pkg/election"
 	execcfg "github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/hyperkube"
@@ -64,10 +64,11 @@ import (
 )
 
 const (
+	defaultMesosMaster       = "localhost:5050"
 	defaultMesosUser         = "root" // should have privs to execute docker and iptables commands
 	defaultReconcileInterval = 300    // 5m default task reconciliation interval
 	defaultReconcileCooldown = 15 * time.Second
-	defaultHttpBindInterval  = 5 * time.Second
+	defaultFrameworkName     = "Kubernetes"
 )
 
 type SchedulerServer struct {
@@ -81,6 +82,7 @@ type SchedulerServer struct {
 	AllowPrivileged               bool
 	ExecutorPath                  string
 	ProxyPath                     string
+	MesosMaster                   string
 	MesosUser                     string
 	MesosRole                     string
 	MesosAuthPrincipal            string
@@ -97,8 +99,10 @@ type SchedulerServer struct {
 	HostnameOverride              string
 	ReconcileInterval             int64
 	ReconcileCooldown             time.Duration
+	SchedulerConfigFileName       string
 	Graceful                      bool
 	FrameworkName                 string
+	FrameworkWebURI               string
 	HA                            bool
 	AdvertisedAddress             string
 	HADomain                      string
@@ -135,11 +139,12 @@ func NewSchedulerServer() *SchedulerServer {
 		ExecutorRunProxy:       true,
 		ExecutorSuicideTimeout: execcfg.DefaultSuicideTimeout,
 		MesosAuthProvider:      sasl.ProviderName,
+		MesosMaster:            defaultMesosMaster,
 		MesosUser:              defaultMesosUser,
 		ReconcileInterval:      defaultReconcileInterval,
 		ReconcileCooldown:      defaultReconcileCooldown,
 		Checkpoint:             true,
-		FrameworkName:          schedcfg.DefaultInfoName,
+		FrameworkName:          defaultFrameworkName,
 		HA:                     false,
 		// TODO(jdef) hard dependency on schedcfg.DefaultInfoName, also assumes
 		// that mesos-dns has a k8s plugin that registers services there.
@@ -171,8 +176,9 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.EtcdConfigFile, "etcd_config", s.EtcdConfigFile, "The config file for the etcd client. Mutually exclusive with -etcd_servers.")
 	fs.BoolVar(&s.AllowPrivileged, "allow_privileged", s.AllowPrivileged, "If true, allow privileged containers.")
 	fs.StringVar(&s.ClusterDomain, "cluster_domain", s.ClusterDomain, "Domain for this cluster.  If set, kubelet will configure all containers to search this domain in addition to the host's search domains")
-	fs.Var(&s.ClusterDNS, "cluster_dns", "IP address for a cluster DNS server.  If set, kubelet will configure all containers to use this for DNS resolution in addition to the host's DNS servers")
+	fs.Var(&s.ClusterDNS, "cluster_dns", "IP address for a cluster DNS server. If set, kubelet will configure all containers to use this for DNS resolution in addition to the host's DNS servers")
 
+	fs.StringVar(&s.MesosMaster, "mesos_master", s.MesosMaster, "Location of the Mesos master. The format is a comma-delimited list of of hosts like zk://host1:port,host2:port/mesos. If using ZooKeeper, pay particular attention to the leading zk:// and trailing /mesos! If not using ZooKeeper, standard URLs like http://localhost are also acceptable.")
 	fs.StringVar(&s.MesosUser, "mesos_user", s.MesosUser, "Mesos user for this framework, defaults to root.")
 	fs.StringVar(&s.MesosRole, "mesos_role", s.MesosRole, "Mesos role for this framework, defaults to none.")
 	fs.StringVar(&s.MesosAuthPrincipal, "mesos_authentication_principal", s.MesosAuthPrincipal, "Mesos authentication principal.")
@@ -184,9 +190,11 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.HostnameOverride, "hostname_override", s.HostnameOverride, "If non-empty, will use this string as identification instead of the actual hostname.")
 	fs.Int64Var(&s.ReconcileInterval, "reconcile_interval", s.ReconcileInterval, "Interval at which to execute task reconciliation, in sec. Zero disables.")
 	fs.DurationVar(&s.ReconcileCooldown, "reconcile_cooldown", s.ReconcileCooldown, "Minimum rest period between task reconciliation operations.")
+	fs.StringVar(&s.SchedulerConfigFileName, "scheduler_config", s.SchedulerConfigFileName, "An ini-style configuration file with low-level scheduler settings.")
 	fs.BoolVar(&s.Graceful, "graceful", s.Graceful, "Indicator of a graceful failover, intended for internal use only.")
 	fs.BoolVar(&s.HA, "ha", s.HA, "Run the scheduler in high availability mode with leader election. All peers should be configured exactly the same.")
 	fs.StringVar(&s.FrameworkName, "framework_name", s.FrameworkName, "The framework name to register with Mesos.")
+	fs.StringVar(&s.FrameworkWebURI, "framework_weburi", s.FrameworkWebURI, "A URI that points to a web-based interface for interacting with the framework.")
 	fs.StringVar(&s.AdvertisedAddress, "advertised_address", s.AdvertisedAddress, "host:port address that is advertised to clients. May be used to construct artifact download URIs.")
 
 	fs.BoolVar(&s.ExecutorBindall, "executor_bindall", s.ExecutorBindall, "When true will set -address of the executor to 0.0.0.0.")
@@ -389,8 +397,21 @@ func (s *SchedulerServer) getDriver() (driver bindings.SchedulerDriver) {
 }
 
 func (s *SchedulerServer) Run(hks hyperkube.Interface, _ []string) error {
+	// get scheduler low-level config
+	sc := schedcfg.CreateDefaultConfig()
+	if s.SchedulerConfigFileName != "" {
+		f, err := os.Open(s.SchedulerConfigFileName)
+		if err != nil {
+			log.Fatalf("Cannot open scheduler config file: %v", err)
+		}
 
-	schedulerProcess, driverFactory, etcdClient, eid := s.bootstrap(hks)
+		err = sc.Read(bufio.NewReader(f))
+		if err != nil {
+			log.Fatalf("Invalid scheduler config file: %v", err)
+		}
+	}
+
+	schedulerProcess, driverFactory, etcdClient, eid := s.bootstrap(hks, sc)
 
 	if s.EnableProfiling {
 		profile.InstallHandler(s.mux)
@@ -398,7 +419,7 @@ func (s *SchedulerServer) Run(hks hyperkube.Interface, _ []string) error {
 	go runtime.Until(func() {
 		log.V(1).Info("Starting HTTP interface")
 		log.Error(http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), s.mux))
-	}, defaultHttpBindInterval, schedulerProcess.Terminal())
+	}, sc.HttpBindInterval.Duration, schedulerProcess.Terminal())
 
 	if s.HA {
 		validation := func(desired, current string) {
@@ -505,12 +526,13 @@ func newEtcd(etcdConfigFile string, etcdServerList util.StringList) (client tool
 	return
 }
 
-func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProcess, ha.DriverFactory, tools.EtcdGetSet, uid.UID) {
+func (s *SchedulerServer) bootstrap(hks hyperkube.Interface, sc *schedcfg.Config) (*ha.SchedulerProcess, ha.DriverFactory, tools.EtcdGetSet, uid.UID) {
 
 	s.FrameworkName = strings.TrimSpace(s.FrameworkName)
 	if s.FrameworkName == "" {
 		log.Fatalf("framework_name must be a non-empty string")
 	}
+	s.FrameworkWebURI = strings.TrimSpace(s.FrameworkWebURI)
 
 	metrics.Register()
 	runtime.Register()
@@ -551,6 +573,7 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProce
 	}
 
 	mesosPodScheduler := scheduler.New(scheduler.Config{
+		Schedcfg:          *sc,
 		Executor:          executor,
 		ScheduleFunc:      scheduler.FCFSScheduleFunc,
 		Client:            client,
@@ -560,7 +583,7 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface) (*ha.SchedulerProce
 		ReconcileCooldown: s.ReconcileCooldown,
 	})
 
-	masterUri := kmcloud.MasterURI()
+	masterUri := s.MesosMaster
 	info, cred, err := s.buildFrameworkInfo()
 	if err != nil {
 		log.Fatalf("Misconfigured mesos framework: %v", err)
@@ -680,6 +703,9 @@ func (s *SchedulerServer) buildFrameworkInfo() (info *mesos.FrameworkInfo, cred 
 		Name:       proto.String(s.FrameworkName),
 		User:       proto.String(username),
 		Checkpoint: proto.Bool(s.Checkpoint),
+	}
+	if s.FrameworkWebURI != "" {
+		info.WebuiUrl = proto.String(s.FrameworkWebURI)
 	}
 	if s.FailoverTimeout > 0 {
 		info.FailoverTimeout = proto.Float64(s.FailoverTimeout)

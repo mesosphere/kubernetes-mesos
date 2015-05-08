@@ -2,12 +2,12 @@ package scheduler
 
 import (
 	"testing"
-	"time"
 
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	util "github.com/mesos/mesos-go/mesosutil"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 	"github.com/mesosphere/kubernetes-mesos/pkg/proc"
+	schedcfg "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"github.com/stretchr/testify/assert"
 )
@@ -106,9 +106,9 @@ func TestResourceOffer_Add(t *testing.T) {
 				return proc.ErrorChan(nil)
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
-			LingerTTL:     defaultOfferLingerTTL * time.Second,
-			TTL:           defaultOfferTTL * time.Second,
-			ListenerDelay: defaultListenerDelay * time.Second,
+			LingerTTL:     schedcfg.DefaultOfferLingerTTL,
+			TTL:           schedcfg.DefaultOfferTTL,
+			ListenerDelay: schedcfg.DefaultListenerDelay,
 		}),
 		slaves: newSlaveStorage(),
 	}
@@ -149,9 +149,9 @@ func TestResourceOffer_Add_Rescind(t *testing.T) {
 				return proc.ErrorChan(nil)
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
-			LingerTTL:     defaultOfferLingerTTL * time.Second,
-			TTL:           defaultOfferTTL * time.Second,
-			ListenerDelay: defaultListenerDelay * time.Second,
+			LingerTTL:     schedcfg.DefaultOfferLingerTTL,
+			TTL:           schedcfg.DefaultOfferTTL,
+			ListenerDelay: schedcfg.DefaultListenerDelay,
 		}),
 		slaves: newSlaveStorage(),
 	}
@@ -202,9 +202,9 @@ func TestSlave_Lost(t *testing.T) {
 				return true
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
-			LingerTTL:     defaultOfferLingerTTL * time.Second,
-			TTL:           defaultOfferTTL * time.Second,
-			ListenerDelay: defaultListenerDelay * time.Second,
+			LingerTTL:     schedcfg.DefaultOfferLingerTTL,
+			TTL:           schedcfg.DefaultOfferTTL,
+			ListenerDelay: schedcfg.DefaultListenerDelay,
 		}),
 		slaves: newSlaveStorage(),
 	}
@@ -259,9 +259,9 @@ func TestDisconnect(t *testing.T) {
 				return true
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
-			LingerTTL:     defaultOfferLingerTTL * time.Second,
-			TTL:           defaultOfferTTL * time.Second,
-			ListenerDelay: defaultListenerDelay * time.Second,
+			LingerTTL:     schedcfg.DefaultOfferLingerTTL,
+			TTL:           schedcfg.DefaultOfferTTL,
+			ListenerDelay: schedcfg.DefaultListenerDelay,
 		}),
 		slaves: newSlaveStorage(),
 	}
@@ -302,9 +302,9 @@ func TestStatus_Update(t *testing.T) {
 				return true
 			},
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
-			LingerTTL:     defaultOfferLingerTTL * time.Second,
-			TTL:           defaultOfferTTL * time.Second,
-			ListenerDelay: defaultListenerDelay * time.Second,
+			LingerTTL:     schedcfg.DefaultOfferLingerTTL,
+			TTL:           schedcfg.DefaultOfferTTL,
+			ListenerDelay: schedcfg.DefaultListenerDelay,
 		}),
 		slaves:       newSlaveStorage(),
 		driver:       &mockdriver,

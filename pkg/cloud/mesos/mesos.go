@@ -2,9 +2,10 @@ package mesos
 
 import (
 	"errors"
-	"flag"
+	"fmt"
 	"io"
 	"net"
+	"regexp"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
@@ -14,67 +15,106 @@ import (
 )
 
 var (
-	PluginName = "mesos"
+	PluginName    = "mesos"
+	CloudProvider *MesosCloud
 
 	noHostNameSpecified = errors.New("No hostname specified")
-
-	//TODO(jdef) this should handle mesos upid's (perhaps once we move to pure bindings)
-	mesosMaster = flag.String("mesos_master", "localhost:5050", "Location of leading Mesos master. Default localhost:5050.")
 )
 
 func init() {
 	cloudprovider.RegisterCloudProvider(
 		PluginName,
-		func(conf io.Reader) (cloudprovider.Interface, error) {
-			return newMesosCloud()
+		func(configReader io.Reader) (cloudprovider.Interface, error) {
+			provider, err := newMesosCloud(configReader)
+			if err == nil {
+				CloudProvider = provider
+			}
+			return provider, err
 		})
 }
 
 type MesosCloud struct {
 	client *mesosClient
+	config *Config
 }
 
-func MasterURI() string {
-	return *mesosMaster
+func (c *MesosCloud) MasterURI() string {
+	return c.config.MesosMaster
 }
 
-func newMesosCloud() (*MesosCloud, error) {
-	log.V(1).Infof("new mesos cloud, master='%v'", *mesosMaster)
-	if d, err := detector.New(*mesosMaster); err != nil {
+func newMesosCloud(configReader io.Reader) (*MesosCloud, error) {
+	config, err := readConfig(configReader)
+	if err != nil {
+		return nil, err
+	}
+
+	log.V(1).Infof("new mesos cloud, master='%v'", config.MesosMaster)
+	if d, err := detector.New(config.MesosMaster); err != nil {
 		log.V(1).Infof("failed to create master detector: %v", err)
 		return nil, err
-	} else if cl, err := newMesosClient(d); err != nil {
-		log.V(1).Infof("failed to mesos cloud client: %v", err)
+	} else if cl, err := newMesosClient(d,
+		config.MesosHttpClientTimeout.Duration,
+		config.StateCacheTTL.Duration); err != nil {
+		log.V(1).Infof("failed to create mesos cloud client: %v", err)
 		return nil, err
 	} else {
-		return &MesosCloud{client: cl}, nil
+		return &MesosCloud{client: cl, config: config}, nil
 	}
 }
 
 // Mesos natively provides minimal cloud-type resources. More robust cloud
-// support requires a combination of Mesos and cloud-specific knowledge, which
-// will likely never be present in this vanilla implementation.
+// support requires a combination of Mesos and cloud-specific knowledge.
 func (c *MesosCloud) Instances() (cloudprovider.Instances, bool) {
 	return c, true
 }
 
 // Mesos does not provide any type of native load balancing by default,
-// so this implementation always returns (nil,false).
+// so this implementation always returns (nil, false).
 func (c *MesosCloud) TCPLoadBalancer() (cloudprovider.TCPLoadBalancer, bool) {
 	return nil, false
 }
 
 // Mesos does not provide any type of native region or zone awareness,
-// so this implementation always returns (nil,false).
+// so this implementation always returns (nil, false).
 func (c *MesosCloud) Zones() (cloudprovider.Zones, bool) {
 	return nil, false
 }
 
-// Mesos does not provide support for multiple clusters
+// Mesos does not provide support for multiple clusters.
 func (c *MesosCloud) Clusters() (cloudprovider.Clusters, bool) {
-	//TODO(jdef): we could probably implement this and always return a
-	//single cluster- this one.
-	return nil, false
+	return c, true
+}
+
+// List lists the names of the available clusters.
+func (c *MesosCloud) ListClusters() ([]string, error) {
+	// Always returns a single cluster (this one!)
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
+	name, err := c.client.clusterName(ctx)
+	return []string{name}, err
+}
+
+// Master gets back the address (either DNS name or IP address) of the master node for the cluster.
+func (c *MesosCloud) Master(clusterName string) (string, error) {
+	clusters, err := c.ListClusters()
+	if err != nil {
+		return "", err
+	}
+	for _, name := range clusters {
+		if name == clusterName {
+			if c.client.master == "" {
+				return "", errors.New("The currently leading master is unknown.")
+			}
+
+			host, _, err := net.SplitHostPort(c.client.master)
+			if err != nil {
+				return "", err
+			}
+
+			return host, nil
+		}
+	}
+	return "", errors.New(fmt.Sprintf("The supplied cluster '%v' does not exist", clusterName))
 }
 
 // IPAddress returns an IP address of the specified instance.
@@ -120,9 +160,15 @@ func (c *MesosCloud) List(filter string) ([]string, error) {
 		log.V(2).Info("no slaves found, are any running?")
 		return nil, nil
 	}
+	filterRegex, err := regexp.Compile(filter)
+	if err != nil {
+		return nil, err
+	}
 	addr := []string{}
 	for _, node := range nodes {
-		addr = append(addr, node.hostname)
+		if filterRegex.MatchString(node.hostname) {
+			addr = append(addr, node.hostname)
+		}
 	}
 	return addr, err
 }

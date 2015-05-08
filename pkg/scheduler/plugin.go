@@ -619,7 +619,7 @@ func (k *deleter) deleteOne(pod *Pod) error {
 func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}, mux *http.ServeMux) *PluginConfig {
 
 	// Watch and queue pods that need scheduling.
-	updates := make(chan queue.Entry, defaultUpdatesBacklog)
+	updates := make(chan queue.Entry, k.schedcfg.UpdatesBacklog)
 	podUpdates := &podStoreAdapter{queue.NewHistorical(updates)}
 	reflector := cache.NewReflector(createAllPodsLW(k.client), &api.Pod{}, podUpdates, 0)
 
@@ -634,7 +634,7 @@ func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}, mux *ht
 	}
 	eh := &errorHandler{
 		api:     kapi,
-		backoff: backoff.New(defaultInitialPodBackoff, defaultMaxPodBackoff),
+		backoff: backoff.New(k.schedcfg.InitialPodBackoff.Duration, k.schedcfg.MaxPodBackoff.Duration),
 		qr:      q,
 	}
 	startLatch := make(chan struct{})
