@@ -20,7 +20,6 @@ import (
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	mutil "github.com/mesos/mesos-go/mesosutil"
 	bindings "github.com/mesos/mesos-go/scheduler"
-	execcfg "github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/messages"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 	offerMetrics "github.com/mesosphere/kubernetes-mesos/pkg/offers/metrics"
@@ -116,8 +115,7 @@ type KubernetesScheduler struct {
 
 	// Config related, write-once
 
-	executor          *mesos.ExecutorInfo
-	executorGroup     uint64
+	executor          *ExecutorClient
 	scheduleFunc      PodScheduleFunc
 	client            *client.Client
 	etcdClient        tools.EtcdGetSet
@@ -149,7 +147,7 @@ type KubernetesScheduler struct {
 }
 
 type Config struct {
-	Executor          *mesos.ExecutorInfo
+	Executor          *ExecutorClient
 	ScheduleFunc      PodScheduleFunc
 	Client            *client.Client
 	EtcdClient        tools.EtcdGetSet
@@ -160,18 +158,10 @@ type Config struct {
 
 // New create a new KubernetesScheduler
 func New(config Config) *KubernetesScheduler {
-	executorId := config.Executor.ExecutorId.GetValue()
-	executorUID, err := uid.Parse(executorId)
-	if err != nil {
-		//TODO(karl) push parsing out of the constructor or change this method to not be a constructor (return an error)
-		log.Fatalf("Failed to parse configured executor ID %p: %v", executorId, err)
-	}
-
 	var k *KubernetesScheduler
 	k = &KubernetesScheduler{
 		RWMutex:           new(sync.RWMutex),
 		executor:          config.Executor,
-		executorGroup:     executorUID.Group(),
 		scheduleFunc:      config.ScheduleFunc,
 		client:            config.Client,
 		etcdClient:        config.EtcdClient,
@@ -197,17 +187,18 @@ func New(config Config) *KubernetesScheduler {
 }
 
 // isCompatible returns true if the specified offer is compatible with the scheduler's executor.
-// Offers are compatible unless name indicates a kubelet-executor but the group doesn't match ours.
+// Offers are compatible unless the name matches and the group doesn't.
 func (k *KubernetesScheduler) isOfferCompatible(o *mesos.Offer) bool {
 	for _, eid := range o.GetExecutorIds() {
-		executorId := eid.GetValue()
-		executorUID, err := uid.Parse(executorId)
+		executorIdString := eid.GetValue()
+		executorID, err := uid.Parse(executorIdString)
 		if err != nil {
 			// offers with invalid executor IDs are assumed to be broken and thus incompatible
-			log.Errorf("Failed to parse offered executor ID %p: %v", executorId, err)
+			log.Errorf("Failed to parse offered executor ID %p: %v", executorIdString, err)
 			return false
 		}
-		if executorUID.Name() == execcfg.DefaultInfoID && executorUID.Group() != k.executorGroup {
+
+		if executorID.Name() == k.executor.ID().Name() && executorID.Group() != k.executor.ID().Group() {
 			return false
 		}
 	}
@@ -283,7 +274,7 @@ func (k *KubernetesScheduler) InstallDebugHandlers(mux *http.ServeMux) {
 		slaves := k.slaves.getSlaveIds()
 		for _, slaveId := range slaves {
 			_, err := k.driver.SendFrameworkMessage(
-				k.executor.ExecutorId,
+				k.executor.ToProto().ExecutorId,
 				mutil.NewSlaveID(slaveId),
 				messages.Kamikaze)
 			if err != nil {
