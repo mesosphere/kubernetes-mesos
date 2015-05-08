@@ -2,13 +2,13 @@ package podtask
 
 import (
 	"testing"
+	"time"
 
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	"github.com/mesos/mesos-go/mesosutil"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 	"github.com/mesosphere/kubernetes-mesos/pkg/proc"
 	"github.com/stretchr/testify/assert"
-	"time"
 )
 
 func TestInMemoryRegistry_RegisterGetUnregister(t *testing.T) {
