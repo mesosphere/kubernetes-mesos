@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+
+# Return true if the command(s) exists
+# Usage: cmd-exists [-q] <cmd> [cmd [cmd...]]
+# Flags:
+# -q - enabled quiet mode
+
+set -e
+
+QUIET=false
+if [ "$1" == "-q" ]; then
+    QUIET=true
+    shift
+fi
+
+cmd_name=$1
+[ -z "${cmd_name}" ] && echo "No command name supplied" && exit 1
+
+while [ ! -z ${cmd_name} ]; do
+    if ! type -p "${cmd_name}" &> /dev/null; then
+        [ ! ${QUIET} ] && echo "Command not found: ${cmd_name}"
+        exit 127
+    fi
+
+    shift
+    cmd_name=$1
+done

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+# Curl an endpoint and expect it to respond with status 200.
+# Usage: health-check <address>
+
+set -e
+
+address=$1
+[ -z "$address" ] && echo "No address supplied" && exit 1
+
+status=$(curl -s -o /dev/null -w '%{http_code}' ${address})
+if [[ ${status} == '200' ]]; then
+    exit 0
+fi
+if [[ ${status} == '000' ]]; then
+    exit 7
+fi
+
+exit 1

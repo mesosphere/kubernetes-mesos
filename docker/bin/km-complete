@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+
+# Run etcd, mesos-local, km apiserver, km controller-manager, and km scheduler.
+# Exiting (or failure of) this script will cause the above sub-processes to be killed.
+# Usage: km-local
+# Mac support requires gtimeout & pcregrep (brew install coreutils && brew install pcre)
+# Inputs:
+# PUBLIC_IP - IP the etcd, mesos, and km components will listen on (unless overridden by MESOS_IP or ETCD_IP)
+# MESOS_IP - IP that mesos is accessible on
+# MESOS_PORT - Port that mesos-master is accessible on (default 5050)
+# ETCD_IP - IP that etcd is accessible on
+# ETCD_PORT - Port that etcd is accessible on (default 4001)
+# LOG_DIR - Directory to write logs to (default /tmp/k8sm-logs)
+
+set -e
+
+# add the current dir to PATH
+bin=$(cd $(dirname $0) && pwd -P)
+export PATH=$PATH:${bin}
+
+# add kubernetes-mesos/bin to PATH (unless km-local has been moved)
+k8sm_bin=$(cd ${bin}/../../bin && pwd -P)
+[ -d "$k8sm_bin" ] && [ -e "${k8sm_bin}/km" ] && export PATH=$PATH:${k8sm_bin} || true
+
+# validate required scripts & binaries
+cmd-exists "await-connection" "etcd" "mesos-local" "km-local" "publicip"
+
+PUBLIC_IP=$(publicip)
+
+set -e
+
+#TODO(karl): use mesos defaults & auto-detect ip/port from local mesos process
+export MESOS_IP=${PUBLIC_IP}
+export MESOS_PORT=5050
+export MESOS_MASTER=${MESOS_IP}:${MESOS_PORT}
+echo "Mesos: ${MESOS_MASTER}"
+
+#TODO(karl): use etcd defaults & auto-detect ip/port from local etcd process
+export ETCD_IP=${PUBLIC_IP}
+export ETCD_PORT=4001
+export ETCD_URL=http://${ETCD_IP}:${ETCD_PORT}
+echo "Etcd: ${ETCD_URL}"
+
+LOG_DIR=${LOG_DIR:-"/tmp/k8sm-logs"}
+mkdir -p ${LOG_DIR}
+echo "Log Dir: ${LOG_DIR}"
+
+echo "---------------------"
+
+
+source ${bin}/subprocs.sh
+
+# propagate SIGINT & SIGTERM
+for sig in INT TERM EXIT; do
+    trap "kill_subprocs ${sig}" ${sig}
+done
+
+
+echo "Starting etcd &> ${LOG_DIR}/etcd.log"
+etcd \
+  -addr=${ETCD_IP}:${ETCD_PORT} \
+  &> ${LOG_DIR}/etcd.log \
+  &
+add_subproc "$!" "etcd"
+#await-connection ${ETCD_IP} ${ETCD_PORT}
+await-health-check ${ETCD_URL}/health
+echo "---------------------"
+
+
+echo "Starting mesos-local ${LOG_DIR}/mesos.log"
+mesos-local \
+  &> ${LOG_DIR}/mesos.log \
+  &
+add_subproc "$!" "mesos-local"
+#await-connection ${MESOS_IP} ${MESOS_PORT}
+await-health-check http://${MESOS_MASTER}/health
+echo "---------------------"
+
+
+echo "Starting km-local"
+km-local &
+add_subproc "$!" "km-local"
+echo "---------------------"
+
+
+await_subprocs

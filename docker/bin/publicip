@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+set -e
+
+if [ -z "${PUBLIC_IP}" ]; then
+    if cmd-exists "ifconfig" && cmd-exists "ipconfig" && cmd-exists "pcregrep"; then
+        PUBLIC_IP=$(ifconfig | pcregrep -M -o '^[^\t:]+:([^\n]|\n\t)*status: active' | egrep -o -m 1 '^[^\t:]+' | xargs ipconfig getifaddr)
+    fi
+    if [ -z "${PUBLIC_IP}" ] && cmd-exists "ip"; then
+        PUBLIC_IP=$(ip addr | grep 'state UP' -A2 | tail -n1 | awk '{print $2}' | cut -f1  -d'/')
+    fi
+    if [ -z "${PUBLIC_IP}" ]; then
+        PUBLIC_IP="0.0.0.0"
+    fi
+fi
+
+echo ${PUBLIC_IP}
