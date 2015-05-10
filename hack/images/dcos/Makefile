@@ -29,9 +29,10 @@ S6_BINS ?= $(S6_OBJ) $(EXECLINE_OBJ)
 
 .PHONY:	clean build push s6 $(S6_BINS) deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES)
 
-#	rm -rf km $(ETCD_OUTPUT_DIR) usr _build etcd*
+all:	build
+
 clean:
-	rm -rf km
+	rm -rf $(TARGET_OBJ)
 
 deps: $(S6_BINS) $(ETCD_BINS) $(KUBE_DNS_TEMPLATES)
 
@@ -65,4 +66,3 @@ $(KUBE_DNS_TEMPLATES): $(KUBE_DNS_TEMPLATES_SOURCES)
 
 $(KUBE_DNS_TEMPLATES_SOURCES):
 
-all:	push
