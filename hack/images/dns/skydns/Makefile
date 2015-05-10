@@ -18,4 +18,4 @@ push:
 	sudo docker push $(IMAGE)
 
 clean:
-	rm -f skydns
+	rm -rf skydns go

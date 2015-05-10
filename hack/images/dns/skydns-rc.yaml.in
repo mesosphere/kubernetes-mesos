@@ -35,10 +35,10 @@ desiredState:
                     "-domain=___dns_domain___"
             ]
           - name: skydns
-            image: mesosphere/kubernetes:skydns-2015-05-02T1005080000
+            image: mesosphere/kubernetes:skydns-2015-05-10T0351350000
             command: [
                     # entrypoint = "/skydns",
-                    "-machines=http://localhost:4001",
+                    "-machines=http://127.0.0.1:4001",
                     "-addr=0.0.0.0:53",
                     "-domain=___dns_domain___.",
                     "-nameservers=___dns_nameservers___"
