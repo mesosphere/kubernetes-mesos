@@ -2,3 +2,6 @@ usr
 km
 etcd*
 .version
+kubectl
+skydns-rc.yaml.in
+skydns-svc.yaml.in

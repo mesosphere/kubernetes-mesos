@@ -112,7 +112,7 @@ exec \\
     --run_proxy=false \\
     --address=$binding_ip \\
     --shutdown_fd=3 \\
-    --shutdown_fifo=$shutdown_fifo
+    --shutdown_fifo=$shutdown_fifo $KUBE_CLUSTER_DNS $KUBE_CLUSTER_DOMAIN
 EOF
 
 prepare_service_script ${service_dir} executor finish <<EOF

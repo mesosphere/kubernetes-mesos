@@ -12,6 +12,9 @@ ADD leapsecs.dat	/etc/
 ADD etcd		/opt/
 ADD etcdctl		/opt/
 ADD km			/opt/
+ADD kubectl		/opt/
+ADD skydns-rc.yaml.in	/opt/
+ADD skydns-svc.yaml.in	/opt/
 ADD functions.sh	/opt/
 ADD bootstrap.sh	/opt/
 ADD executor.sh		/opt/

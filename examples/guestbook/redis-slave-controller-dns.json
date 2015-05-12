@@ -1,0 +1,24 @@
+  {
+    "id": "redis-slave-controller",
+    "kind": "ReplicationController",
+    "apiVersion": "v1beta1",
+    "desiredState": {
+      "replicas": 2,
+      "replicaSelector": {"name": "redisslave"},
+      "podTemplate": {
+        "desiredState": {
+           "manifest": {
+             "version": "v1beta1",
+             "id": "redis-slave-controller",
+             "containers": [{
+               "name": "slave",
+               "image": "mesosphere/kubernetes:guestbook-redis-slave",
+               "ports": [{"containerPort": 6379}],
+               "env": [{"key": "REDISMASTER_HOSTNAME", "value": "redismaster.default.kubernetes.local"}]
+             }]
+           }
+         },
+         "labels": {"name": "redisslave"}
+        }},
+    "labels": {"name": "redisslave"}
+  }
