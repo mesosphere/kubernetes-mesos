@@ -119,19 +119,22 @@ $ ./bin/km apiserver \
   --etcd_servers=http://${servicehost}:4001 \
   --portal_net=10.10.10.0/24 \
   --port=8888 \
-  --cloud_provider=mesos
-  --cloud_config=./mesos-cloud.conf
+  --cloud_provider=mesos \
+  --cloud_config=./mesos-cloud.conf \
+  --v=2 >apiserver.log 2>&1 &
 
 $ ./bin/km controller-manager \
   --master=$servicehost:8888 \
-  --cloud_config=./mesos-cloud.conf
+  --cloud_config=./mesos-cloud.conf \
+  --v=2 >controller.log 2>&1 &
 
 $ ./bin/km scheduler \
   --mesos_master=${mesos_masster} \
   --address=${servicehost} \
   --etcd_servers=http://${servicehost}:4001 \
   --mesos_user=root \
-  --api_servers=$servicehost:8888
+  --api_servers=$servicehost:8888 \
+  --v=2 >scheduler.log 2>&1 &
 ```
 
 For simpler execution of `kubectl`:
