@@ -54,14 +54,14 @@ type T struct {
 	podKey     string
 	launchTime time.Time
 	bindTime   time.Time
-	mapper     HostPortMappingType
+	PortMapper
 }
 
 type Spec struct {
 	SlaveID string
 	CPU     float64
 	Memory  float64
-	PortMap []HostPortMapping
+	PortMap []PortMapping
 	Ports   []uint64
 	Data    []byte
 }
@@ -88,7 +88,7 @@ func (t *T) Clone() *T {
 
 func (old *Spec) copyTo(new *Spec) {
 	if len(old.PortMap) > 0 {
-		new.PortMap = append(([]HostPortMapping)(nil), old.PortMap...)
+		new.PortMap = append(([]PortMapping)(nil), old.PortMap...)
 	}
 	if len(old.Ports) > 0 {
 		new.Ports = append(([]uint64)(nil), old.Ports...)
@@ -151,7 +151,7 @@ func (t *T) FillFromDetails(details *mesos.Offer) error {
 		Memory:  containerMem,
 	}
 
-	if mapping, err := t.mapper.Generate(t, details); err != nil {
+	if mapping, err := t.PortMap(t, details); err != nil {
 		t.Reset()
 		return err
 	} else {
@@ -209,7 +209,7 @@ func (t *T) AcceptOffer(offer *mesos.Offer) bool {
 			mem = *resource.GetScalar().Value
 		}
 	}
-	if _, err := t.mapper.Generate(t, offer); err != nil {
+	if _, err := t.PortMap(t, offer); err != nil {
 		log.V(3).Info(err)
 		return false
 	}
@@ -246,13 +246,13 @@ func New(ctx api.Context, id string, pod api.Pod, executor *mesos.ExecutorInfo) 
 		id = "pod." + uuid.NewUUID().String()
 	}
 	task := &T{
-		ID:       id,
-		Pod:      pod,
-		State:    StatePending,
-		podKey:   key,
-		mapper:   MappingTypeForPod(&pod),
-		Flags:    make(map[FlagType]struct{}),
-		executor: proto.Clone(executor).(*mesos.ExecutorInfo),
+		ID:         id,
+		Pod:        pod,
+		State:      StatePending,
+		podKey:     key,
+		PortMapper: NewPortMapper(&pod),
+		Flags:      make(map[FlagType]struct{}),
+		executor:   proto.Clone(executor).(*mesos.ExecutorInfo),
 	}
 	task.CreateTime = time.Now()
 	return task, nil
@@ -308,7 +308,7 @@ func RecoverFrom(pod api.Pod) (*T, bool, error) {
 		podKey:     key,
 		State:      StatePending, // possibly running? mesos will tell us during reconciliation
 		Flags:      make(map[FlagType]struct{}),
-		mapper:     MappingTypeForPod(&pod),
+		PortMapper: NewPortMapper(&pod),
 		launchTime: now,
 		bindTime:   now,
 	}
