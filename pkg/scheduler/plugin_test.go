@@ -10,6 +10,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestPlugin_New(t *testing.T) {
+	assert := assert.New(t)
+
+	c := PluginConfig{
+	}
+	p := NewPlugin(&c)
+	assert.NotNil(p)
+}
+
 func TestDeleteOne_NonexistentPod(t *testing.T) {
 	assert := assert.New(t)
 	obj := &MockScheduler{}
