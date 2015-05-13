@@ -81,10 +81,10 @@ func TestPopEmptyPQ(t *testing.T) {
 }
 
 type testjob struct {
-	d time.Duration
-	t time.Time
+	d        time.Duration
+	t        time.Time
 	deadline *time.Time
-	uid string
+	uid      string
 	instance int
 }
 
