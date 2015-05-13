@@ -284,7 +284,7 @@ func (k *kubeScheduler) doSchedule(task *podtask.T, err error) (string, error) {
 		} else {
 			task.Offer.Release()
 			task.Reset()
-			if err = k.api.tasks().Update(task); err != nil {
+			if err := k.api.tasks().Update(task); err != nil {
 				return "", err
 			}
 		}
