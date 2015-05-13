@@ -96,6 +96,7 @@ test.vv: patch
 
 test.cover: $(TEST_OBJ)
 	@(echo "mode: count" && (cat .*.coverage.out|sed -e '/^mode/d')) >all.coverage.out
+	@env GOPATH=$(_GOPATH) go tool cover -html=all.coverage.out -o coverage-report.html
 
 $(TEST_OBJ):
 	@test -n "$(WITH_RACE)" && args="$$args -race" || args=""; \
