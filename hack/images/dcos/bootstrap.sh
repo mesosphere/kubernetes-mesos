@@ -88,7 +88,6 @@ prepare_etcd_service() {
 #TODO(jdef) would be super-cool to have socket-activation here so that clients can connect before etcd is really ready
 exec 2>&1
 mkdir -p $etcd_server_data
-echo starting etcd
 PATH=/opt:$PATH
 export PATH
 exec /opt/etcd \\
@@ -101,9 +100,13 @@ exec /opt/etcd \\
   -listen-peer-urls ${etcd_listen_peer_urls}
 EOF
 
-  local deps="apiserver controller-manager scheduler"
-  test -n "$ENABLE_DNS" && deps="$deps kube_dns"
-  prepare_service_depends etcd-server ${etcd_server_list}/version $deps
+  local deps="controller-manager scheduler"
+  if test -n "$ENABLE_DNS"; then
+    deps="$deps apiserver-depends"
+  else
+    deps="$deps apiserver"
+  fi
+  prepare_service_depends etcd-server ${etcd_server_list}/v2/stats/store getsSuccess $deps
 }
 
 #
@@ -214,15 +217,8 @@ EOF
 
   sed -i -e '$i test -f kill && exec s6-svc -d $(pwd) || exec \\' ${service_dir}/kube_dns/finish
 
-  # it's ok if etcd-server-depends is also monitoring apiserver, the order of ops is this:
-  # 1. etcd-server-depends starts etcd, waits for it to come up
-  # 2. etcd-server-depends starts apiserver, control-manager, scheduler, kube_dns
-  # 3. kube_dns-depends starts apiserver (already started), waits for it to come up
-  # 4. kube_dns-depends starts kube_dns
-  prepare_service_depends apiserver http://${host_ip}:${apiserver_port}/healthz kube_dns
+  prepare_service_depends apiserver http://${host_ip}:${apiserver_port}/healthz ok kube_dns
 }
-
-test -n "$DISABLE_ETCD_SERVER" || prepare_etcd_service
 
 kube_cluster_dns=""
 kube_cluster_domain=""
@@ -231,6 +227,8 @@ if test -n "$ENABLE_DNS"; then
   kube_cluster_dns="--cluster_dns=$kube_cluster_dns"
   kube_cluster_domain="--cluster_domain=$kube_cluster_domain"
 fi
+
+test -n "$DISABLE_ETCD_SERVER" || prepare_etcd_service
 
 cd ${sandbox}
 
