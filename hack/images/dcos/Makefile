@@ -2,7 +2,7 @@ FROM	?= /target
 TARGET_OBJ = km kubectl
 IMAGE	?= kubernetes
 REPO	?= mesosphere/$(IMAGE)
-TAG	?= k8s-0.14.2-k8sm-0.5-dcos-dev
+DCOS_VERSION ?= dev
 SUDO	?= $(shell test "$$(whoami)" = "root" || echo sudo)
 
 COMMON_ARCH ?= linux-amd64
@@ -27,7 +27,28 @@ KUBE_DNS_TEMPLATES_SOURCES = $(KUBE_DNS_TEMPLATES:%=../dns/%)
 
 S6_BINS ?= $(S6_OBJ) $(EXECLINE_OBJ)
 
-.PHONY:	clean build push s6 $(S6_BINS) deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES)
+#
+# normally you'll be generating dev images via:
+#	make release 
+#
+# and promoting (re-tagging them with a release version) them via:
+#	make promote
+#
+# HOWEVER, to generate a fresh release image and push it up (skip the -dev tag cycle):
+#	make release FROM=~/bin RELEASE=1
+#
+RELEASE ?=
+RELEASE_VERSION ?= $(shell date -Iseconds | sed -e 's/[-:+]//g')
+
+ifneq ($(RELEASE),)
+DCOS_VERSION = $(RELEASE_VERSION)
+endif
+
+DCOS_PREFIX ?= k8s-0.14.2-k8sm-0.5-dcos
+TAG	?= $(DCOS_PREFIX)-$(DCOS_VERSION)
+FQIN	?= $(REPO):$(TAG)
+
+.PHONY:	clean build push s6 $(S6_BINS) deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) version release promote
 
 all:	build
 
@@ -36,13 +57,25 @@ clean:
 
 deps: $(S6_BINS) $(ETCD_BINS) $(KUBE_DNS_TEMPLATES)
 
-build: deps
-	cp -pv $(TARGET_OBJ:%=$(FROM)/%) .
-	date -Iseconds >.version
-	$(SUDO) docker build -t $(REPO):$(TAG) .
+version:
+	@echo "$(RELEASE_VERSION)" | tee .version
 
-push:	build
-	$(SUDO) docker push $(REPO):$(TAG)
+build: deps version
+	cp -pv $(TARGET_OBJ:%=$(FROM)/%) .
+	@echo $(FQIN) >dockertag
+	$(SUDO) docker build -q -t $$(cat dockertag) .
+
+push:
+	(dockertag=$$(cat dockertag); echo pushing $$dockertag; $(SUDO) docker push $$dockertag)
+
+# would be nice to validate that the image contains .version that matches what's in the dir
+promote:
+	echo $(REPO):$(DCOS_PREFIX)-$$(cat .version) >dockertag
+	(dockertag=$$(cat dockertag); echo promoting $$dockertag; $(SUDO) docker tag -f $(REPO):$(DCOS_PREFIX)-dev $$dockertag) && \
+	$(MAKE) push
+
+release:
+	$(MAKE) build push FROM=$(FROM) RELEASE=$(RELEASE)
 
 s6:
 	mkdir -pv _build/s6 _build/dist && chmod -v o+rw _build/dist

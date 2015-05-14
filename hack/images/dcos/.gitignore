@@ -2,6 +2,7 @@ usr
 km
 etcd*
 .version
+dockertag
 kubectl
 skydns-rc.yaml.in
 skydns-svc.yaml.in
