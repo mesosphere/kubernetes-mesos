@@ -125,6 +125,7 @@ $ ./bin/km apiserver \
 
 $ ./bin/km controller-manager \
   --master=$servicehost:8888 \
+  --cloud_provider=mesos \
   --cloud_config=./mesos-cloud.conf \
   --v=2 >controller.log 2>&1 &
 
