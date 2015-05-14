@@ -1,0 +1,204 @@
+[submodule "gcfg"]
+  path = vendor/src/code.google.com/p/gcfg
+  url = https://code.google.com/p/gcfg
+
+[submodule "kubernetes"]
+  path = vendor/src/github.com/GoogleCloudPlatform/kubernetes
+  url = git@github.com:mesosphere/kubernetes.git
+
+[submodule "logrus"]
+  path = vendor/src/github.com/Sirupsen/logrus
+  url = https://github.com/Sirupsen/logrus
+
+[submodule "go-http-auth"]
+  path = vendor/src/github.com/abbot/go-http-auth
+  url = https://github.com/abbot/go-http-auth
+
+[submodule "spec"]
+  path = vendor/src/github.com/appc/spec
+  url = https://github.com/appc/spec
+
+[submodule "perks"]
+  path = vendor/src/github.com/beorn7/perks
+  url = https://github.com/beorn7/perks
+
+[submodule "etcd"]
+  path = vendor/src/github.com/coreos/etcd
+  url = https://github.com/coreos/etcd
+
+[submodule "go-etcd"]
+  path = vendor/src/github.com/coreos/go-etcd
+  url = https://github.com/coreos/go-etcd
+
+[submodule "go-systemd"]
+  path = vendor/src/github.com/coreos/go-systemd
+  url = https://github.com/coreos/go-systemd
+
+[submodule "go-spew"]
+  path = vendor/src/github.com/davecgh/go-spew
+  url = https://github.com/davecgh/go-spew
+
+[submodule "go-colortext"]
+  path = vendor/src/github.com/daviddengcn/go-colortext
+  url = https://github.com/daviddengcn/go-colortext
+
+[submodule "jwt-go"]
+  path = vendor/src/github.com/dgrijalva/jwt-go
+  url = https://github.com/dgrijalva/jwt-go
+
+[submodule "docker"]
+  path = vendor/src/github.com/docker/docker
+  url = https://github.com/docker/docker
+
+[submodule "libcontainer"]
+  path = vendor/src/github.com/docker/libcontainer
+  url = https://github.com/docker/libcontainer
+
+[submodule "spdystream"]
+  path = vendor/src/github.com/docker/spdystream
+  url = https://github.com/docker/spdystream
+
+[submodule "go-bindata-assetfs"]
+  path = vendor/src/github.com/elazarl/go-bindata-assetfs
+  url = https://github.com/elazarl/go-bindata-assetfs
+
+[submodule "go-restful"]
+  path = vendor/src/github.com/emicklei/go-restful
+  url = https://github.com/emicklei/go-restful
+
+[submodule "json-patch"]
+  path = vendor/src/github.com/evanphx/json-patch
+  url = https://github.com/evanphx/json-patch
+
+[submodule "go-dockerclient"]
+  path = vendor/src/github.com/fsouza/go-dockerclient
+  url = https://github.com/fsouza/go-dockerclient
+
+[submodule "yaml"]
+  path = vendor/src/github.com/ghodss/yaml
+  url = https://github.com/ghodss/yaml
+
+[submodule "dbus"]
+  path = vendor/src/github.com/godbus/dbus
+  url = https://github.com/godbus/dbus
+
+[submodule "protobuf"]
+  path = vendor/src/github.com/gogo/protobuf
+  url = https://github.com/gogo/protobuf
+
+[submodule "glog"]
+  path = vendor/src/github.com/golang/glog
+  url = https://github.com/golang/glog
+
+[submodule "groupcache"]
+  path = vendor/src/github.com/golang/groupcache
+  url = https://github.com/golang/groupcache
+
+[submodule "protobuf"]
+  path = vendor/src/github.com/golang/protobuf
+  url = https://github.com/golang/protobuf
+
+[submodule "cadvisor"]
+  path = vendor/src/github.com/google/cadvisor
+  url = git@github.com:mesosphere/cadvisor.git
+
+[submodule "gofuzz"]
+  path = vendor/src/github.com/google/gofuzz
+  url = https://github.com/google/gofuzz
+
+[submodule "mergo"]
+  path = vendor/src/github.com/imdario/mergo
+  url = https://github.com/imdario/mergo
+
+[submodule "mousetrap"]
+  path = vendor/src/github.com/inconshreveable/mousetrap
+  url = https://github.com/inconshreveable/mousetrap
+
+[submodule "osext"]
+  path = vendor/src/github.com/kardianos/osext
+  url = https://github.com/kardianos/osext
+
+[submodule "golang_protobuf_extensions"]
+  path = vendor/src/github.com/matttproud/golang_protobuf_extensions
+  url = https://github.com/matttproud/golang_protobuf_extensions
+
+[submodule "mesos-go"]
+  path = vendor/src/github.com/mesos/mesos-go
+  url = git@github.com:mesosphere/mesos-go.git
+
+[submodule "goamz"]
+  path = vendor/src/github.com/mitchellh/goamz
+  url = https://github.com/mitchellh/goamz
+
+[submodule "mapstructure"]
+  path = vendor/src/github.com/mitchellh/mapstructure
+  url = https://github.com/mitchellh/mapstructure
+
+[submodule "client_golang"]
+  path = vendor/src/github.com/prometheus/client_golang
+  url = https://github.com/prometheus/client_golang
+
+[submodule "client_model"]
+  path = vendor/src/github.com/prometheus/client_model
+  url = https://github.com/prometheus/client_model
+
+[submodule "procfs"]
+  path = vendor/src/github.com/prometheus/procfs
+  url = https://github.com/prometheus/procfs
+
+[submodule "gophercloud"]
+  path = vendor/src/github.com/rackspace/gophercloud
+  url = https://github.com/rackspace/gophercloud
+
+[submodule "go-zookeeper"]
+  path = vendor/src/github.com/samuel/go-zookeeper
+  url = https://github.com/samuel/go-zookeeper
+
+[submodule "skydns"]
+  path = vendor/src/github.com/skynetservices/skydns
+  url = https://github.com/skynetservices/skydns
+
+[submodule "cobra"]
+  path = vendor/src/github.com/spf13/cobra
+  url = https://github.com/spf13/cobra
+
+[submodule "pflag"]
+  path = vendor/src/github.com/spf13/pflag
+  url = https://github.com/spf13/pflag
+
+[submodule "objx"]
+  path = vendor/src/github.com/stretchr/objx
+  url = https://github.com/stretchr/objx
+
+[submodule "testify"]
+  path = vendor/src/github.com/stretchr/testify
+  url = https://github.com/stretchr/testify
+
+[submodule "go-ini"]
+  path = vendor/src/github.com/vaughan0/go-ini
+  url = https://github.com/vaughan0/go-ini
+
+[submodule "exp"]
+  path = vendor/src/golang.org/x/exp
+  url = https://go.googlesource.com/exp
+
+[submodule "net"]
+  path = vendor/src/golang.org/x/net
+  url = https://go.googlesource.com/net
+
+[submodule "oauth2"]
+  path = vendor/src/golang.org/x/oauth2
+  url = https://go.googlesource.com/oauth2
+
+[submodule "cloud"]
+  path = vendor/src/google.golang.org/cloud
+  url = https://code.googlesource.com/gocloud
+
+[submodule "yaml.v2"]
+  path = vendor/src/gopkg.in/yaml.v2
+  url = https://gopkg.in/yaml.v2
+
+[submodule "inf"]
+  path = vendor/src/speter.net/go/exp/math/dec/inf
+  url = https://code.google.com/p/go-decimal-inf.exp
+
