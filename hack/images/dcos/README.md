@@ -21,6 +21,10 @@ mesos-dns servers may be used as fallbacks for name resolution since their IP ad
 ## promote the latest -dev build to a version-tagged release
 ## (don't forget to update the universe config.json/version and package.json/docker-image)
 :; make promote
+
+## HOWEVER, to generate a fresh release image and push it up (skip the -dev tag cycle):
+## (this is probably an exceptional case, images should usually be promoted from -dev)
+:; make release FROM=~/bin RELEASE=1
 ```
 
 ## Files
