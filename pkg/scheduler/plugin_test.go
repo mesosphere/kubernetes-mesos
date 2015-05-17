@@ -8,14 +8,36 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"github.com/stretchr/testify/assert"
+	"net/http"
+	"github.com/mesos/mesos-go/mesosutil"
 )
 
 func TestPlugin_New(t *testing.T) {
 	assert := assert.New(t)
 
-	c := PluginConfig{
-	}
+	c := PluginConfig{}
 	p := NewPlugin(&c)
+	assert.NotNil(p)
+}
+
+func TestPlugin_NewFromScheduler(t *testing.T) {
+	assert := assert.New(t)
+
+	// create scheduler
+	testScheduler := New(Config{
+		Executor: mesosutil.NewExecutorInfo(
+			mesosutil.NewExecutorID("executor-id"),
+			mesosutil.NewCommandInfo("executor-cmd"),
+		),
+	})
+
+	// get plugin config from it
+	terminated := make(chan struct{})
+	c := testScheduler.NewPluginConfig(terminated, http.DefaultServeMux)
+	assert.NotNil(c)
+
+	// create plugin
+	p := NewPlugin(c)
 	assert.NotNil(p)
 }
 
