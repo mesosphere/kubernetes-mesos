@@ -77,7 +77,7 @@ clean:
 	test -n "$(BUILDDIR)" && rm -rf $(BUILDDIR)/*
 
 format:
-	env GOPATH=$(_GOPATH) go fmt $(FRAMEWORK_CMD) $(FRAMEWORK_LIB)
+	gofmt -s -w cmd pkg
 
 lint:
 	for pkg in $(FRAMEWORK_CMD) $(FRAMEWORK_LIB); do env GOPATH=$(_GOPATH) go$@ $$pkg; done

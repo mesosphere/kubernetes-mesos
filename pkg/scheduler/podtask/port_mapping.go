@@ -134,7 +134,7 @@ func defaultHostPortMapping(t *T, offer *mesos.Offer) ([]HostPortMapping, error)
 		}
 	}
 	foreachRange(offer, "ports", func(bp, ep uint64) {
-		for port, _ := range requiredPorts {
+		for port := range requiredPorts {
 			log.V(3).Infof("evaluating port range {%d:%d} %d", bp, ep, port)
 			if (bp <= port) && (port <= ep) {
 				mapping = append(mapping, requiredPorts[port])
@@ -147,7 +147,7 @@ func defaultHostPortMapping(t *T, offer *mesos.Offer) ([]HostPortMapping, error)
 		err := &PortAllocationError{
 			PodId: t.Pod.Name,
 		}
-		for p, _ := range requiredPorts {
+		for p := range requiredPorts {
 			err.Ports = append(err.Ports, p)
 		}
 		return nil, err
