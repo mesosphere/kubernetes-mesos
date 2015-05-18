@@ -14,6 +14,7 @@ import (
 
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	"github.com/mesos/mesos-go/mesosutil"
+	bindings "github.com/mesos/mesos-go/scheduler"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/ha"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
@@ -58,10 +59,14 @@ func newPodList(nPods int, nPorts int) *api.PodList {
 	}
 }
 
-func makeTestServer(t *testing.T, namespace string, podResponse, serviceResponse, endpointsResponse serverResponse) (*httptest.Server, *util.FakeHandler) {
+func makeTestServer(t *testing.T, namespace string, podResponse, watchPodResponse, serviceResponse, endpointsResponse serverResponse) (*httptest.Server, *util.FakeHandler) {
 	fakePodHandler := util.FakeHandler{
 		StatusCode:   podResponse.statusCode,
 		ResponseBody: runtime.EncodeOrDie(testapi.Codec(), podResponse.obj.(runtime.Object)),
+	}
+	fakeWatchPodHandler := util.FakeHandler{
+		StatusCode:   watchPodResponse.statusCode,
+		ResponseBody: runtime.EncodeOrDie(testapi.Codec(), watchPodResponse.obj.(runtime.Object)),
 	}
 	fakeServiceHandler := util.FakeHandler{
 		StatusCode:   serviceResponse.statusCode,
@@ -73,6 +78,7 @@ func makeTestServer(t *testing.T, namespace string, podResponse, serviceResponse
 	}
 	mux := http.NewServeMux()
 	mux.Handle(testapi.ResourcePath("pods", namespace, ""), &fakePodHandler)
+	mux.Handle(testapi.ResourcePath("watch/pods", namespace, ""), &fakeWatchPodHandler)
 	mux.Handle(testapi.ResourcePath("services", "", ""), &fakeServiceHandler)
 	mux.Handle(testapi.ResourcePath("endpoints", namespace, ""), &fakeEndpointsHandler)
 	mux.Handle(testapi.ResourcePath("endpoints/", namespace, ""), &fakeEndpointsHandler)
@@ -95,11 +101,12 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 	assert := assert.New(t)
 
 	// create fake apiserver
-	testServer, _ :=	makeTestServer(t, api.NamespaceDefault,
+	testApiServer, _ := makeTestServer(t, api.NamespaceDefault,
+		serverResponse{http.StatusOK, newPodList(0, 0)},
 		serverResponse{http.StatusOK, newPodList(0, 0)},
 		serverResponse{http.StatusOK, &api.ServiceList{}},
 		serverResponse{http.StatusOK, &api.Endpoints{}})
-	defer testServer.Close()
+	defer testApiServer.Close()
 
 	// create scheduler
 	testScheduler := New(Config{
@@ -107,7 +114,7 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 			mesosutil.NewExecutorID("executor-id"),
 			mesosutil.NewCommandInfo("executor-cmd"),
 		),
-		Client: client.NewOrDie(&client.Config{Host: testServer.URL, Version: testapi.Version()}),
+		Client: client.NewOrDie(&client.Config{Host: testApiServer.URL, Version: testapi.Version()}),
 	})
 
 	assert.NotNil(testScheduler.client, "client is nil")
@@ -131,6 +138,19 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 	// init scheduler
 	err := testScheduler.Init(schedulerProcess.Master(), p, http.DefaultServeMux)
 	assert.NoError(err)
+
+	// elect master with mock driver
+	driverFactory := ha.DriverFactory(func() (bindings.SchedulerDriver, error) {
+		mockDriver := MockSchedulerDriver{}
+		mockDriver.On("Start").Return(mesos.Status_DRIVER_RUNNING, nil)
+		mockDriver.On("Join").Return(mesos.Status_DRIVER_STOPPED, nil)
+		return &mockDriver, nil;
+	})
+	schedulerProcess.Elect(driverFactory)
+	elected := schedulerProcess.Elected()
+
+	// wait for being elected
+	_ = <-elected
 
 	// stop plugin
 	schedulerProcess.End()
