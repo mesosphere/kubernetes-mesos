@@ -151,13 +151,13 @@ func (t *T) FillFromDetails(details *mesos.Offer) error {
 		Memory:  containerMem,
 	}
 
-	if mapping, err := t.PortMap(t, details); err != nil {
+	if mapping, err := t.PortMap(t, NewPortRanges(details)); err != nil {
 		t.Reset()
 		return err
 	} else {
 		ports := []uint64{}
 		for _, entry := range mapping {
-			ports = append(ports, entry.OfferPort)
+			ports = append(ports, entry.HostPort)
 		}
 		t.Spec.PortMap = mapping
 		t.Spec.Ports = ports
@@ -209,7 +209,7 @@ func (t *T) AcceptOffer(offer *mesos.Offer) bool {
 			mem = *resource.GetScalar().Value
 		}
 	}
-	if _, err := t.PortMap(t, offer); err != nil {
+	if _, err := t.PortMap(t, NewPortRanges(offer)); err != nil {
 		log.V(3).Info(err)
 		return false
 	}

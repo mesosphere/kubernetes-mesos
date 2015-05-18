@@ -87,6 +87,27 @@ func (rs Ranges) Find(n uint64) int {
 	return -1
 }
 
+// Sub returns Ranges without n and a boolean indicating if it was found or not.
+// TODO(tsenart): Fix
+func (rs Ranges) Sub(n uint64) (Ranges, bool) {
+	i := rs.Find(n)
+	if i < 0 {
+		return rs, false
+	}
+
+	sub := append(Ranges{}, rs[:i]...)
+	if lo := min(n-1, 0); rs[i][0] < lo {
+		sub = append(sub, Range{rs[i][0], lo})
+	}
+
+	if hi := n + 1; rs[i][1] > hi {
+		sub = append(sub, Range{hi, rs[i][1]})
+	}
+	return append(sub, rs[i+1:]...), true
+
+	// return sub.Squash(), true
+}
+
 // resource returns a *mesos.Resource with the given name and Ranges.
 func (rs Ranges) resource(name string) *mesos.Resource {
 	vr := make([]*mesos.Value_Range, len(rs))
@@ -101,4 +122,18 @@ func (rs Ranges) resource(name string) *mesos.Resource {
 		Type:   mesos.Value_RANGES.Enum(),
 		Ranges: &mesos.Value_Ranges{Range: vr},
 	}
+}
+
+func min(a, b uint64) uint64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
 }
