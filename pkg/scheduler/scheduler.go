@@ -68,7 +68,7 @@ func (self *slaveStorage) getSlaveIds() []string {
 	self.Lock()
 	defer self.Unlock()
 	slaveIds := make([]string, 0, len(self.slaves))
-	for slaveID, _ := range self.slaves {
+	for slaveID := range self.slaves {
 		slaveIds = append(slaveIds, slaveID)
 	}
 	return slaveIds
