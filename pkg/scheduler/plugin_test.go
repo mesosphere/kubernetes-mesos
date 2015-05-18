@@ -1,16 +1,87 @@
 package scheduler
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/testapi"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+
 	mesos "github.com/mesos/mesos-go/mesosproto"
+	"github.com/mesos/mesos-go/mesosutil"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
+	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/ha"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"github.com/stretchr/testify/assert"
-	"net/http"
-	"github.com/mesos/mesos-go/mesosutil"
 )
+
+type serverResponse struct {
+	statusCode int
+	obj        interface{}
+}
+
+/* @sttts: newPodList and makeTestServer are copies from endpoint_controller_test.go.
+ *         They should be moved to testapi or somewhere else probably.
+ */
+func newPodList(nPods int, nPorts int) *api.PodList {
+	pods := []api.Pod{}
+	for i := 0; i < nPods; i++ {
+		p := api.Pod{
+			TypeMeta:   api.TypeMeta{APIVersion: testapi.Version()},
+			ObjectMeta: api.ObjectMeta{Name: fmt.Sprintf("pod%d", i)},
+			Spec: api.PodSpec{
+				Containers: []api.Container{{Ports: []api.ContainerPort{}}},
+			},
+			Status: api.PodStatus{
+				PodIP: fmt.Sprintf("1.2.3.%d", 4+i),
+				Conditions: []api.PodCondition{
+					{
+						Type:   api.PodReady,
+						Status: api.ConditionTrue,
+					},
+				},
+			},
+		}
+		for j := 0; j < nPorts; j++ {
+			p.Spec.Containers[0].Ports = append(p.Spec.Containers[0].Ports, api.ContainerPort{ContainerPort: 8080 + j})
+		}
+		pods = append(pods, p)
+	}
+	return &api.PodList{
+		TypeMeta: api.TypeMeta{APIVersion: testapi.Version(), Kind: "PodList"},
+		Items:    pods,
+	}
+}
+
+func makeTestServer(t *testing.T, namespace string, podResponse, serviceResponse, endpointsResponse serverResponse) (*httptest.Server, *util.FakeHandler) {
+	fakePodHandler := util.FakeHandler{
+		StatusCode:   podResponse.statusCode,
+		ResponseBody: runtime.EncodeOrDie(testapi.Codec(), podResponse.obj.(runtime.Object)),
+	}
+	fakeServiceHandler := util.FakeHandler{
+		StatusCode:   serviceResponse.statusCode,
+		ResponseBody: runtime.EncodeOrDie(testapi.Codec(), serviceResponse.obj.(runtime.Object)),
+	}
+	fakeEndpointsHandler := util.FakeHandler{
+		StatusCode:   endpointsResponse.statusCode,
+		ResponseBody: runtime.EncodeOrDie(testapi.Codec(), endpointsResponse.obj.(runtime.Object)),
+	}
+	mux := http.NewServeMux()
+	mux.Handle(testapi.ResourcePath("pods", namespace, ""), &fakePodHandler)
+	mux.Handle(testapi.ResourcePath("services", "", ""), &fakeServiceHandler)
+	mux.Handle(testapi.ResourcePath("endpoints", namespace, ""), &fakeEndpointsHandler)
+	mux.Handle(testapi.ResourcePath("endpoints/", namespace, ""), &fakeEndpointsHandler)
+	mux.HandleFunc("/", func(res http.ResponseWriter, req *http.Request) {
+		t.Errorf("unexpected request: %v", req.RequestURI)
+		res.WriteHeader(http.StatusNotFound)
+	})
+	return httptest.NewServer(mux), &fakeEndpointsHandler
+}
 
 func TestPlugin_New(t *testing.T) {
 	assert := assert.New(t)
@@ -23,22 +94,46 @@ func TestPlugin_New(t *testing.T) {
 func TestPlugin_NewFromScheduler(t *testing.T) {
 	assert := assert.New(t)
 
+	// create fake apiserver
+	testServer, _ :=	makeTestServer(t, api.NamespaceDefault,
+		serverResponse{http.StatusOK, newPodList(0, 0)},
+		serverResponse{http.StatusOK, &api.ServiceList{}},
+		serverResponse{http.StatusOK, &api.Endpoints{}})
+	defer testServer.Close()
+
 	// create scheduler
 	testScheduler := New(Config{
 		Executor: mesosutil.NewExecutorInfo(
 			mesosutil.NewExecutorID("executor-id"),
 			mesosutil.NewCommandInfo("executor-cmd"),
 		),
+		Client: client.NewOrDie(&client.Config{Host: testServer.URL, Version: testapi.Version()}),
 	})
 
+	assert.NotNil(testScheduler.client, "client is nil")
+	assert.NotNil(testScheduler.executor, "executor is nil")
+	assert.NotNil(testScheduler.offers, "offer registry is nil")
+
+	// create scheduler process
+	schedulerProcess := ha.New(testScheduler)
+
 	// get plugin config from it
-	terminated := make(chan struct{})
-	c := testScheduler.NewPluginConfig(terminated, http.DefaultServeMux)
+	c := testScheduler.NewPluginConfig(schedulerProcess.Terminal(), http.DefaultServeMux)
 	assert.NotNil(c)
 
 	// create plugin
 	p := NewPlugin(c)
 	assert.NotNil(p)
+
+	// run plugin
+	p.Run(schedulerProcess.Terminal())
+
+	// init scheduler
+	err := testScheduler.Init(schedulerProcess.Master(), p, http.DefaultServeMux)
+	assert.NoError(err)
+
+	// stop plugin
+	schedulerProcess.End()
 }
 
 func TestDeleteOne_NonexistentPod(t *testing.T) {
