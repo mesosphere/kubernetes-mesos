@@ -566,6 +566,7 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface, sc *schedcfg.Config
 		FailoverTimeout:   s.FailoverTimeout,
 		ReconcileInterval: s.ReconcileInterval,
 		ReconcileCooldown: s.ReconcileCooldown,
+		PodsListWatch:     scheduler.CreateAllPodsLW(client),
 	})
 
 	masterUri := s.MesosMaster
