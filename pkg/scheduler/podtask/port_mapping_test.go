@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	mesos "github.com/mesos/mesos-go/mesosproto"
 )
 
 func TestNewPortMapper(t *testing.T) {
@@ -28,6 +27,19 @@ func TestNewPortMapper(t *testing.T) {
 func TestPortMapper_PortMap(t *testing.T) {
 	t.Parallel()
 
+	task, _ := fakePodTask("foo")
+	ports := func(hostports ...int) *T {
+		task.Pod.Spec = api.PodSpec{
+			Containers: []api.Container{{
+				Ports: make([]api.ContainerPort, len(hostports)),
+			}},
+		}
+		for i, port := range hostports {
+			task.Pod.Spec.Containers[0].Ports[i].HostPort = port
+		}
+		return task
+	}
+
 	for i, test := range []struct {
 		PortMapper
 		*T
@@ -35,15 +47,20 @@ func TestPortMapper_PortMap(t *testing.T) {
 		want []PortMapping
 		err  error
 	}{
-	// {"fixed", task(), offer(1, 1), []PortMapping{}, nil},
-	// {"fixed", task(123, 123), offer(1, 1), nil,
-	// 	&DuplicateHostPortError{PortMapping{0, 0, 123}, PortMapping{0, 1, 123}}},
-	// {"wildcard", task(), offer(), []PortMapping{}, nil},
-	// {"wildcard", task(), offer(1, 1), []PortMapping{}, nil},
-	// {"wildcard", task(123), offer(1, 1), nil, &PortAllocationError{"foo", []uint64{123}}},
-	// {"wildcard", task(0, 123), offer(1, 1), nil, &PortAllocationError{"foo", []uint64{123}}},
-	// {"wildcard", task(0, 1), offer(1, 1), nil, &PortAllocationError{"foo", nil}},
-	// {"wildcard", task(0, 1), offer(1, 2), []PortMapping{{0, 1, 1}, {0, 0, 2}}, nil},
+		{"fixed", ports(), Ranges{{1, 1}}, []PortMapping{}, nil},
+		{"fixed", ports(123, 123), Ranges{{1, 1}}, nil, &DuplicateHostPortError{
+			PortMapping{&task.Pod, &task.Pod.Spec.Containers[0], 0, 123},
+			PortMapping{&task.Pod, &task.Pod.Spec.Containers[0], 1, 123},
+		}},
+		{"wildcard", ports(), Ranges{}, []PortMapping{}, nil},
+		{"wildcard", ports(), Ranges{{1, 1}}, []PortMapping{}, nil},
+		{"wildcard", ports(123), Ranges{{1, 1}}, nil, &PortAllocationError{&task.Pod, []uint64{123}}},
+		{"wildcard", ports(0, 123), Ranges{{1, 1}}, nil, &PortAllocationError{&task.Pod, []uint64{123}}},
+		{"wildcard", ports(0, 1), Ranges{{1, 1}}, nil, &PortAllocationError{&task.Pod, nil}},
+		{"wildcard", ports(0, 1), Ranges{{1, 2}}, []PortMapping{
+			{&task.Pod, &task.Pod.Spec.Containers[0], 1, 1},
+			{&task.Pod, &task.Pod.Spec.Containers[0], 0, 2},
+		}, nil},
 	} {
 		got, err := test.PortMap(test.T, test.Ranges)
 		if !reflect.DeepEqual(got, test.want) || !reflect.DeepEqual(err, test.err) {
@@ -51,21 +68,4 @@ func TestPortMapper_PortMap(t *testing.T) {
 				i, test.PortMapper, got, err, test.want, test.err)
 		}
 	}
-}
-
-func task(hostports ...int) *T {
-	t, _ := fakePodTask("foo")
-	t.Pod.Spec = api.PodSpec{
-		Containers: []api.Container{{
-			Ports: make([]api.ContainerPort, len(hostports)),
-		}},
-	}
-	for i, port := range hostports {
-		t.Pod.Spec.Containers[0].Ports[i].HostPort = port
-	}
-	return t
-}
-
-func offer(ports ...uint64) *mesos.Offer {
-	return &mesos.Offer{Resources: []*mesos.Resource{rangeResource("ports", ports)}}
 }
