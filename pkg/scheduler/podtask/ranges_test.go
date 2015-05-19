@@ -95,7 +95,7 @@ func TestRanges_Partition(t *testing.T) {
 		{Ranges{{0, 10}, {12, 20}}, 10, Ranges{{0, 9}, {12, 20}}, true},
 	} {
 		if got, found := tt.Partition(tt.n); !reflect.DeepEqual(got, tt.want) || found != tt.found {
-			t.Errorf("test #%d: Sub(%v, %v): got: (%v, %t), want: (%v, %t)", i, tt.Ranges, tt.n, got, found, tt.want, tt.found)
+			t.Errorf("test #%d: Partition(%v, %v): got: (%v, %t), want: (%v, %t)", i, tt.Ranges, tt.n, got, found, tt.want, tt.found)
 		}
 	}
 }
