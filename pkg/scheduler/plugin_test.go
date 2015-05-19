@@ -19,6 +19,7 @@ import (
 	"github.com/mesos/mesos-go/mesosutil"
 	bindings "github.com/mesos/mesos-go/scheduler"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
+	schedcfg "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/ha"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"github.com/stretchr/testify/assert"
@@ -135,6 +136,7 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 		Client: client.NewOrDie(&client.Config{Host: testApiServer.URL, Version: testapi.Version()}),
 		PodsListWatch: &podListWatch.ListWatch,
 		ScheduleFunc: FCFSScheduleFunc,
+		Schedcfg: *schedcfg.CreateDefaultConfig(),
 	})
 
 	assert.NotNil(testScheduler.client, "client is nil")
