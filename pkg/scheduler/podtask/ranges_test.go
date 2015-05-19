@@ -8,6 +8,8 @@ import (
 )
 
 func TestNewPortRanges(t *testing.T) {
+	t.Parallel()
+
 	for i, tt := range []struct {
 		Ranges
 		want Ranges
@@ -26,6 +28,8 @@ func TestNewPortRanges(t *testing.T) {
 }
 
 func TestRanges_Squash(t *testing.T) {
+	t.Parallel()
+
 	for i, tt := range []struct {
 		Ranges
 		want Ranges
@@ -47,6 +51,8 @@ func TestRanges_Squash(t *testing.T) {
 }
 
 func TestRanges_Find(t *testing.T) {
+	t.Parallel()
+
 	for i, tt := range []struct {
 		Ranges
 		n    uint64
@@ -72,6 +78,8 @@ func TestRanges_Find(t *testing.T) {
 }
 
 func TestRanges_Partition(t *testing.T) {
+	t.Parallel()
+
 	for i, tt := range []struct {
 		Ranges
 		n     uint64
@@ -80,7 +88,6 @@ func TestRanges_Partition(t *testing.T) {
 	}{
 		{Ranges{}, 0, Ranges{}, false},
 		{Ranges{{0, 10}, {12, 20}}, 100, Ranges{{0, 10}, {12, 20}}, false},
-		{Ranges{{0, 10}, {12, 20}}, 0, Ranges{{1, 10}, {12, 20}}, true},
 		{Ranges{{0, 10}, {12, 20}}, 0, Ranges{{1, 10}, {12, 20}}, true},
 		{Ranges{{0, 10}, {12, 20}}, 13, Ranges{{0, 10}, {12, 12}, {14, 20}}, true},
 		{Ranges{{0, 10}, {12, 20}}, 5, Ranges{{0, 4}, {6, 10}, {12, 20}}, true},
