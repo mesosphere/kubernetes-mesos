@@ -96,7 +96,10 @@ func (lw *MockPodsListWatch) Delete(pod *api.Pod) {
 func NewTestPod(i int) *api.Pod {
 	return &api.Pod{
 		TypeMeta:   api.TypeMeta{APIVersion: testapi.Version()},
-		ObjectMeta: api.ObjectMeta{Name: fmt.Sprintf("pod%d", i)},
+		ObjectMeta: api.ObjectMeta{
+			Name: fmt.Sprintf("pod%d", i),
+			Namespace: "default",
+		},
 		Spec: api.PodSpec{
 			Containers: []api.Container{{Ports: []api.ContainerPort{}}},
 		},
