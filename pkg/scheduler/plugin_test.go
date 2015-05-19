@@ -9,8 +9,10 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/testapi"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/util"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	"github.com/mesos/mesos-go/mesosutil"
@@ -59,14 +61,10 @@ func newPodList(nPods int, nPorts int) *api.PodList {
 	}
 }
 
-func makeTestServer(t *testing.T, namespace string, podResponse, watchPodResponse, serviceResponse, endpointsResponse serverResponse) (*httptest.Server, *util.FakeHandler) {
+func makeTestServer(t *testing.T, namespace string, podResponse, serviceResponse, endpointsResponse serverResponse) (*httptest.Server, *util.FakeHandler) {
 	fakePodHandler := util.FakeHandler{
 		StatusCode:   podResponse.statusCode,
 		ResponseBody: runtime.EncodeOrDie(testapi.Codec(), podResponse.obj.(runtime.Object)),
-	}
-	fakeWatchPodHandler := util.FakeHandler{
-		StatusCode:   watchPodResponse.statusCode,
-		ResponseBody: runtime.EncodeOrDie(testapi.Codec(), watchPodResponse.obj.(runtime.Object)),
 	}
 	fakeServiceHandler := util.FakeHandler{
 		StatusCode:   serviceResponse.statusCode,
@@ -76,9 +74,9 @@ func makeTestServer(t *testing.T, namespace string, podResponse, watchPodRespons
 		StatusCode:   endpointsResponse.statusCode,
 		ResponseBody: runtime.EncodeOrDie(testapi.Codec(), endpointsResponse.obj.(runtime.Object)),
 	}
+
 	mux := http.NewServeMux()
 	mux.Handle(testapi.ResourcePath("pods", namespace, ""), &fakePodHandler)
-	mux.Handle(testapi.ResourcePath("watch/pods", namespace, ""), &fakeWatchPodHandler)
 	mux.Handle(testapi.ResourcePath("services", "", ""), &fakeServiceHandler)
 	mux.Handle(testapi.ResourcePath("endpoints", namespace, ""), &fakeEndpointsHandler)
 	mux.Handle(testapi.ResourcePath("endpoints/", namespace, ""), &fakeEndpointsHandler)
@@ -103,10 +101,19 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 	// create fake apiserver
 	testApiServer, _ := makeTestServer(t, api.NamespaceDefault,
 		serverResponse{http.StatusOK, newPodList(0, 0)},
-		serverResponse{http.StatusOK, newPodList(0, 0)},
 		serverResponse{http.StatusOK, &api.ServiceList{}},
 		serverResponse{http.StatusOK, &api.Endpoints{}})
 	defer testApiServer.Close()
+
+	// create a fake pod watch
+	podListWatch := cache.ListWatch{
+		WatchFunc: func (resourceVersion string) (watch.Interface, error) {
+			return watch.NewFake(), nil
+		},
+		ListFunc: func() (runtime.Object, error) {
+			return &api.PodList{}, nil
+		},
+	}
 
 	// create scheduler
 	testScheduler := New(Config{
@@ -115,6 +122,7 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 			mesosutil.NewCommandInfo("executor-cmd"),
 		),
 		Client: client.NewOrDie(&client.Config{Host: testApiServer.URL, Version: testapi.Version()}),
+		PodsListWatch: &podListWatch,
 	})
 
 	assert.NotNil(testScheduler.client, "client is nil")
