@@ -66,21 +66,21 @@ func NewMockPodsListWatch(initialPodList api.PodList) *MockPodsListWatch {
 	}
 	return &lw
 }
-func (lw *MockPodsListWatch) Add(pod api.Pod) {
-	lw.list.Items = append(lw.list.Items, pod)
-	lw.fakeWatcher.Add(&pod)
+func (lw *MockPodsListWatch) Add(pod *api.Pod) {
+	lw.list.Items = append(lw.list.Items, *pod)
+	lw.fakeWatcher.Add(pod)
 }
-func (lw *MockPodsListWatch) Modify(pod api.Pod) {
+func (lw *MockPodsListWatch) Modify(pod *api.Pod) {
 	for i, otherPod := range lw.list.Items {
 		if otherPod.Name == pod.Name {
-			lw.list.Items[i] = pod
-			lw.fakeWatcher.Modify(&pod)
+			lw.list.Items[i] = *pod
+			lw.fakeWatcher.Modify(pod)
 			return
 		}
 	}
 	log.Panicf("Cannot find pod %v to modify in MockPodsListWatch", pod.Name)
 }
-func (lw *MockPodsListWatch) Delete(pod api.Pod) {
+func (lw *MockPodsListWatch) Delete(pod *api.Pod) {
 	for i, otherPod := range lw.list.Items {
 		if otherPod.Name == pod.Name {
 			lw.list.Items = append(lw.list.Items[:i], lw.list.Items[i+1:]...)
