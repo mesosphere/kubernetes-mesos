@@ -133,6 +133,7 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 		),
 		Client: client.NewOrDie(&client.Config{Host: testApiServer.URL, Version: testapi.Version()}),
 		PodsListWatch: &podListWatch.ListWatch,
+		ScheduleFunc: FCFSScheduleFunc,
 	})
 
 	assert.NotNil(testScheduler.client, "client is nil")
