@@ -105,14 +105,14 @@ func (rs Ranges) Partition(n uint64) (Ranges, bool) {
 	}
 
 	pn := make(Ranges, 0, len(rs)+1)
-	switch pn = append(pn, rs[:i+1]...); {
-	case pn[i][0] == n:
-		pn[i][0]++
-	case pn[i][1] == n:
-		pn[i][1]--
-	default:
-		pn = append(pn, Range{n + 1, pn[i][1]})
-		pn[i][1] = n - 1
+	switch pn = append(pn, rs[:i]...); {
+	case rs[i][0] == rs[i][1]: // delete
+	case rs[i][0] == n: // increment lower bound
+		pn = append(pn, Range{rs[i][0] + 1, rs[i][1]})
+	case rs[i][1] == n: // decrement upper bound
+		pn = append(pn, Range{rs[i][0], rs[i][1] - 1})
+	default: // split
+		pn = append(pn, Range{rs[i][0], n - 1}, Range{n + 1, rs[i][1]})
 	}
 	return append(pn, rs[i+1:]...), true
 }
