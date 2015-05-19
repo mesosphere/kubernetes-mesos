@@ -81,10 +81,10 @@ func TestPopEmptyPQ(t *testing.T) {
 }
 
 type testjob struct {
-	d time.Duration
-	t time.Time
+	d        time.Duration
+	t        time.Time
 	deadline *time.Time
-	uid string
+	uid      string
 	instance int
 }
 
@@ -172,7 +172,7 @@ func TestDQ_ordered_add_pop(t *testing.T) {
 	before := time.Now()
 	idx := int32(-1)
 	ch := make(chan bool, 3)
-	for _ = range finished {
+	for range finished {
 		go func() {
 			var ok bool
 			x := dq.Pop()

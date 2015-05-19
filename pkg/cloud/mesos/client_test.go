@@ -215,9 +215,9 @@ func Test_listSlaves(t *testing.T) {
 	}
 
 	expectedHostnames := map[string]struct{}{
-		"mesos1.internal.company.com": struct{}{},
-		"mesos2.internal.company.com": struct{}{},
-		"mesos3.internal.company.com": struct{}{},
+		"mesos1.internal.company.com": {},
+		"mesos2.internal.company.com": {},
+		"mesos3.internal.company.com": {},
 	}
 
 	actualHostnames := make(map[string]struct{})
