@@ -2,10 +2,10 @@ package podtask
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
-	log "github.com/golang/glog"
 )
 
 const PortMappingLabelKey = "k8s.mesosphere.io/portMapping"
@@ -23,85 +23,99 @@ func NewPortMapper(pod *api.Pod) PortMapper {
 	return "wildcard"
 }
 
-// PortMappers contains all implementations of PortMapper keyed by their string
-// value.
-var PortMappers = map[string]func(*T, Ranges) ([]PortMapping, error){
-	"fixed":    FixedPorts,
-	"wildcard": WildcardPorts,
-}
-
-// PortMap computes PortMappings for a given Task with the given offered port Ranges.
-func (m PortMapper) PortMap(t *T, offered Ranges) ([]PortMapping, error) {
-	pm, ok := PortMappers[string(m)]
-	if !ok {
-		log.Warningf("illegal host-port mapping spec %q, defaulting to fixed", m)
-		pm = FixedPorts
+// PortMap computes PortMappings for the given Containers with the given offered port Ranges.
+func (m PortMapper) PortMap(offered Ranges, pod string, cs ...api.Container) ([]PortMapping, error) {
+	switch m {
+	case "wildcard":
+		return WildcardPorts(offered, pod, cs...)
+	case "fixed":
+		fallthrough
+	default:
+		return FixedPorts(offered, pod, cs...)
 	}
-	return pm(t, offered)
 }
 
 // PortMapping represents a mapping from container ports to host ports for a
 // given pod container.
 type PortMapping struct {
-	*api.Pod
-	*api.Container
-	ContainerPort uint64
-	HostPort      uint64
+	PodName        string
+	ContainerIndex int
+	PortIndex      int
+	HostPort       uint64
 }
 
-// FixedPorts maps a task's container's HostPorts to the same mesos offered ports.
+// FixedPorts maps container's HostPorts to the same Mesos offered ports.
 // It ignores asked wildcard host ports (== 0).
-func FixedPorts(task *T, offered Ranges) ([]PortMapping, error) {
-	return ports(task, offered, func(p *api.ContainerPort) bool {
+func FixedPorts(offered Ranges, pod string, cs ...api.Container) ([]PortMapping, error) {
+	return portmap(offered, pod, cs, func(p *api.ContainerPort) bool {
 		return p.HostPort != 0
 	})
 }
 
 // WildcardPorts is the same as FixedPorts, except that .HostPorts of 0
 // are mapped to any offered port.
-func WildcardPorts(task *T, offered Ranges) ([]PortMapping, error) {
-	return ports(task, offered, func(_ *api.ContainerPort) bool { return true })
+func WildcardPorts(offered Ranges, pod string, cs ...api.Container) ([]PortMapping, error) {
+	return portmap(offered, pod, cs, func(_ *api.ContainerPort) bool {
+		return true
+	})
 }
 
-// ports maps matched task's container's host ports to offered ports.
-func ports(task *T, offered Ranges, match func(*api.ContainerPort) bool) ([]PortMapping, error) {
-	mapped := map[uint64]PortMapping{}
-	missing := []uint64{}
-	containers := task.Pod.Spec.Containers
+// byHostPort is an auxiliary type used to sort []PortMappings by their
+// HostPorts.
+type byHostPort []PortMapping
 
-	for i := range containers {
-		for _, p := range containers[i].Ports {
-			if !match(&p) {
-				continue
-			}
+func (pm byHostPort) Len() int           { return len(pm) }
+func (pm byHostPort) Less(i, j int) bool { return pm[i].HostPort < pm[j].HostPort }
+func (pm byHostPort) Swap(i, j int)      { pm[i], pm[j] = pm[j], pm[i] }
 
-			m := PortMapping{
-				Pod:           &task.Pod,
-				Container:     &containers[i],
-				ContainerPort: uint64(p.ContainerPort),
-				HostPort:      uint64(p.HostPort),
-			}
+// portmap maps matched task's container's host ports to offered ports.
+func portmap(offered Ranges, pod string, cs []api.Container, match func(*api.ContainerPort) bool) ([]PortMapping, error) {
+	if len(cs) == 0 {
+		return []PortMapping{}, nil
+	}
 
-			if m2, ok := mapped[m.HostPort]; ok {
-				return nil, &DuplicateHostPortError{m, m2}
-			} else if offered, ok = offered.Partition(m.HostPort); !ok {
-				missing = append(missing, m.HostPort)
-			} else {
-				mapped[m.HostPort] = m
+	var wanted []PortMapping
+	for i := range cs {
+		for j, p := range cs[i].Ports {
+			if match(&p) {
+				wanted = append(wanted, PortMapping{
+					PodName:        pod,
+					ContainerIndex: i,
+					PortIndex:      j,
+					HostPort:       uint64(p.HostPort),
+				})
 			}
 		}
 	}
+	// higher ports have highest priority, wildcard has the lowest
+	sort.Sort(sort.Reverse(byHostPort(wanted)))
 
-	if len(missing) > 0 {
-		return nil, &PortAllocationError{Pod: &task.Pod, Ports: missing}
+	taken := make(map[uint64]int, len(wanted))
+	for i := range wanted {
+		if offered.Size() < uint64(len(wanted)-len(taken)) {
+			break // no more available ports in the offer
+		} else if wanted[i].HostPort == 0 {
+			wanted[i].HostPort = offered.Min()
+		}
+
+		if j, ok := taken[wanted[i].HostPort]; ok {
+			return nil, &DuplicateHostPortError{wanted[i], wanted[j]}
+		} else if offered, ok = offered.Partition(wanted[i].HostPort); ok {
+			taken[wanted[i].HostPort] = i
+		}
 	}
 
-	mappings := make([]PortMapping, 0, len(mapped))
-	for _, m := range mapped {
-		mappings = append(mappings, m)
+	if len(taken) == len(wanted) {
+		return wanted, nil
 	}
 
-	return mappings, nil
+	missing := make([]uint64, 0, len(wanted)-len(taken))
+	for _, m := range wanted {
+		if _, ok := taken[m.HostPort]; !ok {
+			missing = append(missing, m.HostPort)
+		}
+	}
+	return nil, &PortAllocationError{PodName: pod, Ports: missing}
 }
 
 // Errors
@@ -109,8 +123,8 @@ type (
 	// PortAllocationError happens when a some ports can't be allocated from the
 	// offered ports.
 	PortAllocationError struct {
-		*api.Pod
-		Ports []uint64
+		PodName string
+		Ports   []uint64
 	}
 	// DuplicateHostPortError happens when the same host port is used for more than
 	// one container in a pod.
@@ -119,17 +133,17 @@ type (
 
 // Error implements the error interface.
 func (err *PortAllocationError) Error() string {
-	return fmt.Sprintf("Failed to allocate ports %v for pod %s", err.Ports, err.Pod.Name)
+	return fmt.Sprintf("Failed to allocate ports %v for pod %s", err.Ports, err.PodName)
 }
 
 // Error implements the error interface.
 func (err *DuplicateHostPortError) Error() string {
 	return fmt.Sprintf(
-		"Host port %d wanted by (%s:%s) and (%s:%s)",
+		"Host port %d wanted by containers (%s:%s) and (%s:%s)",
 		err.m1.HostPort,
-		err.m1.Pod.Name,
-		err.m1.Container.Name,
-		err.m2.Pod.Name,
-		err.m2.Container.Name,
+		err.m1.PodName,
+		err.m1.ContainerIndex,
+		err.m2.PodName,
+		err.m2.ContainerIndex,
 	)
 }

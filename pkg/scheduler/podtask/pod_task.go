@@ -151,17 +151,18 @@ func (t *T) FillFromDetails(details *mesos.Offer) error {
 		Memory:  containerMem,
 	}
 
-	if mapping, err := t.PortMap(t, NewPortRanges(details)); err != nil {
+	mapping, err := t.PortMap(NewPortRanges(details), t.Pod.Name, t.Pod.Spec.Containers...)
+	if err != nil {
 		t.Reset()
 		return err
-	} else {
-		ports := []uint64{}
-		for _, entry := range mapping {
-			ports = append(ports, entry.HostPort)
-		}
-		t.Spec.PortMap = mapping
-		t.Spec.Ports = ports
 	}
+
+	ports := []uint64{}
+	for _, entry := range mapping {
+		ports = append(ports, entry.HostPort)
+	}
+	t.Spec.PortMap = mapping
+	t.Spec.Ports = ports
 
 	// hostname needs of the executor needs to match that of the offer, otherwise
 	// the kubelet node status checker/updater is very unhappy
@@ -209,7 +210,7 @@ func (t *T) AcceptOffer(offer *mesos.Offer) bool {
 			mem = *resource.GetScalar().Value
 		}
 	}
-	if _, err := t.PortMap(t, NewPortRanges(offer)); err != nil {
+	if _, err := t.PortMap(NewPortRanges(offer), t.Pod.Name, t.Pod.Spec.Containers...); err != nil {
 		log.V(3).Info(err)
 		return false
 	}

@@ -27,45 +27,39 @@ func TestNewPortMapper(t *testing.T) {
 func TestPortMapper_PortMap(t *testing.T) {
 	t.Parallel()
 
-	task, _ := fakePodTask("foo")
-	ports := func(hostports ...int) *T {
-		task.Pod.Spec = api.PodSpec{
-			Containers: []api.Container{{
-				Ports: make([]api.ContainerPort, len(hostports)),
-			}},
-		}
-		for i, port := range hostports {
-			task.Pod.Spec.Containers[0].Ports[i].HostPort = port
-		}
-		return task
-	}
+	const pod = "foo"
 
 	for i, test := range []struct {
 		PortMapper
-		*T
+		api.Container
 		Ranges
 		want []PortMapping
 		err  error
 	}{
-		{"fixed", ports(), Ranges{{1, 1}}, []PortMapping{}, nil},
-		{"fixed", ports(123, 123), Ranges{{1, 1}}, nil, &DuplicateHostPortError{
-			PortMapping{&task.Pod, &task.Pod.Spec.Containers[0], 0, 123},
-			PortMapping{&task.Pod, &task.Pod.Spec.Containers[0], 1, 123},
-		}},
-		{"wildcard", ports(), Ranges{}, []PortMapping{}, nil},
-		{"wildcard", ports(), Ranges{{1, 1}}, []PortMapping{}, nil},
-		{"wildcard", ports(123), Ranges{{1, 1}}, nil, &PortAllocationError{&task.Pod, []uint64{123}}},
-		{"wildcard", ports(0, 123), Ranges{{1, 1}}, nil, &PortAllocationError{&task.Pod, []uint64{123}}},
-		{"wildcard", ports(0, 1), Ranges{{1, 1}}, nil, &PortAllocationError{&task.Pod, nil}},
-		{"wildcard", ports(0, 1), Ranges{{1, 2}}, []PortMapping{
-			{&task.Pod, &task.Pod.Spec.Containers[0], 1, 1},
-			{&task.Pod, &task.Pod.Spec.Containers[0], 0, 2},
-		}, nil},
+		{"fixed", container(), Ranges{}, []PortMapping(nil), nil},
+		{"fixed", container(1, 2), Ranges{}, nil, &PortAllocationError{pod, []uint64{2, 1}}},
+		{"fixed", container(0, 124, 123), Ranges{{100, 150}}, []PortMapping{
+			{pod, 0, 1, 124}, {pod, 0, 2, 123}}, nil},
+		{"fixed", container(123, 123), Ranges{{100, 150}}, nil,
+			&DuplicateHostPortError{PortMapping{pod, 0, 1, 123}, PortMapping{pod, 0, 0, 123}}},
+		{"wildcard", container(123, 123), Ranges{{100, 150}}, nil,
+			&DuplicateHostPortError{PortMapping{pod, 0, 1, 123}, PortMapping{pod, 0, 0, 123}}},
+		{"wildcard", container(), Ranges{}, []PortMapping(nil), nil},
+		{"wildcard", container(123), Ranges{{1, 1}}, nil, &PortAllocationError{pod, []uint64{123}}},
+		{"wildcard", container(0, 0, 1), Ranges{{1, 10}}, []PortMapping{{pod, 0, 2, 1}, {pod, 0, 0, 2}, {pod, 0, 1, 3}}, nil},
 	} {
-		got, err := test.PortMap(test.T, test.Ranges)
+		got, err := test.PortMap(test.Ranges, pod, test.Container)
 		if !reflect.DeepEqual(got, test.want) || !reflect.DeepEqual(err, test.err) {
 			t.Errorf("\ntest #%d: %q\ngot:  (%+v, %#v)\nwant: (%+v, %#v)",
 				i, test.PortMapper, got, err, test.want, test.err)
 		}
 	}
+}
+
+func container(hostports ...int) api.Container {
+	container := api.Container{Ports: make([]api.ContainerPort, len(hostports))}
+	for i, port := range hostports {
+		container.Ports[i].HostPort = port
+	}
+	return container
 }
