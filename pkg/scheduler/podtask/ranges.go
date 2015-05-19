@@ -108,6 +108,12 @@ func (rs Ranges) Partition(n uint64) (Ranges, bool) {
 	return append(pn, rs[i+1:]...), true
 }
 
+// Min returns the minimum number in Ranges. It will panic on empty Ranges.
+func (rs Ranges) Min() uint64 { return rs[0][0] }
+
+// Max returns the maximum number in Ranges. It will panic on empty Ranges.
+func (rs Ranges) Max() uint64 { return rs[len(rs)-1][1] }
+
 // resource returns a *mesos.Resource with the given name and Ranges.
 func (rs Ranges) resource(name string) *mesos.Resource {
 	vr := make([]*mesos.Value_Range, len(rs))
@@ -122,18 +128,4 @@ func (rs Ranges) resource(name string) *mesos.Resource {
 		Type:   mesos.Value_RANGES.Enum(),
 		Ranges: &mesos.Value_Ranges{Range: vr},
 	}
-}
-
-func min(a, b uint64) uint64 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b uint64) uint64 {
-	if a > b {
-		return a
-	}
-	return b
 }

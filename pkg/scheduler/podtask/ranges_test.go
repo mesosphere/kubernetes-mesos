@@ -99,3 +99,24 @@ func TestRanges_Partition(t *testing.T) {
 		}
 	}
 }
+
+func TestRanges_MinMax(t *testing.T) {
+	t.Parallel()
+
+	for i, tt := range []struct {
+		Ranges
+		min, max uint64
+	}{
+		{Ranges{{1, 10}, {100, 1000}}, 1, 1000},
+		{Ranges{{0, 10}, {12, 20}}, 0, 20},
+		{Ranges{{5, 10}}, 5, 10},
+		{Ranges{{0, 0}}, 0, 0},
+	} {
+		if got, want := tt.Min(), tt.min; got != want {
+			t.Errorf("test #%d: Min(%v): got: %d, want: %d", i, tt.Ranges, got, want)
+		}
+		if got, want := tt.Max(), tt.max; got != want {
+			t.Errorf("test #%d: Max(%v): got: %d, want: %d", i, tt.Ranges, got, want)
+		}
+	}
+}
