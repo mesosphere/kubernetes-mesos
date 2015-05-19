@@ -87,25 +87,25 @@ func (rs Ranges) Find(n uint64) int {
 	return -1
 }
 
-// Sub returns Ranges without n and a boolean indicating if it was found or not.
-// TODO(tsenart): Fix
-func (rs Ranges) Sub(n uint64) (Ranges, bool) {
+// Partition partitions Ranges around n. It returns the partitioned Ranges
+// and a boolean indicating if it n was found.
+func (rs Ranges) Partition(n uint64) (Ranges, bool) {
 	i := rs.Find(n)
 	if i < 0 {
 		return rs, false
 	}
 
-	sub := append(Ranges{}, rs[:i]...)
-	if lo := min(n-1, 0); rs[i][0] < lo {
-		sub = append(sub, Range{rs[i][0], lo})
+	pn := make(Ranges, 0, len(rs)+1)
+	switch pn = append(pn, rs[:i+1]...); {
+	case pn[i][0] == n:
+		pn[i][0]++
+	case pn[i][1] == n:
+		pn[i][1]--
+	default:
+		pn = append(pn, Range{n + 1, pn[i][1]})
+		pn[i][1] = n - 1
 	}
-
-	if hi := n + 1; rs[i][1] > hi {
-		sub = append(sub, Range{hi, rs[i][1]})
-	}
-	return append(sub, rs[i+1:]...), true
-
-	// return sub.Squash(), true
+	return append(pn, rs[i+1:]...), true
 }
 
 // resource returns a *mesos.Resource with the given name and Ranges.

@@ -71,18 +71,23 @@ func TestRanges_Find(t *testing.T) {
 	}
 }
 
-func TestRanges_Sub(t *testing.T) {
+func TestRanges_Partition(t *testing.T) {
 	for i, tt := range []struct {
 		Ranges
 		n     uint64
 		want  Ranges
 		found bool
 	}{
-		{Ranges{{0, 10}}, 0, Ranges{{1, 10}}, true},
-		{Ranges{{0, 10}}, 5, Ranges{{0, 4}, {6, 10}}, true},
-		{Ranges{{0, 10}}, 10, Ranges{{0, 9}}, true},
+		{Ranges{}, 0, Ranges{}, false},
+		{Ranges{{0, 10}, {12, 20}}, 100, Ranges{{0, 10}, {12, 20}}, false},
+		{Ranges{{0, 10}, {12, 20}}, 0, Ranges{{1, 10}, {12, 20}}, true},
+		{Ranges{{0, 10}, {12, 20}}, 0, Ranges{{1, 10}, {12, 20}}, true},
+		{Ranges{{0, 10}, {12, 20}}, 13, Ranges{{0, 10}, {12, 12}, {14, 20}}, true},
+		{Ranges{{0, 10}, {12, 20}}, 5, Ranges{{0, 4}, {6, 10}, {12, 20}}, true},
+		{Ranges{{0, 10}, {12, 20}}, 19, Ranges{{0, 10}, {12, 18}, {20, 20}}, true},
+		{Ranges{{0, 10}, {12, 20}}, 10, Ranges{{0, 9}, {12, 20}}, true},
 	} {
-		if got, found := tt.Sub(tt.n); !reflect.DeepEqual(got, tt.want) || found != tt.found {
+		if got, found := tt.Partition(tt.n); !reflect.DeepEqual(got, tt.want) || found != tt.found {
 			t.Errorf("test #%d: Sub(%v, %v): got: (%v, %t), want: (%v, %t)", i, tt.Ranges, tt.n, got, found, tt.want, tt.found)
 		}
 	}

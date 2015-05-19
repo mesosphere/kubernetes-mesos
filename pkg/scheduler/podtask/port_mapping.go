@@ -84,7 +84,7 @@ func ports(task *T, offered Ranges, match func(*api.ContainerPort) bool) ([]Port
 
 			if m2, ok := mapped[m.HostPort]; ok {
 				return nil, &DuplicateHostPortError{m, m2}
-			} else if offered, ok = offered.Sub(m.HostPort); !ok {
+			} else if offered, ok = offered.Partition(m.HostPort); !ok {
 				missing = append(missing, m.HostPort)
 			} else {
 				mapped[m.HostPort] = m
