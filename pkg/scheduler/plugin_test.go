@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -95,6 +96,52 @@ func TestPlugin_New(t *testing.T) {
 	assert.NotNil(p)
 }
 
+// Create mock of pods ListWatch, usually listening on the apiserver pods watch endpoint
+type MockPodsListWatch struct {
+	ListWatch cache.ListWatch
+	fakeWatcher *watch.FakeWatcher
+	list api.PodList
+}
+func NewMockPodsListWatch(initialPodList api.PodList) *MockPodsListWatch {
+	lw := MockPodsListWatch{
+		fakeWatcher: watch.NewFake(),
+		list: initialPodList,
+	}
+	lw.ListWatch = cache.ListWatch{
+		WatchFunc: func (resourceVersion string) (watch.Interface, error) {
+			return lw.fakeWatcher, nil
+		},
+		ListFunc: func() (runtime.Object, error) {
+			return &lw.list, nil
+		},
+	}
+	return &lw
+}
+func (lw *MockPodsListWatch) Add(pod api.Pod) {
+	lw.list.Items = append(lw.list.Items, pod)
+	lw.fakeWatcher.Add(&pod)
+}
+func (lw *MockPodsListWatch) Modify(pod api.Pod) {
+	for i, otherPod := range lw.list.Items {
+		if otherPod.Name == pod.Name {
+			lw.list.Items[i] = pod
+			lw.fakeWatcher.Modify(&pod)
+			return
+		}
+	}
+	log.Panicf("Cannot find pod %v to modify in MockPodsListWatch", pod.Name)
+}
+func (lw *MockPodsListWatch) Delete(pod api.Pod) {
+	for i, otherPod := range lw.list.Items {
+		if otherPod.Name == pod.Name {
+			lw.list.Items = append(lw.list.Items[:i], lw.list.Items[i+1:]...)
+			lw.fakeWatcher.Delete(&otherPod)
+			return
+		}
+	}
+	log.Panicf("Cannot find pod %v to delete in MockPodsListWatch", pod.Name)
+}
+
 func TestPlugin_NewFromScheduler(t *testing.T) {
 	assert := assert.New(t)
 
@@ -106,14 +153,7 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 	defer testApiServer.Close()
 
 	// create a fake pod watch
-	podListWatch := cache.ListWatch{
-		WatchFunc: func (resourceVersion string) (watch.Interface, error) {
-			return watch.NewFake(), nil
-		},
-		ListFunc: func() (runtime.Object, error) {
-			return &api.PodList{}, nil
-		},
-	}
+	podListWatch := NewMockPodsListWatch(api.PodList{})
 
 	// create scheduler
 	testScheduler := New(Config{
@@ -122,7 +162,7 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 			mesosutil.NewCommandInfo("executor-cmd"),
 		),
 		Client: client.NewOrDie(&client.Config{Host: testApiServer.URL, Version: testapi.Version()}),
-		PodsListWatch: &podListWatch,
+		PodsListWatch: &podListWatch.ListWatch,
 	})
 
 	assert.NotNil(testScheduler.client, "client is nil")
