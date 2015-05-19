@@ -85,7 +85,7 @@ docker-compose rm
 
 The docker-compose.yml file references multiple different docker images.
 
-The one that contains just kubernetes-mesos (not mesos or etcd) can be built with the following:
+The one that builds just kubernetes-mesos (not mesos or etcd) can be built with the following:
 
 ```
 ./docker/km/build.sh

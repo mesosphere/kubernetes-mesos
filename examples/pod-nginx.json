@@ -1,31 +1,30 @@
 {
   "kind": "Pod",
-  "apiVersion": "v1beta1",
-  "id": "nginx-id-01",
-  "desiredState": {
-    "manifest": {
-      "version": "v1beta1",
-      "containers": [{
-        "name": "nginx-01",
-        "image": "library/nginx",
-        "ports": [{
-          "containerPort": 80,
-          "name": "http"
-        }],
-        "livenessProbe": {
-          "enabled": true,
-          "type": "http",
-          "initialDelaySeconds": 30,
-          "httpGet": {
-            "path": "/",
-            "port": "80"
-          }
-        }
-      }]
+  "apiVersion": "v1beta3",
+  "metadata": {
+    "name": "nginx-id-01",
+    "labels": {
+      "name": "foo"
     }
   },
-  "labels": {
-    "name": "foo",
-    "cluster": "gce"
+  "spec": {
+    "containers": [{
+      "name": "nginx-01",
+      "image": "library/nginx",
+      "ports": [{
+        "containerPort": 80,
+        "protocol": "TCP",
+        "name": "http"
+      }],
+      "livenessProbe": {
+        "enabled": true,
+        "type": "http",
+        "initialDelaySeconds": 30,
+        "httpGet": {
+          "path": "/",
+          "port": "80"
+        }
+      }
+    }]
   }
 }

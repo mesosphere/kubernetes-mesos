@@ -1,0 +1,66 @@
+diff --git a/contrib/mesos/pkg/executor/executor.go b/contrib/mesos/pkg/executor/executor.go
+index c9a9323..b572dc3 100644
+--- a/contrib/mesos/pkg/executor/executor.go
++++ b/contrib/mesos/pkg/executor/executor.go
+@@ -42,7 +42,7 @@ import (
+ )
+ 
+ const (
+-	containerPollTime = 300 * time.Millisecond
++	containerPollTime = 1 * time.Second
+ 	launchGracePeriod = 5 * time.Minute
+ )
+ 
+@@ -489,7 +489,18 @@ func (k *KubernetesExecutor) launchTask(driver bindings.ExecutorDriver, taskId s
+ 
+ 	// Delay reporting 'task running' until container is up.
+ 	psf := podStatusFunc(func() (*api.PodStatus, error) {
+-		return k.podStatusFunc(k.kl, pod)
++		status, err := k.podStatusFunc(k.kl, pod)
++		if err != nil {
++			return nil, err
++		}
++		status.Phase = kubelet.GetPhase(&pod.Spec, status.ContainerStatuses)
++		hostIP, err := k.kl.GetHostIP()
++		if err != nil {
++			log.Errorf("Cannot get host IP: %v", err)
++		} else {
++			status.HostIP = hostIP.String()
++		}
++		return status, nil
+ 	})
+ 
+ 	go k._launchTask(driver, taskId, podFullName, psf)
+@@ -529,6 +540,8 @@ func (k *KubernetesExecutor) _launchTask(driver bindings.ExecutorDriver, taskId,
+ 					log.Errorf("failed to marshal pod status result: %v", err)
+ 				}
+ 			}
++		} else {
++			log.V(2).Infof("failed to get status for pod %q: %v", podFullName, err)
+ 		}
+ 		return
+ 	}
+diff --git a/pkg/kubelet/kubelet.go b/pkg/kubelet/kubelet.go
+index e2fd10d..37daf5f 100644
+--- a/pkg/kubelet/kubelet.go
++++ b/pkg/kubelet/kubelet.go
+@@ -1963,8 +1963,8 @@ func (kl *Kubelet) tryUpdateNodeStatus() error {
+ 	return err
+ }
+ 
+-// getPhase returns the phase of a pod given its container info.
+-func getPhase(spec *api.PodSpec, info []api.ContainerStatus) api.PodPhase {
++// GetPhase returns the phase of a pod given its container info.
++func GetPhase(spec *api.PodSpec, info []api.ContainerStatus) api.PodPhase {
+ 	running := 0
+ 	waiting := 0
+ 	stopped := 0
+@@ -2083,7 +2083,7 @@ func (kl *Kubelet) generatePodStatus(pod *api.Pod) (api.PodStatus, error) {
+ 	}
+ 
+ 	// Assume info is ready to process
+-	podStatus.Phase = getPhase(spec, podStatus.ContainerStatuses)
++	podStatus.Phase = GetPhase(spec, podStatus.ContainerStatuses)
+ 	for _, c := range spec.Containers {
+ 		for i, st := range podStatus.ContainerStatuses {
+ 			if st.Name == c.Name {
