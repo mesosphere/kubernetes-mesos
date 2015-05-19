@@ -27,6 +27,24 @@ func TestNewPortRanges(t *testing.T) {
 	}
 }
 
+func TestRanges_Size(t *testing.T) {
+	t.Parallel()
+
+	for i, tt := range []struct {
+		Ranges
+		want uint64
+	}{
+		{Ranges{}, 0},
+		{Ranges{{0, 1}, {2, 10}}, 11},
+		{Ranges{{0, 1}, {2, 10}, {11, 100}}, 101},
+		{Ranges{{1, 1}, {2, 10}, {11, 100}}, 100},
+	} {
+		if got := tt.Size(); got != tt.want {
+			t.Errorf("test #%d, Size(%v): got: %v, want: %v", i, tt.Ranges, got, tt.want)
+		}
+	}
+}
+
 func TestRanges_Squash(t *testing.T) {
 	t.Parallel()
 

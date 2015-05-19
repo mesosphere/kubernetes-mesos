@@ -54,6 +54,15 @@ func (rs Ranges) Len() int           { return len(rs) }
 func (rs Ranges) Less(i, j int) bool { return rs[i][0] < rs[j][0] && rs[i][1] < rs[j][1] }
 func (rs Ranges) Swap(i, j int)      { rs[i], rs[j] = rs[j], rs[i] }
 
+// Size returns the sum of the Size of all Ranges.
+func (rs Ranges) Size() uint64 {
+	var sz uint64
+	for i := range rs {
+		sz += 1 + (rs[i][1] - rs[i][0])
+	}
+	return sz
+}
+
 // Squash merges overlapping and continuous Ranges. It assumes they're pre-sorted.
 func (rs Ranges) Squash() Ranges {
 	if len(rs) < 2 {
@@ -88,7 +97,7 @@ func (rs Ranges) Find(n uint64) int {
 }
 
 // Partition partitions Ranges around n. It returns the partitioned Ranges
-// and a boolean indicating if it n was found.
+// and a boolean indicating if n was found.
 func (rs Ranges) Partition(n uint64) (Ranges, bool) {
 	i := rs.Find(n)
 	if i < 0 {
