@@ -119,13 +119,13 @@ type (
 
 // Error implements the error interface.
 func (err *PortAllocationError) Error() string {
-	return fmt.Sprintf("Failed to allocate ports %v for pod %s.", err.Ports, err.Pod.Name)
+	return fmt.Sprintf("Failed to allocate ports %v for pod %s", err.Ports, err.Pod.Name)
 }
 
 // Error implements the error interface.
 func (err *DuplicateHostPortError) Error() string {
 	return fmt.Sprintf(
-		"Host port %d is defined for (%s:%s) and (%s:%s)",
+		"Host port %d wanted by (%s:%s) and (%s:%s)",
 		err.m1.HostPort,
 		err.m1.Pod.Name,
 		err.m1.Container.Name,
