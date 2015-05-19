@@ -615,7 +615,7 @@ func (k *deleter) deleteOne(pod *Pod) error {
 	}
 }
 
-// Create creates a scheduler plugin and all supporting background functions.
+// Create a scheduler plugin and all supporting background functions.
 func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}, mux *http.ServeMux) *PluginConfig {
 
 	// Watch and queue pods that need scheduling.
