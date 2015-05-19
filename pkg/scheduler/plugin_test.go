@@ -96,11 +96,13 @@ func (lw *MockPodsListWatch) Delete(pod *api.Pod) {
 }
 
 func NewTestPod(i int) *api.Pod {
+	name := fmt.Sprintf("pod%d", i)
 	return &api.Pod{
 		TypeMeta:   api.TypeMeta{APIVersion: testapi.Version()},
 		ObjectMeta: api.ObjectMeta{
-			Name: fmt.Sprintf("pod%d", i),
+			Name: name,
 			Namespace: "default",
+			SelfLink: fmt.Sprintf("http://1.2.3.4/api/v1beta1/pods/%v", i),
 		},
 		Spec: api.PodSpec{
 			Containers: []api.Container{{Ports: []api.ContainerPort{}}},
