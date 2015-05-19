@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/ha"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"github.com/stretchr/testify/assert"
+	"time"
 )
 
 func makeTestServer(t *testing.T, namespace string, pods *api.PodList) (*httptest.Server) {
@@ -91,6 +93,25 @@ func (lw *MockPodsListWatch) Delete(pod *api.Pod) {
 	log.Panicf("Cannot find pod %v to delete in MockPodsListWatch", pod.Name)
 }
 
+func NewTestPod(i int) *api.Pod {
+	return &api.Pod{
+		TypeMeta:   api.TypeMeta{APIVersion: testapi.Version()},
+		ObjectMeta: api.ObjectMeta{Name: fmt.Sprintf("pod%d", i)},
+		Spec: api.PodSpec{
+			Containers: []api.Container{{Ports: []api.ContainerPort{}}},
+		},
+		Status: api.PodStatus{
+			PodIP: fmt.Sprintf("1.2.3.%d", 4+i),
+			Conditions: []api.PodCondition{
+				{
+					Type:   api.PodReady,
+					Status: api.ConditionTrue,
+				},
+			},
+		},
+	}
+}
+
 func TestPlugin_NewFromScheduler(t *testing.T) {
 	assert := assert.New(t)
 
@@ -145,6 +166,12 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 
 	// wait for being elected
 	_ = <-elected
+
+	// fake new, unscheduled pod
+	pod1 := NewTestPod(1)
+	podListWatch.Add(pod1)
+
+	time.Sleep(2 * time.Second)
 
 	// stop plugin
 	schedulerProcess.End()
