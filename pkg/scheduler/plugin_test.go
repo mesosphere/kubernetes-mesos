@@ -208,6 +208,7 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 
 	// run plugin
 	p.Run(schedulerProcess.Terminal())
+	defer schedulerProcess.End()
 
 	// init scheduler
 	err := testScheduler.Init(schedulerProcess.Master(), p, http.DefaultServeMux)
@@ -232,9 +233,6 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 
 	// wait for failedScheduling event because there is no offer
 	assert.EventWithReason("failedScheduling", "failedScheduling event not received")
-
-	// stop plugin
-	schedulerProcess.End()
 }
 
 func TestDeleteOne_NonexistentPod(t *testing.T) {
