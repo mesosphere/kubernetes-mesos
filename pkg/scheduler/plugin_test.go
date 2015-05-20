@@ -120,6 +120,18 @@ func NewTestPod(i int) *api.Pod {
 	}
 }
 
+func NewTestOffer(i int) *mesos.Offer {
+	hostname := fmt.Sprintf("h%d", i)
+	cpus := util.NewScalarResource("cpus", 3.75)
+	mem := util.NewScalarResource("mem", 940)
+	return  &mesos.Offer{
+		Id: util.NewOfferID(fmt.Sprintf("offer%d", i)),
+		Hostname: &hostname,
+		SlaveId: util.NewSlaveID(hostname),
+		Resources: []*mesos.Resource{cpus, mem},
+	}
+}
+
 // Add assertions to reason about event streams
 type EventPredicate func (e *api.Event) bool
 type EventAssertions struct {
@@ -259,6 +271,12 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 
 	// wait for failedScheduling event because there is no offer
 	assert.EventWithReason("failedScheduling", "failedScheduling event not received")
+
+	// add some matching offer
+	offers1 := []*mesos.Offer{NewTestOffer(1)}
+	testScheduler.ResourceOffers(nil, offers1)
+
+	time.Sleep(2 * time.Second)
 }
 
 func TestDeleteOne_NonexistentPod(t *testing.T) {
