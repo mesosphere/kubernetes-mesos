@@ -305,7 +305,6 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 	// and wait for scheduled pod
 	assert.EventWithReason("scheduled")
 
-	time.Sleep(2 * time.Second)
 }
 
 func TestDeleteOne_NonexistentPod(t *testing.T) {
