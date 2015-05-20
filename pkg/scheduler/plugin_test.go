@@ -183,20 +183,30 @@ func (a *EventAssertions) EventWithReason(reason string, msgAndArgs ...interface
 }
 
 // Extend the MockSchedulerDriver with a blocking Join method
-type JoinableMockSchedulerDriver struct {
+type StatusMockSchedulerDriver struct {
 	MockSchedulerDriver
 	stopped chan struct{}
 	aborted chan struct{}
+	status mesos.Status
 }
-func (m *JoinableMockSchedulerDriver) Stop(b bool) (mesos.Status, error) {
+func (m *StatusMockSchedulerDriver) Start() (mesos.Status, error) {
+	if m.status != mesos.Status_DRIVER_NOT_STARTED {
+		return m.status, errors.New("cannot start driver which isn't in status NOT_STARTED")
+	}
+	m.status = mesos.Status_DRIVER_RUNNING
+	return m.status, nil
+}
+func (m *StatusMockSchedulerDriver) Stop(b bool) (mesos.Status, error) {
 	close(m.stopped)
-	return mesos.Status_DRIVER_STOPPED, nil
+	m.status = mesos.Status_DRIVER_STOPPED
+	return m.status, nil
 }
-func (m *JoinableMockSchedulerDriver) Abort() (mesos.Status, error) {
+func (m *StatusMockSchedulerDriver) Abort() (mesos.Status, error) {
 	close(m.aborted)
-	return mesos.Status_DRIVER_ABORTED, nil
+	m.status = mesos.Status_DRIVER_ABORTED
+	return m.status, nil
 }
-func (m *JoinableMockSchedulerDriver) Join() (mesos.Status, error) {
+func (m *StatusMockSchedulerDriver) Join() (mesos.Status, error) {
 	select {
 	case <-m.stopped:
 		log.Info("JoinableMockSchedulerDriver stopped")
@@ -207,11 +217,17 @@ func (m *JoinableMockSchedulerDriver) Join() (mesos.Status, error) {
 	}
 	return mesos.Status_DRIVER_ABORTED, errors.New("unknown reason for join")
 }
+func (m *StatusMockSchedulerDriver) ReconcileTasks(statuses []*mesos.TaskStatus) (mesos.Status, error) {
+	return m.status, nil
+}
+func (m *StatusMockSchedulerDriver) LaunchTasks(offerIds []*mesos.OfferID, ti []*mesos.TaskInfo, f *mesos.Filters) (mesos.Status, error) {
+	return m.status, nil
+}
 
 func TestPlugin_NewFromScheduler(t *testing.T) {
 	assert := &EventAssertions{*assert.New(t)}
 
-	// create a fake pod watch
+	// create a fake pod watch. We use that below to submit new pods to the scheduler
 	podListWatch := NewMockPodsListWatch(api.PodList{})
 
 	// create fake apiserver
@@ -253,10 +269,20 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 	err := testScheduler.Init(schedulerProcess.Master(), p, http.DefaultServeMux)
 	assert.NoError(err)
 
+	// create mock mesos scheduler driver
+	mockDriver := StatusMockSchedulerDriver{
+		status: mesos.Status_DRIVER_NOT_STARTED,
+	}
+
+	// tell scheduler to be registered
+	testScheduler.Registered(
+		&mockDriver,
+		util.NewFrameworkID("kubernetes-id"),
+		util.NewMasterInfo("master-id", (192 << 24) + (168 << 16) + (0 << 8) + 1, 5050),
+	)
+
 	// elect master with mock driver
 	driverFactory := ha.DriverFactory(func() (bindings.SchedulerDriver, error) {
-		mockDriver := JoinableMockSchedulerDriver{}
-		mockDriver.On("Start").Return(mesos.Status_DRIVER_RUNNING, nil)
 		return &mockDriver, nil;
 	})
 	schedulerProcess.Elect(driverFactory)
