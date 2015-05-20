@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -169,6 +170,32 @@ func (a *EventAssertions) EventWithReason(reason string, msgAndArgs ...interface
 	}, msgAndArgs...)
 }
 
+// Extend the MockSchedulerDriver with a blocking Join method
+type JoinableMockSchedulerDriver struct {
+	MockSchedulerDriver
+	stopped chan struct{}
+	aborted chan struct{}
+}
+func (m *JoinableMockSchedulerDriver) Stop(b bool) (mesos.Status, error) {
+	close(m.stopped)
+	return mesos.Status_DRIVER_STOPPED, nil
+}
+func (m *JoinableMockSchedulerDriver) Abort() (mesos.Status, error) {
+	close(m.aborted)
+	return mesos.Status_DRIVER_ABORTED, nil
+}
+func (m *JoinableMockSchedulerDriver) Join() (mesos.Status, error) {
+	select {
+	case <-m.stopped:
+		log.Info("JoinableMockSchedulerDriver stopped")
+		return mesos.Status_DRIVER_STOPPED, nil
+	case <-m.aborted:
+		log.Info("JoinableMockSchedulerDriver aborted")
+		return mesos.Status_DRIVER_ABORTED, nil
+	}
+	return mesos.Status_DRIVER_ABORTED, errors.New("unknown reason for join")
+}
+
 func TestPlugin_NewFromScheduler(t *testing.T) {
 	assert := &EventAssertions{*assert.New(t)}
 
@@ -216,9 +243,8 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 
 	// elect master with mock driver
 	driverFactory := ha.DriverFactory(func() (bindings.SchedulerDriver, error) {
-		mockDriver := MockSchedulerDriver{}
+		mockDriver := JoinableMockSchedulerDriver{}
 		mockDriver.On("Start").Return(mesos.Status_DRIVER_RUNNING, nil)
-		mockDriver.On("Join").Return(mesos.Status_DRIVER_STOPPED, nil)
 		return &mockDriver, nil;
 	})
 	schedulerProcess.Elect(driverFactory)
