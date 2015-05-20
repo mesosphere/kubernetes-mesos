@@ -16,8 +16,17 @@ mesos-dns servers may be used as fallbacks for name resolution since their IP ad
 ## Usage
 ```
 ## build and push the docker image
-:; make push TARGET=$HOME/bin/km
+:; make release FROM=/k8sm-build-output-dir
+
+## promote the latest -dev build to a version-tagged release
+## (don't forget to update the universe config.json/version and package.json/docker-image)
+:; make promote
+
+## HOWEVER, to generate a fresh release image and push it up (skip the -dev tag cycle):
+## (this is probably an exceptional case, images should usually be promoted from -dev)
+:; make release FROM=~/bin RELEASE=1
 ```
+
 ## Files
 * Makefile - coordinate the build process: build s6, bundle it with km into a Docker and push the repo
 * Dockerfile - recipe for building the docker

@@ -98,11 +98,13 @@ exit 0
 EOF
 }
 
-# usage: $0 {wait-for-service} {version-check-url} {dependent-services}
+# usage: $0 {wait-for-service} {version-check-url} {version-check-token} {dependent-services}
 prepare_service_depends() {
   local watchedService=$1
   local watcher=${watchedService}-depends
   local versionCheckUrl=$2
+  local versionCheckToken=$3
+  shift
   shift
   shift
 
@@ -119,16 +121,20 @@ prepare_service_depends() {
 #!/bin/sh
 exec 2>&1
 set -vx
+
+rm -f down
+
 echo \$(date -Iseconds) sending start signal to ${watchedService}
 s6-svc -u ${service_dir}/${watchedService}
 
 version_check() {
-  wget -q -O - $versionCheckUrl >/dev/null 2>&1 && sleep 2 || exit 2
+  wget -q -O - $versionCheckUrl | grep -i -e "$versionCheckToken" >/dev/null && sleep 5 || exit 2
+  echo
 }
 
 # HACK(jdef): no super-reliable way to tell if waited-on service will stay up for long, so
-# check that 5 seqential version checks pass and if so assume the world is good
-version_check; version_check; version_check; version_check; version_check
+# check that 3 seqential version checks pass and if so assume the world is good
+version_check; version_check; version_check
 
 echo \$(date -Iseconds) starting $* services...
 for i in $*; do
