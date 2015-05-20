@@ -18,7 +18,7 @@ import (
 
 	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
-	"github.com/mesos/mesos-go/mesosutil"
+	util "github.com/mesos/mesos-go/mesosutil"
 	bindings "github.com/mesos/mesos-go/scheduler"
 	"github.com/mesosphere/kubernetes-mesos/pkg/queue"
 	schedcfg "github.com/mesosphere/kubernetes-mesos/pkg/scheduler/config"
@@ -208,9 +208,9 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 
 	// create scheduler
 	testScheduler := New(Config{
-		Executor: mesosutil.NewExecutorInfo(
-			mesosutil.NewExecutorID("executor-id"),
-			mesosutil.NewCommandInfo("executor-cmd"),
+		Executor: util.NewExecutorInfo(
+			util.NewExecutorID("executor-id"),
+			util.NewCommandInfo("executor-cmd"),
 		),
 		Client: client.NewOrDie(&client.Config{Host: testApiServer.URL, Version: testapi.Version()}),
 		PodsListWatch: &podListWatch.ListWatch,
