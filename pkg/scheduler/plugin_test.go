@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,9 +11,11 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api/testapi"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/record"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/runtime"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/watch"
 
+	log "github.com/golang/glog"
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	"github.com/mesos/mesos-go/mesosutil"
 	bindings "github.com/mesos/mesos-go/scheduler"
@@ -23,7 +24,6 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/ha"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"github.com/stretchr/testify/assert"
-
 )
 
 func makeTestServer(t *testing.T, namespace string, pods *api.PodList) (*httptest.Server) {
@@ -82,7 +82,7 @@ func (lw *MockPodsListWatch) Modify(pod *api.Pod) {
 			return
 		}
 	}
-	log.Panicf("Cannot find pod %v to modify in MockPodsListWatch", pod.Name)
+	log.Fatalf("Cannot find pod %v to modify in MockPodsListWatch", pod.Name)
 }
 func (lw *MockPodsListWatch) Delete(pod *api.Pod) {
 	for i, otherPod := range lw.list.Items {
@@ -92,7 +92,7 @@ func (lw *MockPodsListWatch) Delete(pod *api.Pod) {
 			return
 		}
 	}
-	log.Panicf("Cannot find pod %v to delete in MockPodsListWatch", pod.Name)
+	log.Fatalf("Cannot find pod %v to delete in MockPodsListWatch", pod.Name)
 }
 
 func NewTestPod(i int) *api.Pod {
@@ -119,8 +119,58 @@ func NewTestPod(i int) *api.Pod {
 	}
 }
 
+// Add assertions to reason about event streams
+type EventPredicate func (e *api.Event) bool
+type EventAssertions struct {
+	assert.Assertions
+}
+func (a *EventAssertions) Event(pred EventPredicate, msgAndArgs ...interface{}) bool {
+	// parse msgAndArgs: first possibly a duration, otherwise a format string with further args
+	timeout := time.Second * 2
+	msg := "event not received"
+	msgArgStart := 0
+	if len(msgAndArgs) > 0 {
+		switch msgAndArgs[0].(type) {
+			case time.Duration:
+				timeout = msgAndArgs[0].(time.Duration)
+				msgArgStart += 1
+		}
+	}
+	if len(msgAndArgs) > msgArgStart {
+		msg = fmt.Sprintf(msgAndArgs[msgArgStart].(string), msgAndArgs[msgArgStart + 1:]...)
+	}
+
+	// watch events
+	result := make(chan struct{})
+	matched := false
+	eventWatch := record.GetEvents(func(e *api.Event) {
+		if matched { return }
+		if pred(e) {
+			log.V(3).Infof("found asserted event for reason '%v': %v", e.Reason, e.Message)
+			matched = true
+			result <- struct{}{}
+		} else {
+			log.V(5).Infof("ignoring not-asserted event for reason '%v': %v", e.Reason, e.Message)
+		}
+	})
+	defer eventWatch.Stop()
+
+	// wait for watch to match or timeout
+	select {
+	case <-result:
+		return true
+	case <-time.After(timeout):
+		return a.Fail(msg)
+	}
+}
+func (a *EventAssertions) EventWithReason(reason string, msgAndArgs ...interface{}) bool {
+	return a.Event(func (e *api.Event) bool {
+		return e.Reason == reason
+	}, msgAndArgs...)
+}
+
 func TestPlugin_NewFromScheduler(t *testing.T) {
-	assert := assert.New(t)
+	assert := &EventAssertions{*assert.New(t)}
 
 	// create a fake pod watch
 	podListWatch := NewMockPodsListWatch(api.PodList{})
@@ -180,7 +230,8 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 	pod1 := NewTestPod(1)
 	podListWatch.Add(pod1)
 
-	time.Sleep(2 * time.Second)
+	// wait for failedScheduling event because there is no offer
+	assert.EventWithReason("failedScheduling", "failedScheduling event not received")
 
 	// stop plugin
 	schedulerProcess.End()
