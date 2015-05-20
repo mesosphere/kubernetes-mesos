@@ -113,7 +113,7 @@ func (m *SchedulerServer) setEndpoints(serviceName string, ip net.IP, port int) 
 	}
 	if !reflect.DeepEqual(e.Subsets, want) {
 		e.Subsets = want
-		glog.Infof("setting endpoints for master service %q to %+v", serviceName, e)
+		glog.Infof("setting endpoints for master service %q to %#v", serviceName, e)
 		_, err = createOrUpdate(e)
 		return err
 	}

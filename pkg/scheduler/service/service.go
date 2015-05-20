@@ -393,10 +393,8 @@ func (s *SchedulerServer) createAPIServerClient() (*client.Client, error) {
 	return c, nil
 }
 
-func (s *SchedulerServer) setDriver(driver bindings.SchedulerDriver, err error) {
-	if err == nil {
-		s.driver.Store(driver)
-	}
+func (s *SchedulerServer) setDriver(driver bindings.SchedulerDriver) {
+	s.driver.Store(driver)
 }
 
 func (s *SchedulerServer) getDriver() (driver bindings.SchedulerDriver) {
@@ -594,26 +592,29 @@ func (s *SchedulerServer) bootstrap(hks hyperkube.Interface, sc *schedcfg.Config
 	runtime.On(mesosPodScheduler.Registration(), func() { kpl.Run(schedulerProcess.Terminal()) })
 	runtime.On(mesosPodScheduler.Registration(), s.newServiceWriter(schedulerProcess.Terminal()))
 
-	deferredInit := func() (err error) {
-		if err = mesosPodScheduler.Init(schedulerProcess.Master(), kpl, s.mux); err != nil {
-			err = fmt.Errorf("failed to initialize pod scheduler: %v", err)
-		}
-		return
-	}
-
-	driverFactory := ha.DriverFactory(func() (drv bindings.SchedulerDriver, err error) {
+	driverFactory := ha.DriverFactory(func() (bindings.SchedulerDriver, error) {
 		log.V(1).Infoln("performing deferred initialization")
-		if err = deferredInit(); err == nil {
-			log.V(1).Infoln("deferred init complete")
-			// defer obtaining framework ID to prevent multiple schedulers
-			// from overwriting each other's framework IDs
-			if dconfig.Framework.Id, err = s.fetchFrameworkID(etcdClient); err == nil {
-				log.V(1).Infoln("instantiating mesos scheduler driver")
-				drv, err = bindings.NewMesosSchedulerDriver(*dconfig)
-				s.setDriver(drv, err)
-			}
+		if err = mesosPodScheduler.Init(schedulerProcess.Master(), kpl, s.mux); err != nil {
+			return nil, fmt.Errorf("failed to initialize pod scheduler: %v", err)
 		}
-		return
+		log.V(1).Infoln("deferred init complete")
+
+		// defer obtaining framework ID to prevent multiple schedulers
+		// from overwriting each other's framework IDs
+		dconfig.Framework.Id, err = s.fetchFrameworkID(etcdClient)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch framework ID from etcd: %v", err)
+		}
+
+		log.V(1).Infoln("constructing mesos scheduler driver")
+		driver, err := bindings.NewMesosSchedulerDriver(*dconfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to construct scheduler driver: %v", err)
+		}
+		log.V(1).Infoln("constructed mesos scheduler driver:", driver)
+
+		s.setDriver(driver)
+		return driver, nil
 	})
 
 	return schedulerProcess, driverFactory, etcdClient, eid

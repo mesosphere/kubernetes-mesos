@@ -1,0 +1,102 @@
+ambassador:
+  image: cpuguy83/docker-grand-ambassador:0.9.1
+  volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+  command: "-name docker_apiserver_1"
+etcd:
+  hostname: etcd
+  image: quay.io/coreos/etcd:v2.0.10
+  ports: [ "4001:4001" ]
+  command: >
+    --listen-client-urls 'http://etcd:4001'
+    --advertise-client-urls 'http://etcd:4001'
+#zookeeper:
+#  image: jplock/zookeeper:3.4.5
+#  ports: [ "2181:2181" ]
+mesos:
+  hostname: mesos
+  image: mesosphere/mesos:0.22.0-1.0.ubuntu1404
+  entrypoint: mesos-local
+  ports: [ "5050:5050" ]
+  environment:
+  - MESOS_HOSTNAME=mesos
+  - MESOS_PORT=5050
+  - MESOS_LOG_DIR=/var/log/mesos
+  - MESOS_QUORUM=1
+  - MESOS_REGISTRY=in_memory
+  - MESOS_WORK_DIR=/var/lib/mesos
+#  - MESOS_ZK=zk://zookeeper:2181/mesos
+  links:
+  - etcd
+  - "ambassador:apiserver"
+  volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+#  - zookeeper
+apiserver:
+  hostname: apiserver
+  image: mesosphere/kubernetes-mesos:latest
+  entrypoint:
+  - /bin/bash
+  - "-c"
+  - >
+    echo "Hostname: $(hostname -f) ($(hostname -f | xargs resolveip))" &&
+    (grep "mesos-master\s*=" /opt/mesos-cloud.conf || echo "  mesos-master = mesos:5050" >> /opt/mesos-cloud.conf) &&
+    await-health-check http://etcd:4001/health &&
+    await-health-check http://mesos:5050/health &&
+    km apiserver
+    --address=$(resolveip apiserver)
+    --external_hostname=apiserver
+    --etcd_servers=http://etcd:4001
+    --portal_net=10.10.10.0/24
+    --port=8888
+    --cloud_provider=mesos
+    --cloud_config=/opt/mesos-cloud.conf
+    --v=2
+  ports: [ "8888:8888" ]
+  links:
+  - etcd
+  - mesos
+controller:
+  hostname: controller
+  image: mesosphere/kubernetes-mesos:latest
+  entrypoint:
+  - /bin/bash
+  - "-c"
+  - >
+    echo "Hostname: $(hostname -f) ($(hostname -f | xargs resolveip))" &&
+    (grep "mesos-master\s*=" /opt/mesos-cloud.conf || echo "  mesos-master = mesos:5050" >> /opt/mesos-cloud.conf) &&
+    await-health-check http://etcd:4001/health &&
+    await-health-check http://mesos:5050/health &&
+    await-health-check http://apiserver:8888/healthz &&
+    km controller-manager
+    --master=http://apiserver:8888
+    --cloud_config=/opt/mesos-cloud.conf
+    --v=2
+  links:
+  - etcd
+  - mesos
+  - apiserver
+scheduler:
+  hostname: scheduler
+  image: mesosphere/kubernetes-mesos:latest
+  entrypoint:
+  - /bin/bash
+  - "-c"
+  - >
+    echo "Hostname: $(hostname -f) ($(hostname -f | xargs resolveip))" &&
+    (grep "mesos-master\s*=" /opt/mesos-cloud.conf || echo "  mesos-master = mesos:5050" >> /opt/mesos-cloud.conf) &&
+    await-health-check http://etcd:4001/health &&
+    await-health-check http://mesos:5050/health &&
+    await-health-check http://apiserver:8888/healthz &&
+    km scheduler
+    --address=$(resolveip scheduler)
+    --hostname_override=scheduler
+    --etcd_servers=http://etcd:4001
+    --mesos_user=root
+    --api_servers=http://apiserver:8888
+    --mesos_master=mesos:5050
+    --v=2
+  links:
+  - etcd
+  - mesos
+  - apiserver
