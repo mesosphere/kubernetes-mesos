@@ -302,6 +302,9 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 	offers1 := []*mesos.Offer{NewTestOffer(1)}
 	testScheduler.ResourceOffers(nil, offers1)
 
+	// and wait for scheduled pod
+	assert.EventWithReason("scheduled")
+
 	time.Sleep(2 * time.Second)
 }
 
