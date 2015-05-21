@@ -3,8 +3,10 @@ package scheduler
 import (
 	"errors"
 	"fmt"
+	goruntime "runtime"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/ha"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 func makeTestServer(t *testing.T, namespace string, pods *api.PodList) (*httptest.Server) {
@@ -181,32 +184,65 @@ func (a *EventAssertions) EventWithReason(reason string, msgAndArgs ...interface
 		return e.Reason == reason
 	}, msgAndArgs...)
 }
+func (a *EventAssertions) EventuallyTrue(timeout time.Duration, fn func() bool, msgAndArgs ...interface{}) bool {
+	start := time.Now()
+	for {
+		if fn() {
+			return true
+		}
+		if time.Now().Sub(start) > timeout {
+			if len(msgAndArgs) > 0 {
+				return a.Fail(msgAndArgs[0].(string), msgAndArgs[1:]...)
+			} else {
+				return a.Fail("predicate fn has not been true after %v", timeout.String())
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
 
 // Extend the MockSchedulerDriver with a blocking Join method
-type StatusMockSchedulerDriver struct {
+type StatefullMockSchedulerDriver struct {
 	MockSchedulerDriver
 	stopped chan struct{}
 	aborted chan struct{}
 	status mesos.Status
 }
-func (m *StatusMockSchedulerDriver) Start() (mesos.Status, error) {
+func (m *StatefullMockSchedulerDriver) implementationCalled(arguments... interface{}) {
+	// get the calling function's name
+	pc, _, _, ok := goruntime.Caller(1)
+	if !ok {
+		panic("Couldn't get the caller information")
+	}
+	functionPath := goruntime.FuncForPC(pc).Name()
+	parts := strings.Split(functionPath, ".")
+	functionName := parts[len(parts)-1]
+
+	// only register the call, not expected call processing
+	m.Calls = append(m.Calls, mock.Call{functionName, arguments, make([]interface{}, 0), 0})
+}
+func (m *StatefullMockSchedulerDriver) Start() (mesos.Status, error) {
+	m.implementationCalled()
 	if m.status != mesos.Status_DRIVER_NOT_STARTED {
 		return m.status, errors.New("cannot start driver which isn't in status NOT_STARTED")
 	}
 	m.status = mesos.Status_DRIVER_RUNNING
 	return m.status, nil
 }
-func (m *StatusMockSchedulerDriver) Stop(b bool) (mesos.Status, error) {
+func (m *StatefullMockSchedulerDriver) Stop(b bool) (mesos.Status, error) {
+	m.implementationCalled(b)
 	close(m.stopped)
 	m.status = mesos.Status_DRIVER_STOPPED
 	return m.status, nil
 }
-func (m *StatusMockSchedulerDriver) Abort() (mesos.Status, error) {
+func (m *StatefullMockSchedulerDriver) Abort() (mesos.Status, error) {
+	m.implementationCalled()
 	close(m.aborted)
 	m.status = mesos.Status_DRIVER_ABORTED
 	return m.status, nil
 }
-func (m *StatusMockSchedulerDriver) Join() (mesos.Status, error) {
+func (m *StatefullMockSchedulerDriver) Join() (mesos.Status, error) {
+	m.implementationCalled()
 	select {
 	case <-m.stopped:
 		log.Info("JoinableMockSchedulerDriver stopped")
@@ -217,11 +253,12 @@ func (m *StatusMockSchedulerDriver) Join() (mesos.Status, error) {
 	}
 	return mesos.Status_DRIVER_ABORTED, errors.New("unknown reason for join")
 }
-func (m *StatusMockSchedulerDriver) ReconcileTasks(statuses []*mesos.TaskStatus) (mesos.Status, error) {
-	return m.status, nil
-}
-func (m *StatusMockSchedulerDriver) LaunchTasks(offerIds []*mesos.OfferID, ti []*mesos.TaskInfo, f *mesos.Filters) (mesos.Status, error) {
-	return m.status, nil
+func (m *StatefullMockSchedulerDriver) CallsFor(methodName string) []*mock.Call {
+	methodCalls := []*mock.Call{}
+	for _, c := range m.Calls {
+		methodCalls = append(methodCalls, &c)
+	}
+	return methodCalls
 }
 
 func TestPlugin_NewFromScheduler(t *testing.T) {
@@ -270,7 +307,7 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 	assert.NoError(err)
 
 	// create mock mesos scheduler driver
-	mockDriver := StatusMockSchedulerDriver{
+	mockDriver := StatefullMockSchedulerDriver{
 		status: mesos.Status_DRIVER_NOT_STARTED,
 	}
 
@@ -280,6 +317,12 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 		util.NewFrameworkID("kubernetes-id"),
 		util.NewMasterInfo("master-id", (192 << 24) + (168 << 16) + (0 << 8) + 1, 5050),
 	)
+	mockDriver.On("ReconcileTasks", mock.AnythingOfType("[]*mesosproto.TaskStatus")).Return(mockDriver.status, nil)
+	mockDriver.On("LaunchTasks",
+		mock.AnythingOfType("[]*mesosproto.OfferID"),
+		mock.AnythingOfType("[]*mesosproto.TaskInfo"),
+		mock.AnythingOfType("*mesosproto.Filters"),
+	).Return(mockDriver.status, nil)
 
 	// elect master with mock driver
 	driverFactory := ha.DriverFactory(func() (bindings.SchedulerDriver, error) {
@@ -287,6 +330,9 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 	})
 	schedulerProcess.Elect(driverFactory)
 	elected := schedulerProcess.Elected()
+
+	// driver will be started
+	assert.EventuallyTrue(time.Second, func() bool { return len(mockDriver.CallsFor("Start")) > 0 })
 
 	// wait for being elected
 	_ = <-elected
