@@ -310,13 +310,6 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 	mockDriver := StatefullMockSchedulerDriver{
 		status: mesos.Status_DRIVER_NOT_STARTED,
 	}
-
-	// tell scheduler to be registered
-	testScheduler.Registered(
-		&mockDriver,
-		util.NewFrameworkID("kubernetes-id"),
-		util.NewMasterInfo("master-id", (192 << 24) + (168 << 16) + (0 << 8) + 1, 5050),
-	)
 	mockDriver.On("ReconcileTasks", mock.AnythingOfType("[]*mesosproto.TaskStatus")).Return(mockDriver.status, nil)
 	mockDriver.On("LaunchTasks",
 		mock.AnythingOfType("[]*mesosproto.OfferID"),
@@ -333,6 +326,13 @@ func TestPlugin_NewFromScheduler(t *testing.T) {
 
 	// driver will be started
 	assert.EventuallyTrue(time.Second, func() bool { return len(mockDriver.CallsFor("Start")) > 0 })
+
+	// tell scheduler to be registered
+	testScheduler.Registered(
+		&mockDriver,
+		util.NewFrameworkID("kubernetes-id"),
+		util.NewMasterInfo("master-id", (192 << 24) + (168 << 16) + (0 << 8) + 1, 5050),
+	)
 
 	// wait for being elected
 	_ = <-elected
