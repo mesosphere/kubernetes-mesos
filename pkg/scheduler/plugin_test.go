@@ -351,6 +351,7 @@ func TestPlugin_LifeCycle(t *testing.T) {
 
 	// and wait for scheduled pod
 	assert.EventWithReason("scheduled")
+	mockDriver.AssertNumberOfCalls(t, "LaunchTasks", 1)
 
 }
 
