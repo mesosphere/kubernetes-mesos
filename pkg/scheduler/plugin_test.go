@@ -219,7 +219,7 @@ func (m *StatefullMockSchedulerDriver) implementationCalled(arguments... interfa
 	functionName := parts[len(parts)-1]
 
 	// only register the call, not expected call processing
-	m.Calls = append(m.Calls, mock.Call{functionName, arguments, make([]interface{}, 0), 0})
+	m.Calls = append(m.Calls, mock.Call{functionName, arguments, make([]interface{}, 0), 0, nil, nil})
 }
 func (m *StatefullMockSchedulerDriver) Start() (mesos.Status, error) {
 	m.implementationCalled()
