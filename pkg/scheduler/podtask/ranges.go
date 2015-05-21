@@ -31,7 +31,7 @@ func NewRanges(ns ...uint64) Ranges {
 // left to right. e.g. [[0, 5], [4, 3], [10, 7]] -> [[0, 5], [7, 10]]
 func NewPortRanges(o *mesos.Offer) Ranges {
 	if o == nil {
-		return nil
+		return Ranges{}
 	}
 
 	var r *mesos.Resource
@@ -43,7 +43,7 @@ func NewPortRanges(o *mesos.Offer) Ranges {
 	}
 
 	if r == nil {
-		return nil
+		return Ranges{}
 	}
 
 	offered := r.GetRanges().GetRange()
