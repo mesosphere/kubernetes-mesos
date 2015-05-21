@@ -31,7 +31,6 @@ import (
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/metrics"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/podtask"
 	"github.com/mesosphere/kubernetes-mesos/pkg/scheduler/uid"
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/client/cache"
 )
 
 type Slave struct {
@@ -112,7 +111,6 @@ type KubernetesScheduler struct {
 	etcdClient        tools.EtcdGetSet
 	failoverTimeout   float64 // in seconds
 	reconcileInterval int64
-	podsListWatch      *cache.ListWatch
 
 	// Mesos context.
 
@@ -147,7 +145,6 @@ type Config struct {
 	FailoverTimeout   float64
 	ReconcileInterval int64
 	ReconcileCooldown time.Duration
-	PodsListWatch     *cache.ListWatch
 }
 
 // New create a new KubernetesScheduler
@@ -163,7 +160,6 @@ func New(config Config) *KubernetesScheduler {
 		etcdClient:        config.EtcdClient,
 		failoverTimeout:   config.FailoverTimeout,
 		reconcileInterval: config.ReconcileInterval,
-		podsListWatch:     config.PodsListWatch,
 		offers: offers.CreateRegistry(offers.RegistryConfig{
 			Compat: func(o *mesos.Offer) bool {
 				// filter the offers: the executor IDs must not identify a kubelet-

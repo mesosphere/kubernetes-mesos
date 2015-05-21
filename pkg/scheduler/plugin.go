@@ -616,11 +616,18 @@ func (k *deleter) deleteOne(pod *Pod) error {
 }
 
 // Create a scheduler plugin and all supporting background functions.
-func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}, mux *http.ServeMux) *PluginConfig {
+func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}, mux *http.ServeMux,
+	makePodsWatcher func () *cache.ListWatch) *PluginConfig {
+
+	// use ListWatch watching pods using the client by default
+	if makePodsWatcher == nil {
+		makePodsWatcher = func() *cache.ListWatch { return createAllPodsLW(k.client) }
+	}
+
 	// Watch and queue pods that need scheduling.
 	updates := make(chan queue.Entry, k.schedcfg.UpdatesBacklog)
 	podUpdates := &podStoreAdapter{queue.NewHistorical(updates)}
-	reflector := cache.NewReflector(k.podsListWatch, &api.Pod{}, podUpdates, 0)
+	reflector := cache.NewReflector(makePodsWatcher(), &api.Pod{}, podUpdates, 0)
 
 	// lock that guards critial sections that involve transferring pods from
 	// the store (cache) to the scheduling queue; its purpose is to maintain
@@ -805,7 +812,7 @@ func parseSelectorOrDie(s string) fields.Selector {
 }
 
 // createAllPodsLW returns a listWatch that finds all pods
-func CreateAllPodsLW(cl *client.Client) *cache.ListWatch {
+func createAllPodsLW(cl *client.Client) *cache.ListWatch {
 	return cache.NewListWatchFromClient(cl, "pods", api.NamespaceAll, parseSelectorOrDie(""))
 }
 

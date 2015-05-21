@@ -278,7 +278,6 @@ func TestPlugin_LifeCycle(t *testing.T) {
 			util.NewCommandInfo("executor-cmd"),
 		),
 		Client: client.NewOrDie(&client.Config{Host: testApiServer.URL, Version: testapi.Version()}),
-		PodsListWatch: &podListWatch.ListWatch,
 		ScheduleFunc: FCFSScheduleFunc,
 		Schedcfg: *schedcfg.CreateDefaultConfig(),
 	})
@@ -291,7 +290,9 @@ func TestPlugin_LifeCycle(t *testing.T) {
 	schedulerProcess := ha.New(testScheduler)
 
 	// get plugin config from it
-	c := testScheduler.NewPluginConfig(schedulerProcess.Terminal(), http.DefaultServeMux)
+	c := testScheduler.NewPluginConfig(schedulerProcess.Terminal(), http.DefaultServeMux, func () *cache.ListWatch {
+		return &podListWatch.ListWatch
+	})
 	assert.NotNil(c)
 
 	// create plugin
