@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,7 +32,16 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-func makeTestServer(t *testing.T, namespace string, pods *api.PodList) *httptest.Server {
+type TestServer struct {
+	server *httptest.Server
+	Stats map[string]uint
+	lock sync.Mutex
+}
+
+func NewTestServer(t *testing.T, namespace string, pods *api.PodList) *TestServer {
+	ts := TestServer{
+		Stats: map[string]uint{},
+	}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc(testapi.ResourcePath("pods", namespace, ""), func(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +51,12 @@ func makeTestServer(t *testing.T, namespace string, pods *api.PodList) *httptest
 
 	mux.HandleFunc(testapi.ResourcePath("pods", namespace, "") + "/", func(w http.ResponseWriter, r *http.Request) {
 		name := strings.SplitN(r.URL.Path, "/", 5)[4]
+
+		// update statistics for this pod
+		ts.lock.Lock()
+		defer ts.lock.Unlock()
+		ts.Stats[name] = ts.Stats[name] + 1
+
 		for _, p := range pods.Items {
 			if p.Name == name {
 				w.WriteHeader(http.StatusOK)
@@ -56,7 +72,8 @@ func makeTestServer(t *testing.T, namespace string, pods *api.PodList) *httptest
 		res.WriteHeader(http.StatusNotFound)
 	})
 
-	return httptest.NewServer(mux)
+	ts.server = httptest.NewServer(mux)
+	return &ts
 }
 
 func TestPlugin_New(t *testing.T) {
@@ -325,8 +342,8 @@ func TestPlugin_LifeCycle(t *testing.T) {
 	podListWatch := NewMockPodsListWatch(api.PodList{})
 
 	// create fake apiserver
-	testApiServer := makeTestServer(t, api.NamespaceDefault, &podListWatch.list)
-	defer testApiServer.Close()
+	testApiServer := NewTestServer(t, api.NamespaceDefault, &podListWatch.list)
+	defer testApiServer.server.Close()
 
 	// create scheduler
 	testScheduler := New(Config{
@@ -334,7 +351,7 @@ func TestPlugin_LifeCycle(t *testing.T) {
 			util.NewExecutorID("executor-id"),
 			util.NewCommandInfo("executor-cmd"),
 		),
-		Client:       client.NewOrDie(&client.Config{Host: testApiServer.URL, Version: testapi.Version()}),
+		Client:       client.NewOrDie(&client.Config{Host: testApiServer.server.URL, Version: testapi.Version()}),
 		ScheduleFunc: FCFSScheduleFunc,
 		Schedcfg:     *schedcfg.CreateDefaultConfig(),
 	})
@@ -471,10 +488,14 @@ func TestPlugin_LifeCycle(t *testing.T) {
 	// - with different states on the apiserver
 
 	failPodFromExecutor := func (task *mesos.TaskInfo) {
+		beforePodLookups := testApiServer.Stats[pod.Name]
 		status := newTaskStatusForTask(task, mesos.TaskState_TASK_FAILED)
 		message := messages.CreateBindingFailure
 		status.Message = &message
 		testScheduler.StatusUpdate(&mockDriver, status)
+		assert.EventuallyTrue(time.Second, func () bool {
+			return testApiServer.Stats[pod.Name] == beforePodLookups + 1
+		}, "expect that reconcilePod will access apiserver for pod %v", pod.Name)
 	}
 
 	// 1. with pod deleted from the apiserver
@@ -497,9 +518,6 @@ func TestPlugin_LifeCycle(t *testing.T) {
 	pod.Status.Host = *offers1[0].Hostname
 	podListWatch.Modify(pod, false) // not notifying the watchers
 	failPodFromExecutor(launchTasks_taskInfos[0])
-
-   // wait 2 sec because we don't have a wait above
-	time.Sleep(2 * time.Second)
 }
 
 func TestDeleteOne_NonexistentPod(t *testing.T) {
