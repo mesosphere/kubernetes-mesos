@@ -103,11 +103,11 @@ func portmap(offered Ranges, pod string, cs []api.Container, match func(*api.Con
 		} else if wanted[i].HostPort == 0 {
 			wanted[i].HostPort = offered.Min()
 		}
-
-		if j, ok := taken[wanted[i].HostPort]; ok {
-			return nil, &DuplicateHostPortError{wanted[i], wanted[j]}
-		} else if offered, ok = offered.Partition(wanted[i].HostPort); ok {
-			taken[wanted[i].HostPort] = i
+		m := wanted[i]
+		if j, ok := taken[m.HostPort]; ok {
+			return nil, &DuplicateHostPortError{m, wanted[j]}
+		} else if offered, ok = offered.Partition(m.HostPort); ok {
+			taken[m.HostPort] = i
 		}
 	}
 
