@@ -64,3 +64,20 @@ func container(hostports ...int) api.Container {
 	}
 	return container
 }
+
+func TestPortAllocationError(t *testing.T) {
+	err := &PortAllocationError{"foo", []uint64{80, 8080}}
+	if got, want := err.Error(), "Failed to allocate ports [80 8080] for pod foo"; got != want {
+		t.Fatalf("got: %s, want: %s", got, want)
+	}
+}
+
+func TestDuplicateHostPortError(t *testing.T) {
+	err := &DuplicateHostPortError{
+		PortMapping{"foo", 0, 0, 80},
+		PortMapping{"foo", 1, 0, 80},
+	}
+	if got, want := err.Error(), "Host port 80 wanted by containers (foo:0) and (foo:1)"; got != want {
+		t.Fatalf("got: %s, want: %s", got, want)
+	}
+}

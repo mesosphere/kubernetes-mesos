@@ -145,7 +145,7 @@ func (err *PortAllocationError) Error() string {
 // Error implements the error interface.
 func (err *DuplicateHostPortError) Error() string {
 	return fmt.Sprintf(
-		"Host port %d wanted by containers (%s:%s) and (%s:%s)",
+		"Host port %d wanted by containers (%s:%d) and (%s:%d)",
 		err.m1.HostPort,
 		err.m1.PodName,
 		err.m1.ContainerIndex,
