@@ -261,7 +261,7 @@ func (m *StatefullMockSchedulerDriver) CallsFor(methodName string) []*mock.Call 
 	return methodCalls
 }
 
-func TestPlugin_NewFromScheduler(t *testing.T) {
+func TestPlugin_LifeCycle(t *testing.T) {
 	assert := &EventAssertions{*assert.New(t)}
 
 	// create a fake pod watch. We use that below to submit new pods to the scheduler
