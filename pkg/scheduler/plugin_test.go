@@ -109,7 +109,16 @@ func NewTestPod(i int) *api.Pod {
 			SelfLink: fmt.Sprintf("http://1.2.3.4/api/v1beta1/pods/%v", i),
 		},
 		Spec: api.PodSpec{
-			Containers: []api.Container{{Ports: []api.ContainerPort{}}},
+			Containers: []api.Container{
+				{
+					Ports: []api.ContainerPort{
+						{
+							ContainerPort: 8000 + i,
+							Protocol: api.ProtocolTCP,
+						},
+					},
+				},
+			},
 		},
 		Status: api.PodStatus{
 			PodIP: fmt.Sprintf("1.2.3.%d", 4+i),
@@ -127,11 +136,15 @@ func NewTestOffer(i int) *mesos.Offer {
 	hostname := fmt.Sprintf("h%d", i)
 	cpus := util.NewScalarResource("cpus", 3.75)
 	mem := util.NewScalarResource("mem", 940)
+	var port8000 uint64 = 8000
+	var port9000 uint64 = 9000
+	ports8000to9000 := mesos.Value_Range{Begin: &port8000, End: &port9000}
+	ports := util.NewRangesResource("ports", []*mesos.Value_Range{&ports8000to9000})
 	return  &mesos.Offer{
 		Id: util.NewOfferID(fmt.Sprintf("offer%d", i)),
 		Hostname: &hostname,
 		SlaveId: util.NewSlaveID(hostname),
-		Resources: []*mesos.Resource{cpus, mem},
+		Resources: []*mesos.Resource{cpus, mem, ports},
 	}
 }
 
