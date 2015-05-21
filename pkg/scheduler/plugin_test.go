@@ -312,11 +312,15 @@ func TestPlugin_LifeCycle(t *testing.T) {
 		status: mesos.Status_DRIVER_NOT_STARTED,
 	}
 	mockDriver.On("ReconcileTasks", mock.AnythingOfType("[]*mesosproto.TaskStatus")).Return(mockDriver.status, nil)
+
+	var launchTasks_taskInfos []*mesos.TaskInfo
 	mockDriver.On("LaunchTasks",
 		mock.AnythingOfType("[]*mesosproto.OfferID"),
 		mock.AnythingOfType("[]*mesosproto.TaskInfo"),
 		mock.AnythingOfType("*mesosproto.Filters"),
-	).Return(mockDriver.status, nil)
+	).Return(mockDriver.status, nil).Run(func(args mock.Arguments) {
+		launchTasks_taskInfos = args.Get(1).([]*mesos.TaskInfo)
+	})
 
 	// elect master with mock driver
 	driverFactory := ha.DriverFactory(func() (bindings.SchedulerDriver, error) {
@@ -352,7 +356,14 @@ func TestPlugin_LifeCycle(t *testing.T) {
 	// and wait for scheduled pod
 	assert.EventWithReason("scheduled")
 	mockDriver.AssertNumberOfCalls(t, "LaunchTasks", 1)
+	assert.Equal(1, len(launchTasks_taskInfos))
 
+	// report back that the task has been staged by mesos
+	launchedTask := launchTasks_taskInfos[0]
+	testScheduler.StatusUpdate(&mockDriver, util.NewTaskStatus(launchedTask.TaskId, mesos.TaskState_TASK_STAGING))
+
+	// report back that the task has been started by mesos
+	testScheduler.StatusUpdate(&mockDriver, util.NewTaskStatus(launchedTask.TaskId, mesos.TaskState_TASK_RUNNING))
 }
 
 func TestDeleteOne_NonexistentPod(t *testing.T) {
