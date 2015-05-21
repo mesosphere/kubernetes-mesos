@@ -343,6 +343,9 @@ func TestPlugin_LifeCycle(t *testing.T) {
 	).Return(mockDriver.status, nil).Run(func(args mock.Arguments) {
 		launchTasks_taskInfos = args.Get(1).([]*mesos.TaskInfo)
 	})
+	mockDriver.On("KillTask",
+		mock.AnythingOfType("*mesosproto.TaskID"),
+	).Return(mockDriver.status, nil)
 
 	// elect master with mock driver
 	driverFactory := ha.DriverFactory(func() (bindings.SchedulerDriver, error) {
@@ -393,6 +396,24 @@ func TestPlugin_LifeCycle(t *testing.T) {
 
 	// and wait that framework message is sent to executor
 	mockDriver.AssertNumberOfCalls(t, "SendFrameworkMessage", 1)
+
+	// start another pod
+	pod2 := NewTestPod(2)
+	podListWatch.Add(pod2)
+	testScheduler.ResourceOffers(nil, offers1)
+	assert.EventWithReason("scheduled")
+	mockDriver.AssertNumberOfCalls(t, "LaunchTasks", 2)
+	launchedTask = launchTasks_taskInfos[0]
+	testScheduler.StatusUpdate(&mockDriver, newTaskStatusForTask(launchedTask, mesos.TaskState_TASK_STAGING))
+	testScheduler.StatusUpdate(&mockDriver, newTaskStatusForTask(launchedTask, mesos.TaskState_TASK_RUNNING))
+
+	// stop it again via the apiserver mock
+	killTaskCallsBefore := len(mockDriver.CallsFor("KillTask"))
+	podListWatch.Delete(pod2)
+
+	// and wait for the driver killTask call with the correct TaskId
+	assert.EventuallyTrue(time.Second, func() bool { return len(mockDriver.CallsFor("KillTask")) > killTaskCallsBefore })
+	assert.Equal(*launchedTask.TaskId, *(mockDriver.CallsFor("KillTask")[killTaskCallsBefore].Arguments.Get(0).(*mesos.TaskID)), "expected same TaskID as during launch")
 }
 
 func TestDeleteOne_NonexistentPod(t *testing.T) {
