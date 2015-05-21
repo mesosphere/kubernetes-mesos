@@ -328,9 +328,14 @@ func TestPlugin_LifeCycle(t *testing.T) {
 	mockDriver := StatefullMockSchedulerDriver{
 		status: mesos.Status_DRIVER_NOT_STARTED,
 	}
-	mockDriver.On("ReconcileTasks", mock.AnythingOfType("[]*mesosproto.TaskStatus")).Return(mockDriver.status, nil)
-
 	var launchTasks_taskInfos []*mesos.TaskInfo
+
+	mockDriver.On("ReconcileTasks", mock.AnythingOfType("[]*mesosproto.TaskStatus")).Return(mockDriver.status, nil)
+	mockDriver.On("SendFrameworkMessage",
+		mock.AnythingOfType("*mesosproto.ExecutorID"),
+		mock.AnythingOfType("*mesosproto.SlaveID"),
+		mock.AnythingOfType("string"),
+	).Return(mockDriver.status, nil)
 	mockDriver.On("LaunchTasks",
 		mock.AnythingOfType("[]*mesosproto.OfferID"),
 		mock.AnythingOfType("[]*mesosproto.TaskInfo"),
@@ -381,6 +386,13 @@ func TestPlugin_LifeCycle(t *testing.T) {
 
 	// report back that the task has been started by mesos
 	testScheduler.StatusUpdate(&mockDriver, newTaskStatusForTask(launchedTask, mesos.TaskState_TASK_RUNNING))
+
+	// report back that the task has been lost
+	mockDriver.AssertNumberOfCalls(t, "SendFrameworkMessage", 0)
+	testScheduler.StatusUpdate(&mockDriver, newTaskStatusForTask(launchedTask, mesos.TaskState_TASK_LOST))
+
+	// and wait that framework message is sent to executor
+	mockDriver.AssertNumberOfCalls(t, "SendFrameworkMessage", 1)
 }
 
 func TestDeleteOne_NonexistentPod(t *testing.T) {
