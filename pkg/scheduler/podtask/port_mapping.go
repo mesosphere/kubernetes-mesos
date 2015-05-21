@@ -8,7 +8,13 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/labels"
 )
 
-const PortMappingLabelKey = "k8s.mesosphere.io/portMapping"
+const (
+	PortMappingLabelKey = "k8s.mesosphere.io/portMapping"
+	// FixedPorts represents a fixed port mapping strategy.
+	FixedPorts PortMapper = "fixed"
+	// WildcardPorts represents a fixed + wildcard port mapping strategy.
+	WildcardPorts PortMapper = "wildcard"
+)
 
 // PortMapper represents a specifc port mapping strategy.
 type PortMapper string
@@ -18,20 +24,20 @@ func NewPortMapper(pod *api.Pod) PortMapper {
 	filter := map[string]string{PortMappingLabelKey: "fixed"}
 	selector := labels.Set(filter).AsSelector()
 	if selector.Matches(labels.Set(pod.Labels)) {
-		return "fixed"
+		return FixedPorts
 	}
-	return "wildcard"
+	return WildcardPorts
 }
 
 // PortMap computes PortMappings for the given Containers with the given offered port Ranges.
 func (m PortMapper) PortMap(offered Ranges, pod string, cs ...api.Container) ([]PortMapping, error) {
 	switch m {
 	case "wildcard":
-		return WildcardPorts(offered, pod, cs...)
+		return WildcardPortMap(offered, pod, cs...)
 	case "fixed":
 		fallthrough
 	default:
-		return FixedPorts(offered, pod, cs...)
+		return FixedPortMap(offered, pod, cs...)
 	}
 }
 
@@ -44,17 +50,17 @@ type PortMapping struct {
 	HostPort       uint64
 }
 
-// FixedPorts maps container's HostPorts to the same Mesos offered ports.
+// FixedPortMap maps container's HostPorts to the same Mesos offered ports.
 // It ignores asked wildcard host ports (== 0).
-func FixedPorts(offered Ranges, pod string, cs ...api.Container) ([]PortMapping, error) {
+func FixedPortMap(offered Ranges, pod string, cs ...api.Container) ([]PortMapping, error) {
 	return portmap(offered, pod, cs, func(p *api.ContainerPort) bool {
 		return p.HostPort != 0
 	})
 }
 
-// WildcardPorts is the same as FixedPorts, except that .HostPorts of 0
+// WildcardPortMap is the same as FixedPorts, except that .HostPorts of 0
 // are mapped to any offered port.
-func WildcardPorts(offered Ranges, pod string, cs ...api.Container) ([]PortMapping, error) {
+func WildcardPortMap(offered Ranges, pod string, cs ...api.Container) ([]PortMapping, error) {
 	return portmap(offered, pod, cs, func(_ *api.ContainerPort) bool {
 		return true
 	})

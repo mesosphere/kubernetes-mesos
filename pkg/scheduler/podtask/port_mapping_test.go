@@ -56,6 +56,7 @@ func TestPortMapper_PortMap(t *testing.T) {
 	}
 }
 
+// container returns a api.Container with the given hostports. used for testing only.
 func container(hostports ...int) api.Container {
 	container := api.Container{Ports: make([]api.ContainerPort, len(hostports))}
 	for i, port := range hostports {
