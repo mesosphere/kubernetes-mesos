@@ -261,6 +261,23 @@ func (m *StatefullMockSchedulerDriver) CallsFor(methodName string) []*mock.Call 
 	return methodCalls
 }
 
+// Create mesos.TaskStatus for a given task
+func newTaskStatusForTask(task *mesos.TaskInfo, state mesos.TaskState) *mesos.TaskStatus {
+	healthy := state == mesos.TaskState_TASK_RUNNING
+	ts := float64(time.Now().Nanosecond()) / 1000000000.0
+	source := mesos.TaskStatus_SOURCE_EXECUTOR
+	return &mesos.TaskStatus{
+		TaskId: task.TaskId,
+		State: &state,
+		SlaveId: task.SlaveId,
+		ExecutorId: task.Executor.ExecutorId,
+		Timestamp: &ts,
+		Healthy: &healthy,
+		Source: &source,
+		Data: task.Data,
+	}
+}
+
 func TestPlugin_LifeCycle(t *testing.T) {
 	assert := &EventAssertions{*assert.New(t)}
 
@@ -360,10 +377,10 @@ func TestPlugin_LifeCycle(t *testing.T) {
 
 	// report back that the task has been staged by mesos
 	launchedTask := launchTasks_taskInfos[0]
-	testScheduler.StatusUpdate(&mockDriver, util.NewTaskStatus(launchedTask.TaskId, mesos.TaskState_TASK_STAGING))
+	testScheduler.StatusUpdate(&mockDriver, newTaskStatusForTask(launchedTask, mesos.TaskState_TASK_STAGING))
 
 	// report back that the task has been started by mesos
-	testScheduler.StatusUpdate(&mockDriver, util.NewTaskStatus(launchedTask.TaskId, mesos.TaskState_TASK_RUNNING))
+	testScheduler.StatusUpdate(&mockDriver, newTaskStatusForTask(launchedTask, mesos.TaskState_TASK_RUNNING))
 }
 
 func TestDeleteOne_NonexistentPod(t *testing.T) {
