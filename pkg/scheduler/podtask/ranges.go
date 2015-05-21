@@ -13,6 +13,17 @@ type Range [2]uint64
 // Ranges represents a list of Ranges.
 type Ranges []Range
 
+// NewRanges returns squashed Ranges from the given numbers.
+func NewRanges(ns ...uint64) Ranges {
+	xs := append(uint64s{}, ns...)
+	sort.Sort(xs)
+	rs := make(Ranges, len(xs))
+	for i := range xs {
+		rs[i][0], rs[i][1] = xs[i], xs[i]
+	}
+	return rs.Squash()
+}
+
 // NewPortRanges returns Ranges from the "ports" resource in the
 // given *mesos.Offer. If that resource isn't provided, nil will be returned.
 //
@@ -138,3 +149,11 @@ func (rs Ranges) resource(name string) *mesos.Resource {
 		Ranges: &mesos.Value_Ranges{Range: vr},
 	}
 }
+
+// uint64s is an utility used to sort a slice of uint64s
+type uint64s []uint64
+
+// These three methods implement sort.Interface
+func (ns uint64s) Len() int           { return len(ns) }
+func (ns uint64s) Less(i, j int) bool { return ns[i] < ns[j] }
+func (ns uint64s) Swap(i, j int)      { ns[i], ns[j] = ns[j], ns[i] }

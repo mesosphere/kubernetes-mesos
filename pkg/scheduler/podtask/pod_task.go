@@ -129,8 +129,8 @@ func (t *T) BuildTaskInfo() *mesos.TaskInfo {
 			mutil.NewScalarResource("mem", t.Spec.Memory),
 		},
 	}
-	if portsResource := rangeResource("ports", t.Spec.Ports); portsResource != nil {
-		info.Resources = append(info.Resources, portsResource)
+	if rs := NewRanges(t.Spec.Ports...); rs.Size() > 0 {
+		info.Resources = append(info.Resources, rs.resource("ports"))
 	}
 	return info
 }

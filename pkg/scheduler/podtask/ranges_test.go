@@ -7,6 +7,26 @@ import (
 	mesos "github.com/mesos/mesos-go/mesosproto"
 )
 
+func TestNewRanges(t *testing.T) {
+	t.Parallel()
+
+	for i, tt := range []struct {
+		ns   []uint64
+		want Ranges
+	}{
+		{[]uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, Ranges{{0, 10}}},
+		{[]uint64{7, 2, 3, 8, 1, 5, 0, 9, 6, 10, 4}, Ranges{{0, 10}}},
+		{[]uint64{0, 0, 1, 1, 2, 2, 3, 3, 4, 4}, Ranges{{0, 4}}},
+		{[]uint64{0, 1, 3, 5, 6, 8, 9}, Ranges{{0, 1}, {3, 3}, {5, 6}, {8, 9}}},
+		{[]uint64{1}, Ranges{{1, 1}}},
+		{[]uint64{}, Ranges{}},
+	} {
+		if got := NewRanges(tt.ns...); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("test #%d, NewRanges(%v): got: %v, want: %v", i, tt.ns, got, tt.want)
+		}
+	}
+}
+
 func TestNewPortRanges(t *testing.T) {
 	t.Parallel()
 
@@ -22,7 +42,7 @@ func TestNewPortRanges(t *testing.T) {
 	} {
 		offer := &mesos.Offer{Resources: []*mesos.Resource{tt.resource("ports")}}
 		if got := NewPortRanges(offer); !reflect.DeepEqual(got, tt.want) {
-			t.Errorf("test #%d, %v: got: %v, want: %v", i, tt.Ranges, got, tt.want)
+			t.Errorf("test #%d, NewPortRanges(%v): got: %v, want: %v", i, tt.Ranges, got, tt.want)
 		}
 	}
 }
