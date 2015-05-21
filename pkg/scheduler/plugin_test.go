@@ -3,9 +3,9 @@ package scheduler
 import (
 	"errors"
 	"fmt"
-	goruntime "runtime"
 	"net/http"
 	"net/http/httptest"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +30,7 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-func makeTestServer(t *testing.T, namespace string, pods *api.PodList) (*httptest.Server) {
+func makeTestServer(t *testing.T, namespace string, pods *api.PodList) *httptest.Server {
 	podsHandler := func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(runtime.EncodeOrDie(testapi.Codec(), pods)))
@@ -55,17 +55,18 @@ func TestPlugin_New(t *testing.T) {
 
 // Create mock of pods ListWatch, usually listening on the apiserver pods watch endpoint
 type MockPodsListWatch struct {
-	ListWatch cache.ListWatch
+	ListWatch   cache.ListWatch
 	fakeWatcher *watch.FakeWatcher
-	list api.PodList
+	list        api.PodList
 }
+
 func NewMockPodsListWatch(initialPodList api.PodList) *MockPodsListWatch {
 	lw := MockPodsListWatch{
 		fakeWatcher: watch.NewFake(),
-		list: initialPodList,
+		list:        initialPodList,
 	}
 	lw.ListWatch = cache.ListWatch{
-		WatchFunc: func (resourceVersion string) (watch.Interface, error) {
+		WatchFunc: func(resourceVersion string) (watch.Interface, error) {
 			return lw.fakeWatcher, nil
 		},
 		ListFunc: func() (runtime.Object, error) {
@@ -102,11 +103,11 @@ func (lw *MockPodsListWatch) Delete(pod *api.Pod) {
 func NewTestPod(i int) *api.Pod {
 	name := fmt.Sprintf("pod%d", i)
 	return &api.Pod{
-		TypeMeta:   api.TypeMeta{APIVersion: testapi.Version()},
+		TypeMeta: api.TypeMeta{APIVersion: testapi.Version()},
 		ObjectMeta: api.ObjectMeta{
-			Name: name,
+			Name:      name,
 			Namespace: "default",
-			SelfLink: fmt.Sprintf("http://1.2.3.4/api/v1beta1/pods/%v", i),
+			SelfLink:  fmt.Sprintf("http://1.2.3.4/api/v1beta1/pods/%v", i),
 		},
 		Spec: api.PodSpec{
 			Containers: []api.Container{
@@ -114,7 +115,7 @@ func NewTestPod(i int) *api.Pod {
 					Ports: []api.ContainerPort{
 						{
 							ContainerPort: 8000 + i,
-							Protocol: api.ProtocolTCP,
+							Protocol:      api.ProtocolTCP,
 						},
 					},
 				},
@@ -140,19 +141,20 @@ func NewTestOffer(i int) *mesos.Offer {
 	var port9000 uint64 = 9000
 	ports8000to9000 := mesos.Value_Range{Begin: &port8000, End: &port9000}
 	ports := util.NewRangesResource("ports", []*mesos.Value_Range{&ports8000to9000})
-	return  &mesos.Offer{
-		Id: util.NewOfferID(fmt.Sprintf("offer%d", i)),
-		Hostname: &hostname,
-		SlaveId: util.NewSlaveID(hostname),
+	return &mesos.Offer{
+		Id:        util.NewOfferID(fmt.Sprintf("offer%d", i)),
+		Hostname:  &hostname,
+		SlaveId:   util.NewSlaveID(hostname),
 		Resources: []*mesos.Resource{cpus, mem, ports},
 	}
 }
 
 // Add assertions to reason about event streams
-type EventPredicate func (e *api.Event) bool
+type EventPredicate func(e *api.Event) bool
 type EventAssertions struct {
 	assert.Assertions
 }
+
 func (a *EventAssertions) Event(pred EventPredicate, msgAndArgs ...interface{}) bool {
 	// parse msgAndArgs: first possibly a duration, otherwise a format string with further args
 	timeout := time.Second * 2
@@ -160,20 +162,22 @@ func (a *EventAssertions) Event(pred EventPredicate, msgAndArgs ...interface{}) 
 	msgArgStart := 0
 	if len(msgAndArgs) > 0 {
 		switch msgAndArgs[0].(type) {
-			case time.Duration:
-				timeout = msgAndArgs[0].(time.Duration)
-				msgArgStart += 1
+		case time.Duration:
+			timeout = msgAndArgs[0].(time.Duration)
+			msgArgStart += 1
 		}
 	}
 	if len(msgAndArgs) > msgArgStart {
-		msg = fmt.Sprintf(msgAndArgs[msgArgStart].(string), msgAndArgs[msgArgStart + 1:]...)
+		msg = fmt.Sprintf(msgAndArgs[msgArgStart].(string), msgAndArgs[msgArgStart+1:]...)
 	}
 
 	// watch events
 	result := make(chan struct{})
 	matched := false
 	eventWatch := record.GetEvents(func(e *api.Event) {
-		if matched { return }
+		if matched {
+			return
+		}
 		if pred(e) {
 			log.V(3).Infof("found asserted event for reason '%v': %v", e.Reason, e.Message)
 			matched = true
@@ -193,7 +197,7 @@ func (a *EventAssertions) Event(pred EventPredicate, msgAndArgs ...interface{}) 
 	}
 }
 func (a *EventAssertions) EventWithReason(reason string, msgAndArgs ...interface{}) bool {
-	return a.Event(func (e *api.Event) bool {
+	return a.Event(func(e *api.Event) bool {
 		return e.Reason == reason
 	}, msgAndArgs...)
 }
@@ -219,9 +223,10 @@ type StatefullMockSchedulerDriver struct {
 	MockSchedulerDriver
 	stopped chan struct{}
 	aborted chan struct{}
-	status mesos.Status
+	status  mesos.Status
 }
-func (m *StatefullMockSchedulerDriver) implementationCalled(arguments... interface{}) {
+
+func (m *StatefullMockSchedulerDriver) implementationCalled(arguments ...interface{}) {
 	// get the calling function's name
 	pc, _, _, ok := goruntime.Caller(1)
 	if !ok {
@@ -280,14 +285,14 @@ func newTaskStatusForTask(task *mesos.TaskInfo, state mesos.TaskState) *mesos.Ta
 	ts := float64(time.Now().Nanosecond()) / 1000000000.0
 	source := mesos.TaskStatus_SOURCE_EXECUTOR
 	return &mesos.TaskStatus{
-		TaskId: task.TaskId,
-		State: &state,
-		SlaveId: task.SlaveId,
+		TaskId:     task.TaskId,
+		State:      &state,
+		SlaveId:    task.SlaveId,
 		ExecutorId: task.Executor.ExecutorId,
-		Timestamp: &ts,
-		Healthy: &healthy,
-		Source: &source,
-		Data: task.Data,
+		Timestamp:  &ts,
+		Healthy:    &healthy,
+		Source:     &source,
+		Data:       task.Data,
 	}
 }
 
@@ -307,9 +312,9 @@ func TestPlugin_LifeCycle(t *testing.T) {
 			util.NewExecutorID("executor-id"),
 			util.NewCommandInfo("executor-cmd"),
 		),
-		Client: client.NewOrDie(&client.Config{Host: testApiServer.URL, Version: testapi.Version()}),
+		Client:       client.NewOrDie(&client.Config{Host: testApiServer.URL, Version: testapi.Version()}),
 		ScheduleFunc: FCFSScheduleFunc,
-		Schedcfg: *schedcfg.CreateDefaultConfig(),
+		Schedcfg:     *schedcfg.CreateDefaultConfig(),
 	})
 
 	assert.NotNil(testScheduler.client, "client is nil")
@@ -320,7 +325,7 @@ func TestPlugin_LifeCycle(t *testing.T) {
 	schedulerProcess := ha.New(testScheduler)
 
 	// get plugin config from it
-	c := testScheduler.NewPluginConfig(schedulerProcess.Terminal(), http.DefaultServeMux, func () *cache.ListWatch {
+	c := testScheduler.NewPluginConfig(schedulerProcess.Terminal(), http.DefaultServeMux, func() *cache.ListWatch {
 		return &podListWatch.ListWatch
 	})
 	assert.NotNil(c)
@@ -362,7 +367,7 @@ func TestPlugin_LifeCycle(t *testing.T) {
 
 	// elect master with mock driver
 	driverFactory := ha.DriverFactory(func() (bindings.SchedulerDriver, error) {
-		return &mockDriver, nil;
+		return &mockDriver, nil
 	})
 	schedulerProcess.Elect(driverFactory)
 	elected := schedulerProcess.Elected()

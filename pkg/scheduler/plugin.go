@@ -617,7 +617,7 @@ func (k *deleter) deleteOne(pod *Pod) error {
 
 // Create a scheduler plugin and all supporting background functions.
 func (k *KubernetesScheduler) NewPluginConfig(terminate <-chan struct{}, mux *http.ServeMux,
-	makePodsWatcher func () *cache.ListWatch) *PluginConfig {
+	makePodsWatcher func() *cache.ListWatch) *PluginConfig {
 
 	// use ListWatch watching pods using the client by default
 	if makePodsWatcher == nil {
