@@ -512,12 +512,6 @@ func TestPlugin_LifeCycle(t *testing.T) {
 	pod.Status.Host = *offers1[0].Hostname
 	podListWatch.Modify(pod, false) // not notifying the watchers
 	failPodFromExecutor(launchTasks_taskInfos[0])
-
-	// 3. with pod still on the apiserver, bound i.e. host!="", same
-	pod = startPod(offers1)
-	pod.Status.Host = *offers1[0].Hostname
-	podListWatch.Modify(pod, false) // not notifying the watchers
-	failPodFromExecutor(launchTasks_taskInfos[0])
 }
 
 func TestDeleteOne_NonexistentPod(t *testing.T) {
