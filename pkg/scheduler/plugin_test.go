@@ -32,12 +32,12 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// A apiserver mock which partially mocks the pods API
 type TestServer struct {
 	server *httptest.Server
 	Stats map[string]uint
 	lock sync.Mutex
 }
-
 func NewTestServer(t *testing.T, namespace string, pods *api.PodList) *TestServer {
 	ts := TestServer{
 		Stats: map[string]uint{},
@@ -76,21 +76,12 @@ func NewTestServer(t *testing.T, namespace string, pods *api.PodList) *TestServe
 	return &ts
 }
 
-func TestPlugin_New(t *testing.T) {
-	assert := assert.New(t)
-
-	c := PluginConfig{}
-	p := NewPlugin(&c)
-	assert.NotNil(p)
-}
-
 // Create mock of pods ListWatch, usually listening on the apiserver pods watch endpoint
 type MockPodsListWatch struct {
 	ListWatch   cache.ListWatch
 	fakeWatcher *watch.FakeWatcher
 	list        api.PodList
 }
-
 func NewMockPodsListWatch(initialPodList api.PodList) *MockPodsListWatch {
 	lw := MockPodsListWatch{
 		fakeWatcher: watch.NewFake(),
@@ -137,6 +128,7 @@ func (lw *MockPodsListWatch) Delete(pod *api.Pod, notify bool) {
 	log.Fatalf("Cannot find pod %v to delete in MockPodsListWatch", pod.Name)
 }
 
+// Create a pod with a given index, requiring one port
 func NewTestPod(i int) *api.Pod {
 	name := fmt.Sprintf("pod%d", i)
 	return &api.Pod{
@@ -170,6 +162,7 @@ func NewTestPod(i int) *api.Pod {
 	}
 }
 
+// Offering some cpus and memory and the 8000-9000 port range
 func NewTestOffer(i int) *mesos.Offer {
 	hostname := fmt.Sprintf("h%d", i)
 	cpus := util.NewScalarResource("cpus", 3.75)
@@ -191,7 +184,6 @@ type EventPredicate func(e *api.Event) bool
 type EventAssertions struct {
 	assert.Assertions
 }
-
 func (a *EventAssertions) Event(pred EventPredicate, msgAndArgs ...interface{}) bool {
 	// parse msgAndArgs: first possibly a duration, otherwise a format string with further args
 	timeout := time.Second * 2
@@ -262,7 +254,6 @@ type StatefullMockSchedulerDriver struct {
 	aborted chan struct{}
 	status  mesos.Status
 }
-
 func (m *StatefullMockSchedulerDriver) implementationCalled(arguments ...interface{}) {
 	// get the calling function's name
 	pc, _, _, ok := goruntime.Caller(1)
@@ -335,6 +326,18 @@ func newTaskStatusForTask(task *mesos.TaskInfo, state mesos.TaskState) *mesos.Ta
 	}
 }
 
+// Test to create the scheduler plugin with an empty plugin config
+func TestPlugin_New(t *testing.T) {
+	assert := assert.New(t)
+
+	c := PluginConfig{}
+	p := NewPlugin(&c)
+	assert.NotNil(p)
+}
+
+// Test to create the scheduler plugin with the config returned by the scheduler,
+// and play through the whole life cycle of the plugin while creating pods, deleting
+// and failing them.
 func TestPlugin_LifeCycle(t *testing.T) {
 	assert := &EventAssertions{*assert.New(t)}
 
