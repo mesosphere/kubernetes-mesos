@@ -189,9 +189,10 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *pod
 	task.SaveRecoveryInfo(pod.Annotations)
 
 	for _, m := range task.Spec.PortMap {
-		container := pod.Spec.Containers[m.ContainerIndex]
-		container.Ports[m.PortIndex].HostPort = int(m.HostPort)
-		port := container.Ports[m.PortIndex]
+		container := &pod.Spec.Containers[m.ContainerIndex]
+		ports := append([]api.ContainerPort{}, container.Ports...)
+		port := &ports[m.PortIndex]
+		port.HostPort = int(m.HostPort)
 		op := strconv.FormatUint(m.HostPort, 10)
 		key := fmt.Sprintf(annotation.PortMappingKeyFormat, port.Protocol, port.ContainerPort)
 		pod.Annotations[key] = op
@@ -199,7 +200,7 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *pod
 			key = fmt.Sprintf(annotation.PortNameMappingKeyFormat, port.Protocol, port.Name)
 			pod.Annotations[key] = op
 		}
-		pod.Spec.Containers[m.ContainerIndex] = container
+		container.Ports = ports
 	}
 
 	// the kubelet-executor uses this to instantiate the pod
