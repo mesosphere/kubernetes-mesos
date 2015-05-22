@@ -91,9 +91,9 @@ func (rs Ranges) Squash() Ranges {
 	return squashed
 }
 
-// Find performs a binary search for n returning the index of the Range it was
+// Search performs a binary search for n returning the index of the Range it was
 // found at or -1 if not found.
-func (rs Ranges) Find(n uint64) int {
+func (rs Ranges) Search(n uint64) int {
 	for lo, hi := 0, len(rs)-1; lo <= hi; {
 		switch m := lo + (hi-lo)/2; {
 		case n < rs[m][0]:
@@ -110,7 +110,7 @@ func (rs Ranges) Find(n uint64) int {
 // Partition partitions Ranges around n. It returns the partitioned Ranges
 // and a boolean indicating if n was found.
 func (rs Ranges) Partition(n uint64) (Ranges, bool) {
-	i := rs.Find(n)
+	i := rs.Search(n)
 	if i < 0 {
 		return rs, false
 	}

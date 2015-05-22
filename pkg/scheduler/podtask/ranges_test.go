@@ -89,7 +89,7 @@ func TestRanges_Squash(t *testing.T) {
 	}
 }
 
-func TestRanges_Find(t *testing.T) {
+func TestRanges_Search(t *testing.T) {
 	t.Parallel()
 
 	for i, tt := range []struct {
@@ -111,8 +111,8 @@ func TestRanges_Find(t *testing.T) {
 		{Ranges{{0, 2}, {3, 5}, {7, 10}}, 11, -1},
 		{Ranges{{0, 2}, {4, 4}, {5, 10}}, 4, 1},
 	} {
-		if got := tt.Find(tt.n); got != tt.want {
-			t.Errorf("test #%d: Find(%v, %v): got: %v, want: %v", i, tt.Ranges, tt.n, got, tt.want)
+		if got := tt.Search(tt.n); got != tt.want {
+			t.Errorf("test #%d: Search(%v, %v): got: %v, want: %v", i, tt.Ranges, tt.n, got, tt.want)
 		}
 	}
 }
