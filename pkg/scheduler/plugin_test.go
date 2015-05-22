@@ -35,9 +35,10 @@ import (
 // A apiserver mock which partially mocks the pods API
 type TestServer struct {
 	server *httptest.Server
-	Stats map[string]uint
-	lock sync.Mutex
+	Stats  map[string]uint
+	lock   sync.Mutex
 }
+
 func NewTestServer(t *testing.T, namespace string, pods *api.PodList) *TestServer {
 	ts := TestServer{
 		Stats: map[string]uint{},
@@ -49,7 +50,7 @@ func NewTestServer(t *testing.T, namespace string, pods *api.PodList) *TestServe
 		w.Write([]byte(runtime.EncodeOrDie(testapi.Codec(), pods)))
 	})
 
-	mux.HandleFunc(testapi.ResourcePath("pods", namespace, "") + "/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(testapi.ResourcePath("pods", namespace, "")+"/", func(w http.ResponseWriter, r *http.Request) {
 		name := strings.SplitN(r.URL.Path, "/", 5)[4]
 
 		// update statistics for this pod
@@ -82,6 +83,7 @@ type MockPodsListWatch struct {
 	fakeWatcher *watch.FakeWatcher
 	list        api.PodList
 }
+
 func NewMockPodsListWatch(initialPodList api.PodList) *MockPodsListWatch {
 	lw := MockPodsListWatch{
 		fakeWatcher: watch.NewFake(),
@@ -184,6 +186,7 @@ type EventPredicate func(e *api.Event) bool
 type EventAssertions struct {
 	assert.Assertions
 }
+
 func (a *EventAssertions) Event(pred EventPredicate, msgAndArgs ...interface{}) bool {
 	// parse msgAndArgs: first possibly a duration, otherwise a format string with further args
 	timeout := time.Second * 2
@@ -254,6 +257,7 @@ type StatefullMockSchedulerDriver struct {
 	aborted chan struct{}
 	status  mesos.Status
 }
+
 func (m *StatefullMockSchedulerDriver) implementationCalled(arguments ...interface{}) {
 	// get the calling function's name
 	pc, _, _, ok := goruntime.Caller(1)
@@ -459,14 +463,14 @@ func TestPlugin_LifeCycle(t *testing.T) {
 
 	// start another pod
 	podNum := 1
-	startPod := func (offers []*mesos.Offer) *api.Pod {
+	startPod := func(offers []*mesos.Offer) *api.Pod {
 		podNum = podNum + 1
 		launchTasksCallsBefore := len(mockDriver.CallsFor("LaunchTasks"))
 		pod := NewTestPod(podNum)
 		podListWatch.Add(pod, true) // notify watchers
 		testScheduler.ResourceOffers(&mockDriver, offers)
 		assert.EventWithReason("scheduled")
-		mockDriver.AssertNumberOfCalls(t, "LaunchTasks", launchTasksCallsBefore + 1)
+		mockDriver.AssertNumberOfCalls(t, "LaunchTasks", launchTasksCallsBefore+1)
 		return pod
 	}
 	pod := startPod(offers1)
@@ -490,14 +494,14 @@ func TestPlugin_LifeCycle(t *testing.T) {
 	// - leading to reconciliation
 	// - with different states on the apiserver
 
-	failPodFromExecutor := func (task *mesos.TaskInfo) {
+	failPodFromExecutor := func(task *mesos.TaskInfo) {
 		beforePodLookups := testApiServer.Stats[pod.Name]
 		status := newTaskStatusForTask(task, mesos.TaskState_TASK_FAILED)
 		message := messages.CreateBindingFailure
 		status.Message = &message
 		testScheduler.StatusUpdate(&mockDriver, status)
-		assert.EventuallyTrue(time.Second, func () bool {
-			return testApiServer.Stats[pod.Name] == beforePodLookups + 1
+		assert.EventuallyTrue(time.Second, func() bool {
+			return testApiServer.Stats[pod.Name] == beforePodLookups+1
 		}, "expect that reconcilePod will access apiserver for pod %v", pod.Name)
 	}
 
