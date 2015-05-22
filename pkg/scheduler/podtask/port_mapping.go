@@ -32,9 +32,9 @@ func NewPortMapper(pod *api.Pod) PortMapper {
 // PortMap computes PortMappings for the given Containers with the given offered port Ranges.
 func (m PortMapper) PortMap(offered Ranges, pod string, cs ...api.Container) ([]PortMapping, error) {
 	switch m {
-	case "wildcard":
+	case WildcardPorts:
 		return WildcardPortMap(offered, pod, cs...)
-	case "fixed":
+	case FixedPorts:
 		fallthrough
 	default:
 		return FixedPortMap(offered, pod, cs...)
