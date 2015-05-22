@@ -1,13 +1,21 @@
 package executor
 
 import (
+	"flag"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet/dockertools"
 	"github.com/golang/glog"
 	bindings "github.com/mesos/mesos-go/executor"
+	"github.com/mesos/mesos-go/mesosproto"
+	mutil "github.com/mesos/mesos-go/mesosutil"
+	"github.com/stretchr/testify/mock"
 )
+
+var test_v = flag.Int("test-v", 0, "test -v")
 
 type suicideTracker struct {
 	suicideWatcher
@@ -178,4 +186,78 @@ func TestSuicide_WithTasks(t *testing.T) {
 	} else {
 		glog.Infoln("jumps verified") // glog so we get a timestamp
 	}
+}
+
+type MockExecutorDriver struct {
+	mock.Mock
+}
+
+func (m MockExecutorDriver) Start() (mesosproto.Status, error) {
+	args := m.Called()
+	return status(args, 0), args.Error(1)
+}
+
+func (m MockExecutorDriver) Stop() (mesosproto.Status, error) {
+	args := m.Called()
+	return status(args, 0), args.Error(1)
+}
+
+func (m MockExecutorDriver) Abort() (mesosproto.Status, error) {
+	args := m.Called()
+	return status(args, 0), args.Error(1)
+}
+
+func (m MockExecutorDriver) Join() (mesosproto.Status, error) {
+	args := m.Called()
+	return status(args, 0), args.Error(1)
+}
+
+func (m MockExecutorDriver) Run() (mesosproto.Status, error) {
+	args := m.Called()
+	return status(args, 0), args.Error(1)
+}
+
+func (m MockExecutorDriver) SendStatusUpdate(taskStatus *mesosproto.TaskStatus) (mesosproto.Status, error) {
+	args := m.Called(taskStatus)
+	return status(args, 0), args.Error(1)
+}
+
+func (m MockExecutorDriver) SendFrameworkMessage(msg string) (mesosproto.Status, error) {
+	args := m.Called(m)
+	return status(args, 0), args.Error(1)
+}
+
+func status(args mock.Arguments, at int) (val mesosproto.Status) {
+	if x := args.Get(at); x != nil {
+		val = x.(mesosproto.Status)
+	}
+	return
+}
+
+func TestExecutorNew(t *testing.T) {
+	flag.Lookup("v").Value.Set(fmt.Sprint(*test_v))
+
+	mockDriver := MockExecutorDriver{}
+	executor := New(Config{
+		Docker: dockertools.ConnectToDockerOrDie("fake://"),
+	})
+	executor.Init(mockDriver)
+
+	executorID := mutil.NewExecutorID("mock executor")
+	commandInfo := mutil.NewCommandInfo("mock commandInfo")
+	executorInfo := mutil.NewExecutorInfo(executorID, commandInfo)
+	slaveID := mutil.NewSlaveID("mock slaveID")
+
+	frameworkID := mutil.NewFrameworkID("mock frameworkID")
+	frameworkInfo := mutil.NewFrameworkInfo("mock user", "mock name", frameworkID)
+
+	hostname := "mock.host.name"
+	port := int32(0)
+	slaveInfo := mesosproto.SlaveInfo{
+		Hostname: &hostname,
+		Port:     &port,
+		Id:       slaveID,
+	}
+
+	executor.Registered(mockDriver, executorInfo, frameworkInfo, &slaveInfo)
 }
