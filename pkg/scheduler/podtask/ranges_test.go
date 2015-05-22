@@ -36,6 +36,7 @@ func TestNewPortRanges(t *testing.T) {
 	}{
 		{Ranges{{2, 0}, {3, 10}}, Ranges{{0, 10}}},
 		{Ranges{{0, 2}, {3, 10}}, Ranges{{0, 10}}},
+		{Ranges{{0, 2}, {1, 10}}, Ranges{{0, 10}}},
 		{Ranges{{0, 2}, {4, 10}}, Ranges{{0, 2}, {4, 10}}},
 		{Ranges{{10, 0}}, Ranges{{0, 10}}},
 		{Ranges{}, Ranges{}},
