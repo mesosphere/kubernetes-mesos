@@ -81,10 +81,10 @@ func (rs Ranges) Squash() Ranges {
 	}
 	squashed := Ranges{rs[0]}
 	for i := 1; i < len(rs); i++ {
-		switch top := squashed[len(squashed)-1]; {
-		case 1+top[1] < rs[i][0]: // no overlap nor continuity: push
+		switch max := squashed[len(squashed)-1][1]; {
+		case 1+max < rs[i][0]: // no overlap nor continuity: push
 			squashed = append(squashed, rs[i])
-		case 1+top[1] <= rs[i][1]: // overlap or continuity: squash
+		case max <= rs[i][1]: // overlap or continuity: squash
 			squashed[len(squashed)-1][1] = rs[i][1]
 		}
 	}
