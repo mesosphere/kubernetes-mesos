@@ -787,11 +787,11 @@
 		},
 		{
 			"ImportPath": "github.com/stretchr/testify/assert",
-			"Rev": "e4ec8152c15fc46bd5056ce65997a07c7d415325"
+			"Rev": "dab07ac62d4905d3e48d17dc549c684ac3b7c15a"
 		},
 		{
 			"ImportPath": "github.com/stretchr/testify/mock",
-			"Rev": "e4ec8152c15fc46bd5056ce65997a07c7d415325"
+			"Rev": "dab07ac62d4905d3e48d17dc549c684ac3b7c15a"
 		},
 		{
 			"ImportPath": "github.com/vaughan0/go-ini",
