@@ -21,6 +21,7 @@ scheduler_host=${SCHEDULER_HOST:-${default_dns_name}}
 scheduler_port=${SCHEDULER_PORT:-10251}
 scheduler_driver_port=${SCHEDULER_DRIVER_PORT:-25501}
 
+framework_name=${FRAMEWORK_NAME:-kubernetes}
 framework_weburi=${FRAMEWORK_WEBURI:-http://${apiserver_host}:${apiserver_port}/static/}
 
 controller_manager_host=${CONTROLLER_MANAGER_HOST:-${default_dns_name}}
@@ -180,6 +181,7 @@ $apply_uids
   --v=${SCHEDULER_GLOG_v:-${logv}}
   --km_path=${sandbox}/executor-installer.sh
   --advertised_address=${scheduler_host}:${scheduler_port}
+  --framework_name=${framework_name}
   --framework_weburi=${framework_weburi}
   --driver_port=${scheduler_driver_port}
 EOF
