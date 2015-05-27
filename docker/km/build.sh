@@ -27,7 +27,7 @@ trap 'cleanup' EXIT
 mkdir ${WORKSPACE}/bin
 
 echo "Building kubernetes-mesos binaries"
-docker run --rm -v ${WORKSPACE}/bin:/target mesosphere/kubernetes-mesos:build
+docker run --rm -v ${WORKSPACE}/bin:/target mesosphere/kubernetes-mesos-build
 
 echo "Binaries produced:"
 ls ${WORKSPACE}/bin

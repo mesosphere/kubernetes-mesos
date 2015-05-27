@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # paths relative to project dir
-EXPECTED_SCRIPT_DIR=docker/complete
+EXPECTED_SCRIPT_DIR=docker/build
 EXPECTED_BINARY_DIR=bin
 
 set -ex
@@ -26,19 +26,12 @@ trap 'cleanup' EXIT
 
 mkdir ${WORKSPACE}/bin
 
-echo "Building kubernetes-mesos binaries"
-docker run --rm -v ${WORKSPACE}/bin:/target mesosphere/kubernetes-mesos-build
-
-echo "Binaries produced:"
-ls ${WORKSPACE}/bin
-
-[ ! -e ${WORKSPACE}/bin/km ] && echo "Binaries not produced...?" && exit 1
-
 # setup workspace to mirror project dir (for resources required by the dockerfile)
 echo "Setting up workspace"
 mkdir -p ${WORKSPACE}/docker/bin
 cp ${project_dir}/docker/bin/* ${WORKSPACE}/docker/bin/
-cp ${project_dir}/docker/mesos-cloud.conf ${WORKSPACE}/docker/
+mkdir -p ${WORKSPACE}/docker/build/bin
+cp ${project_dir}/docker/build/bin/* ${WORKSPACE}/docker/build/bin/
 
 # Dockerfile must be within build context
 cp ${project_dir}/${EXPECTED_SCRIPT_DIR}/Dockerfile ${WORKSPACE}/
@@ -46,5 +39,5 @@ cp ${project_dir}/${EXPECTED_SCRIPT_DIR}/Dockerfile ${WORKSPACE}/
 cd ${WORKSPACE}
 
 # build docker image
-echo "Building kubernetes-mesos-complete docker image"
-docker build -t mesosphere/kubernetes-mesos-complete .
+echo "Building kubernetes-mesos-build docker image"
+docker build -t mesosphere/kubernetes-mesos-build .

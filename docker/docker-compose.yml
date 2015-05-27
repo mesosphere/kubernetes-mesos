@@ -67,7 +67,7 @@ controller:
     (grep "mesos-master\s*=" /opt/mesos-cloud.conf || echo "  mesos-master = mesos:5050" >> /opt/mesos-cloud.conf) &&
     await-health-check http://etcd:4001/health &&
     await-health-check http://mesos:5050/health &&
-    await-health-check http://apiserver:8888/healthz &&
+    await-health-check -t=30 http://apiserver:8888/healthz &&
     km controller-manager
     --master=http://apiserver:8888
     --cloud_config=/opt/mesos-cloud.conf
@@ -87,7 +87,7 @@ scheduler:
     (grep "mesos-master\s*=" /opt/mesos-cloud.conf || echo "  mesos-master = mesos:5050" >> /opt/mesos-cloud.conf) &&
     await-health-check http://etcd:4001/health &&
     await-health-check http://mesos:5050/health &&
-    await-health-check http://apiserver:8888/healthz &&
+    await-health-check -t=30 http://apiserver:8888/healthz &&
     km scheduler
     --address=$(resolveip scheduler)
     --hostname_override=scheduler

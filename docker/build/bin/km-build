@@ -1,4 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+# NOT FOR LOCAL USE!
+# Designed for use by docker/build/Dockerfile
+
 echo Running with args "${@}"
 
 set -e
@@ -8,14 +12,18 @@ set -vx
 GOPKG=github.com/mesosphere/kubernetes-mesos
 
 test ${#} -eq 0 && CMD=( make bootstrap install ) || CMD=( "${@}" )
-test -n "$GOPATH" || GOPATH=/pkg
+
+if [ -z "$GOPATH" ]; then
+  echo "ERROR: GOPATH must be set" >&2
+  exit 1
+fi
 
 # gopath is first directory in GOPATH : separated list
 gopath="${GOPATH%%:*}"
 pkg="${gopath}/src/${GOPKG}"
 
 if [ -d $SNAP ]; then
-  test ! -L "${pkg}" || /bin/rm -vf "${pkg}"  # remove any existing link
+  test ! -L "${pkg}" || rm -vf "${pkg}"  # remove any existing link
   parent=$(dirname "${pkg}")
   mkdir -pv "$parent"
   ln -sv $SNAP "$parent/$(basename $GOPKG)"
