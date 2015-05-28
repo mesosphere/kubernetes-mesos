@@ -6,13 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	types "github.com/GoogleCloudPlatform/kubernetes/pkg/kubelet"
-	"github.com/gogo/protobuf/proto"
 	"github.com/golang/glog"
 	bindings "github.com/mesos/mesos-go/executor"
-	mesos "github.com/mesos/mesos-go/mesosproto"
-	execcfg "github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 )
 
 type suicideTracker struct {
@@ -184,76 +179,4 @@ func TestSuicide_WithTasks(t *testing.T) {
 	} else {
 		glog.Infoln("jumps verified") // glog so we get a timestamp
 	}
-}
-
-// Test that we can retrieve the pod information from executorInfo on registration
-func TestStaticPods_exectuorInfo(t *testing.T) {
-
-	executor := &KubernetesExecutor{
-		state:        disconnectedState,
-		tasks:        make(map[string]*kuberTask),
-		pods:         make(map[string]*api.Pod),
-		done:         make(chan struct{}),
-		outgoing:     make(chan func() (mesos.Status, error), 1024),
-		suicideWatch: &suicideTimer{},
-	}
-
-	commandInfo := &mesos.CommandInfo{
-		Shell: proto.Bool(false),
-	}
-	executorInfo := &mesos.ExecutorInfo{
-		Command: commandInfo,
-		Name:    proto.String(execcfg.DefaultInfoName),
-		Source:  proto.String(execcfg.DefaultInfoSource),
-	}
-
-	var staticPods []api.Pod
-
-	staticPod1 := &api.Pod{
-		ObjectMeta: api.ObjectMeta{
-			UID:         "123456789",
-			Name:        "bar",
-			Namespace:   "default",
-			Annotations: map[string]string{types.ConfigSourceAnnotationKey: "file"},
-		},
-		Spec: api.PodSpec{
-			Host: "h1",
-			//RestartPolicy: api.RestartPolicyAlways,
-			//DNSPolicy:     api.DNSClusterFirst,
-			Containers: []api.Container{{
-				Name:  "image",
-				Image: "test/image",
-				TerminationMessagePath: "/dev/termination-log",
-				ImagePullPolicy:        "Always"}},
-			//	SecurityContext:        securitycontext.ValidSecurityContextWithContainerDefaults()}},
-		},
-	}
-
-	staticPods = append(staticPods, *staticPod1)
-	staticPods = append(staticPods, *staticPod1)
-
-	executor.launchStaticPods(staticPods)
-	/*
-		//serialize static pod
-		var bin_buf bytes.Buffer
-		binary.Write(&bin_buf, binary.BigEndian, staticPod)
-
-		executorInfo.Data = bin_buf.Bytes()
-
-		var staticPod2 api.Pod
-		buf := bytes.NewReader(executorInfo.Data)
-		err := binary.Read(buf, binary.BigEndian, &staticPod2)
-		if err != nil {
-			t.Log("binary.Read failed:", err)
-		} else {
-			t.Log("UID", staticPod2.ObjectMeta.UID )
-		}
-	*/
-
-	//executor.Registered(nil, executorInfo)
-
-	var _ = executor
-	var _ = staticPod1
-	var _ = executorInfo
-
 }

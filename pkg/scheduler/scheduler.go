@@ -103,15 +103,15 @@ type KubernetesScheduler struct {
 
 	// Config related, write-once
 
-	schedcfg          *schedcfg.Config
-	executor          *mesos.ExecutorInfo
-	executorGroup     uint64
-	scheduleFunc      PodScheduleFunc
-	client            *client.Client
-	etcdClient        tools.EtcdGetSet
-	failoverTimeout   float64 // in seconds
-	reconcileInterval int64
-
+	schedcfg             *schedcfg.Config
+	executor             *mesos.ExecutorInfo
+	executorGroup        uint64
+	scheduleFunc         PodScheduleFunc
+	client               *client.Client
+	etcdClient           tools.EtcdGetSet
+	failoverTimeout      float64 // in seconds
+	reconcileInterval    int64
+	StaticPodsConfigPath string
 	// Mesos context.
 
 	driver         bindings.SchedulerDriver // late initialization
@@ -122,7 +122,6 @@ type KubernetesScheduler struct {
 	onRegistration sync.Once
 	offers         offers.Registry
 	slaves         *slaveStorage
-	staticPods     []api.Pod
 
 	// unsafe state, needs to be guarded
 
@@ -146,22 +145,23 @@ type Config struct {
 	FailoverTimeout      float64
 	ReconcileInterval    int64
 	ReconcileCooldown    time.Duration
-	StaticPodsConfigFile string
+	StaticPodsConfigPath string
 }
 
 // New create a new KubernetesScheduler
 func New(config Config) *KubernetesScheduler {
 	var k *KubernetesScheduler
 	k = &KubernetesScheduler{
-		schedcfg:          &config.Schedcfg,
-		RWMutex:           new(sync.RWMutex),
-		executor:          config.Executor,
-		executorGroup:     uid.Parse(config.Executor.ExecutorId.GetValue()).Group(),
-		scheduleFunc:      config.ScheduleFunc,
-		client:            config.Client,
-		etcdClient:        config.EtcdClient,
-		failoverTimeout:   config.FailoverTimeout,
-		reconcileInterval: config.ReconcileInterval,
+		schedcfg:             &config.Schedcfg,
+		RWMutex:              new(sync.RWMutex),
+		executor:             config.Executor,
+		executorGroup:        uid.Parse(config.Executor.ExecutorId.GetValue()).Group(),
+		scheduleFunc:         config.ScheduleFunc,
+		client:               config.Client,
+		etcdClient:           config.EtcdClient,
+		failoverTimeout:      config.FailoverTimeout,
+		reconcileInterval:    config.ReconcileInterval,
+		StaticPodsConfigPath: config.StaticPodsConfigPath,
 		offers: offers.CreateRegistry(offers.RegistryConfig{
 			Compat: func(o *mesos.Offer) bool {
 				// filter the offers: the executor IDs must not identify a kubelet-

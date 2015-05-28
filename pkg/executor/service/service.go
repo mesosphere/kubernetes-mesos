@@ -296,6 +296,7 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(
 	//TODO(jdef) either configure Watch here with something useful, or else
 	// get rid of it from executor.Config
 	kubeletFinished := make(chan struct{})
+	kubeletStarted := make(chan struct{})
 	exec := executor.New(executor.Config{
 		Kubelet:         kubelet,
 		Updates:         updates,
@@ -304,6 +305,7 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(
 		Docker:          kc.DockerClient,
 		SuicideTimeout:  ks.SuicideTimeout,
 		KubeletFinished: kubeletFinished,
+		KubeletStarted:  kubeletStarted,
 		ShutdownAlert: func() {
 			if shutdownCloser != nil {
 				if e := shutdownCloser.Close(); e != nil {
@@ -325,6 +327,7 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(
 		dockerClient:    kc.DockerClient,
 		hks:             hks,
 		kubeletFinished: kubeletFinished,
+		kubeletStarted:  kubeletStarted,
 		executorDone:    exec.Done(),
 		clientConfig:    clientConfig,
 		enableProfiling: ks.EnableProfiling,
@@ -346,6 +349,9 @@ func (ks *KubeletExecutorServer) createAndInitKubelet(
 	k.BirthCry()
 	exec.Init(k.driver)
 
+	// Signal that kubelet is initialized
+	close(kubeletStarted)
+
 	k.StartGarbageCollection()
 
 	return k, pc, nil
@@ -366,6 +372,7 @@ type kubeletExecutor struct {
 	dockerClient    dockertools.DockerInterface
 	hks             hyperkube.Interface
 	kubeletFinished chan struct{}   // closed once kubelet.Run() returns
+	kubeletStarted  chan struct{}   // closed once kubelet initialized returns
 	executorDone    <-chan struct{} // from KubeletExecutor.Done()
 	clientConfig    *client.Config
 	enableProfiling bool
