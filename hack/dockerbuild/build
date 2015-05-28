@@ -1,4 +1,0 @@
-#!/bin/bash
-
-docker build -t kubernetes-mesos:build .
-docker tag -f kubernetes-mesos:build mesosphere/kubernetes-mesos:build

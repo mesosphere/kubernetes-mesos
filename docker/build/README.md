@@ -1,13 +1,13 @@
 # Overview
 
-The intent of the dockerbuilder is to leverage Docker as cleanroom build environment for this project.
+The intent of kubernetes-mesos-build is to leverage Docker as cleanroom build environment for this project.
 Once built the Docker image contains all the libraries, headers, and tooling for compiling the binaries required to run the kubernetes-mesos framework.
 
 ## Building the Docker image
 
-The `build` file in this directory will generate a docker image capable of building kubernetes-mesos binaries.
+The `build.sh` file in this directory will generate a docker image capable of building kubernetes-mesos binaries.
 
-    $ . build
+    $ ./build.sh
 
 ## Building the project
 
@@ -21,7 +21,7 @@ This example copies the resulting binaries into the host-mounted volume `/tmp/ta
 
 To build and copy the binaries:
 
-    $ docker run --rm -v /tmp/target:/target mesosphere/kubernetes-mesos:build
+    $ docker run --rm -v /tmp/target:/target mesosphere/kubernetes-mesos-build
     ...
     git clone https://${GOPKG}.git .
     Cloning into '.'...
@@ -43,22 +43,22 @@ To build and copy the binaries:
 
 Alternatively, it can be used to generate binaries from a branch:
 
-    $ docker run --rm -v /tmp/target:/target -e GIT_BRANCH=default_port mesosphere/kubernetes-mesos:build
+    $ docker run --rm -v /tmp/target:/target -e GIT_BRANCH=default_port mesosphere/kubernetes-mesos-build
 
 Want a quick-and-dirty development environment to start hacking?
 
-    $ docker run -ti -v /tmp/target:/target mesosphere/kubernetes-mesos:build bash
+    $ docker run -ti -v /tmp/target:/target mesosphere/kubernetes-mesos-build bash
     root@5883c3a460a6$ make bootstrap all
 
 Need to build the project, but from a forked git repo?
 
     $ docker run --rm -v /tmp/target:/target -e GIT_REPO=https://github.com/whoami/kubernetes-mesos \
-        mesosphere/kubernetes-mesos:build
+        mesosphere/kubernetes-mesos-build
 
 To hack in your currently checked out repo mount the root of the github repo to `/snapshot`:
 
     $ docker run -ti -v /tmp/target:/target -v /home/jdef/kubernetes-mesos:/snapshot \
-        mesosphere/kubernetes-mesos:build bash
+        mesosphere/kubernetes-mesos-build bash
 
 ## Profiling
 
@@ -66,7 +66,7 @@ Profiling in the cloud with Kubernetes-Mesos is easy!
 First, ssh into your Mesos cluster and generate a set of project binaries:
 
     $ docker run --rm -ti -e GIT_BRANCH=offer_storage \
-        -v $(pwd)/bin:/target mesosphere/kubernetes-mesos:build
+        -v $(pwd)/bin:/target mesosphere/kubernetes-mesos-build
 
 Next, [start the framework](https://github.com/mesosphere/kubernetes-mesos/#start-the-framework) with the `--profiling` flag and schedule some pods.
 Once the framework and executors are up and running you can start capturing heaps:

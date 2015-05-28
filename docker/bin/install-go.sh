@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
 
-set -e
+# Installs go into /usr/local/go/bin
+# To enable: export PATH=$PATH:/usr/local/go/bin
 
-GOPATH=${GOPATH:-~/go}
-GO_ARCHIVE_URL=${GO_ARCHIVE_URL:-https://storage.googleapis.com/golang/go1.4.2.linux-amd64.tar.gz}
-GO_ARCHIVE=/tmp/$(basename ${GO_ARCHIVE_URL})
+set -ex
 
-echo "Downloading go (${GO_ARCHIVE_URL})..."
-mkdir -p $(dirname $GOROOT)
-wget -q $GO_ARCHIVE_URL -O $GO_ARCHIVE
-echo "Installing go (${GOROOT})..."
-tar xf $GO_ARCHIVE -C $(dirname $GOROOT)
+GO_VERSION=${GO_VERSION:-1.4.2}
 
-if [ ! -d $TMPDIR ]; then
-    mkdir -p $TMPDIR
+archive_root=go${GO_VERSION}.linux-amd64
+archive_url=https://storage.googleapis.com/golang/${archive_root}.tar.gz
+
+cd /usr/local
+
+if [ -d ./go ]; then
+    echo "Uninstalling Go..."
+    rm -rf ./go
 fi
 
-rm -f $GO_ARCHIVE
+echo "Downloading Go..."
+wget -nv ${archive_url} -O ${archive_root}.tar.gz
+
+echo "Installing Go..."
+tar xf ${archive_root}.tar.gz
