@@ -37,6 +37,7 @@ import (
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider"
 	nodeControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/cloudprovider/controller"
 	replicationControllerPkg "github.com/GoogleCloudPlatform/kubernetes/pkg/controller"
+	"github.com/GoogleCloudPlatform/kubernetes/pkg/healthz"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/namespace"
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/resourcequota"
 	kendpoint "github.com/GoogleCloudPlatform/kubernetes/pkg/service"
@@ -101,14 +102,6 @@ func (s *CMServer) Run(_ []string) error {
 		glog.Fatalf("Invalid API configuration: %v", err)
 	}
 
-	go func() {
-		mux := http.NewServeMux()
-		if s.EnableProfiling {
-			profile.InstallHandler(mux)
-		}
-		util.Forever(func() { http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), mux) }, 5*time.Second)
-	}()
-
 	endpoints := s.createEndpointController(kubeClient)
 	go util.Forever(func() { endpoints.SyncServiceEndpoints() }, time.Second*10)
 
@@ -144,6 +137,26 @@ func (s *CMServer) Run(_ []string) error {
 
 	namespaceManager := namespace.NewNamespaceManager(kubeClient)
 	namespaceManager.Run(s.NamespaceSyncPeriod)
+
+	go func() {
+		mux := http.NewServeMux()
+		if s.EnableProfiling {
+			profile.InstallHandler(mux)
+		}
+
+		// Any controllers implementing HealthzChecker will be Check()ed during health check.
+		controllers := []interface{} { controllerManager, nodeController, resourceQuotaManager, namespaceManager }
+		checkers := make([]healthz.HealthzChecker, 0)
+		for _, c := range controllers {
+			if checker, ok := c.(healthz.HealthzChecker); ok {
+				checkers = append(checkers, checker)
+			}
+		}
+
+		healthz.InstallHandler(mux, checkers...)
+
+		util.Forever(func() { http.ListenAndServe(net.JoinHostPort(s.Address.String(), strconv.Itoa(s.Port)), mux) }, 5*time.Second)
+	}()
 
 	select {}
 }
