@@ -1,4 +1,7 @@
-FROM	?= $(shell pwd)/_build/k8sm
+mkfile_path     := $(abspath $(lastword $(MAKEFILE_LIST)))
+current_dir     := $(patsubst %/,%,$(dir $(mkfile_path)))
+
+FROM	?= $(current_dir)/_build/k8sm
 TARGET_OBJ = km kubectl
 SOURCE_OBJ = $(TARGET_OBJ:%=$(FROM)/%)
 
