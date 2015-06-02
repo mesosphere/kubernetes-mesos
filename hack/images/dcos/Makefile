@@ -1,5 +1,10 @@
-FROM	?= /target
+mkfile_path     := $(abspath $(lastword $(MAKEFILE_LIST)))
+current_dir     := $(patsubst %/,%,$(dir $(mkfile_path)))
+
+FROM	?= $(current_dir)/_build/k8sm
 TARGET_OBJ = km kubectl
+SOURCE_OBJ = $(TARGET_OBJ:%=$(FROM)/%)
+
 IMAGE	?= kubernetes
 REPO	?= mesosphere/$(IMAGE)
 DCOS_VERSION ?= dev
@@ -48,20 +53,20 @@ DCOS_PREFIX ?= k8s-0.14.2-k8sm-0.5-dcos
 TAG	?= $(DCOS_PREFIX)-$(DCOS_VERSION)
 FQIN	?= $(REPO):$(TAG)
 
-.PHONY:	clean build push s6 $(S6_BINS) deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) version release promote check-sudo-docker info
+.PHONY:	clean build push s6 $(S6_BINS) deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) version release promote check-sudo-docker info $(SOURCE_OBJ)
 
 all:	build
 
 clean:
 	rm -rf $(TARGET_OBJ)
 
-deps: $(S6_BINS) $(ETCD_BINS) $(KUBE_DNS_TEMPLATES)
+deps: $(S6_BINS) $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) $(SOURCE_OBJ)
 
 version:
 	@echo "$(RELEASE_VERSION)" | tee .version
 
 build: deps version check-sudo-docker
-	cp -pv $(TARGET_OBJ:%=$(FROM)/%) .
+	cp -pv $(SOURCE_OBJ) .
 	@echo $(FQIN) >dockertag
 	$(SUDO) docker build -q -t $$(cat dockertag) .
 
@@ -106,3 +111,6 @@ info: check-sudo-docker
 	@$(SUDO) docker version
 	@echo ".version : $$(cat .version 2>/dev/null)"
 	@echo "dockertag: $$(cat dockertag 2>/dev/null)"
+
+$(SOURCE_OBJ): check-sudo-docker
+	test -x $@ || $(SUDO) docker run --rm -v $(FROM):/target -v $(shell cd ../../.. && pwd):/snapshot mesosphere/kubernetes-mesos:build make clean install
