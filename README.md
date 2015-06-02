@@ -22,7 +22,7 @@ components have been added, removed, and/or changed.
 
 ### Tutorial
 
-Mesosphere maintains a tutorial for running [Kubernetes-Mesos on GCE][10], which is periodically updated to coincide with releases of this project.
+Mesosphere maintains a tutorial for running [Kubernetes-Mesos][10], which is periodically updated to coincide with releases of this project.
 
 ### Binaries
 
