@@ -20,7 +20,6 @@ import (
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	mutil "github.com/mesos/mesos-go/mesosutil"
 	bindings "github.com/mesos/mesos-go/scheduler"
-	execcfg "github.com/mesosphere/kubernetes-mesos/pkg/executor/config"
 	"github.com/mesosphere/kubernetes-mesos/pkg/executor/messages"
 	"github.com/mesosphere/kubernetes-mesos/pkg/offers"
 	offerMetrics "github.com/mesosphere/kubernetes-mesos/pkg/offers/metrics"
@@ -102,9 +101,9 @@ type KubernetesScheduler struct {
 	*sync.RWMutex
 
 	// Config related, write-once
-
+	
 	schedcfg          *schedcfg.Config
-	executor          *mesos.ExecutorInfo
+	executor          *ExecutorRef
 	executorGroup     uint64
 	scheduleFunc      PodScheduleFunc
 	client            *client.Client
@@ -138,7 +137,7 @@ type KubernetesScheduler struct {
 
 type Config struct {
 	Schedcfg          schedcfg.Config
-	Executor          *mesos.ExecutorInfo
+	Executor          *ExecutorRef
 	ScheduleFunc      PodScheduleFunc
 	Client            *client.Client
 	EtcdClient        tools.EtcdGetSet
@@ -154,35 +153,14 @@ func New(config Config) *KubernetesScheduler {
 		schedcfg:          &config.Schedcfg,
 		RWMutex:           new(sync.RWMutex),
 		executor:          config.Executor,
-		executorGroup:     uid.Parse(config.Executor.ExecutorId.GetValue()).Group(),
 		scheduleFunc:      config.ScheduleFunc,
 		client:            config.Client,
 		etcdClient:        config.EtcdClient,
 		failoverTimeout:   config.FailoverTimeout,
 		reconcileInterval: config.ReconcileInterval,
 		offers: offers.CreateRegistry(offers.RegistryConfig{
-			Compat: func(o *mesos.Offer) bool {
-				// filter the offers: the executor IDs must not identify a kubelet-
-				// executor with a group that doesn't match ours
-				for _, eid := range o.GetExecutorIds() {
-					execuid := uid.Parse(eid.GetValue())
-					if execuid.Name() == execcfg.DefaultInfoID && execuid.Group() != k.executorGroup {
-						return false
-					}
-				}
-				return true
-			},
-			DeclineOffer: func(id string) <-chan error {
-				errOnce := proc.NewErrorOnce(k.terminate)
-				errOuter := k.asRegisteredMaster.Do(func() {
-					var err error
-					defer errOnce.Report(err)
-					offerId := mutil.NewOfferID(id)
-					filters := &mesos.Filters{}
-					_, err = k.driver.DeclineOffer(offerId, filters)
-				})
-				return errOnce.Send(errOuter).Err()
-			},
+			Compat: k.isOfferCompatible,
+			DeclineOffer: k.declineOffer,
 			// remember expired offers so that we can tell if a previously scheduler offer relies on one
 			LingerTTL:     config.Schedcfg.OfferLingerTTL.Duration,
 			TTL:           config.Schedcfg.OfferTTL.Duration,
@@ -197,6 +175,37 @@ func New(config Config) *KubernetesScheduler {
 		}),
 	}
 	return k
+}
+
+// isCompatible returns true if the specified offer is compatible with the scheduler's executor.
+// Offers are compatible unless the name matches and the group doesn't.
+func (k *KubernetesScheduler) isOfferCompatible(o *mesos.Offer) bool {
+	for _, eid := range o.GetExecutorIds() {
+		executorIdString := eid.GetValue()
+		executorID, err := uid.Parse(executorIdString)
+		if err != nil {
+			// offers with invalid executor IDs are assumed to be broken and thus incompatible
+			log.Errorf("Failed to parse offered executor ID %p: %v", executorIdString, err)
+			return false
+		}
+
+		if executorID.Name() == k.executor.ID().Name() && executorID.Group() != k.executor.ID().Group() {
+			return false
+		}
+	}
+	return true
+}
+
+func (k *KubernetesScheduler) declineOffer(id string) <-chan error {
+	errOnce := proc.NewErrorOnce(k.terminate)
+	errOuter := k.asRegisteredMaster.Do(func() {
+		var err error
+		defer errOnce.Report(err)
+		offerId := mutil.NewOfferID(id)
+		filters := &mesos.Filters{}
+		_, err = k.driver.DeclineOffer(offerId, filters)
+	})
+	return errOnce.Send(errOuter).Err()
 }
 
 func (k *KubernetesScheduler) Init(electedMaster proc.Process, pl PluginInterface, mux *http.ServeMux) error {
@@ -256,7 +265,7 @@ func (k *KubernetesScheduler) InstallDebugHandlers(mux *http.ServeMux) {
 		slaves := k.slaves.getSlaveIds()
 		for _, slaveId := range slaves {
 			_, err := k.driver.SendFrameworkMessage(
-				k.executor.ExecutorId,
+				k.executor.Proto().ExecutorId,
 				mutil.NewSlaveID(slaveId),
 				messages.Kamikaze)
 			if err != nil {

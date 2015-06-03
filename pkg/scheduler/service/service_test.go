@@ -90,3 +90,25 @@ func Test_awaitFailoverDoneFailover(t *testing.T) {
 		t.Fatalf("expected call to failover handler")
 	}
 }
+
+func Test_validateLeadershipTransition(t *testing.T) {
+	if err := validateLeadershipTransition("1_name-1", ""); err != nil {
+		t.Errorf("expected validation to pass when current id is empty")
+	}
+
+	if err := validateLeadershipTransition("1_name-1", "1_name-2"); err != nil {
+		t.Errorf("expected validation to pass when desired group equals current group")
+	}
+
+	if err := validateLeadershipTransition("0_name-1", ""); err == nil {
+		t.Errorf("expected validation to fail when desired group is 0 and current id is empty")
+	}
+
+	if err := validateLeadershipTransition("0_name-1", "1_name-2"); err == nil {
+		t.Errorf("expected validation to fail when desired group is 0 and current id exists")
+	}
+
+	if err := validateLeadershipTransition("1_name-1", "2_name-2"); err == nil {
+		t.Errorf("expected validation to fail when desired group does not equals current group")
+	}
+}
