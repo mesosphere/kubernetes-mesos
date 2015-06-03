@@ -1,5 +1,15 @@
 #!/bin/sh
 
+if test "$1" = "kc"; then
+  shift
+  exec /opt/kubectl "$@"
+fi
+
+die() {
+  test ${#} -eq 0 || echo "$@" >&2
+  exit 1
+}
+
 sandbox=${MESOS_SANDBOX:-${MESOS_DIRECTORY}}
 test -n "$sandbox" || die failed to identify mesos sandbox. neither MESOS_DIRECTORY or MESOS_SANDBOX was specified
 

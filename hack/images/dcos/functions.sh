@@ -2,11 +2,6 @@
 
 test -n "$sandbox" || die failed to identify mesos sandbox
 
-die() {
-  test ${#} -eq 0 || echo "$@" >&2
-  exit 1
-}
-
 lookup_ip() {
   local leader=$(nslookup "$1" | sed -e '/^Server:/,/^Address .*$/{ d }' -e '/^$/d'|grep -e '^Address '|cut -f3 -d' '|head -1)
   test -n "$leader" || die Failed to identify $1
