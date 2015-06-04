@@ -25,7 +25,7 @@ RUN apt-get update && \
 
 RUN curl -sSL https://get.docker.com/ | sh
 
-RUN pip install -U docker-compose==1.3.0rc1
+RUN pip install -U docker-compose
 
 RUN go get github.com/tools/godep
 
