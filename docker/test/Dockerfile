@@ -18,14 +18,24 @@ RUN apt-get update && \
         rsync \
         patch \
         jq \
+        python \
+        python-pip \
         && \
     apt-get clean
 
 RUN curl -sSL https://get.docker.com/ | sh
 
+RUN pip install -U docker-compose==1.3.0rc1
+
 RUN go get github.com/tools/godep
 
 RUN mkdir -p /go/src/github.com/GoogleCloudPlatform/kubernetes
 WORKDIR /go/src/github.com/GoogleCloudPlatform/kubernetes
+
+COPY ./bin/* /usr/local/bin/
+
+RUN install-etcd.sh
+
+RUN install-gcloud.sh
 
 ENTRYPOINT [ "bash" ]
