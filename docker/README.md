@@ -66,7 +66,17 @@ docker kill kubernetes-mesos
 This method requires [Docker Compose](https://docs.docker.com/compose/) to be installed, which can be done via apt-get, homebrew, or [manually](https://docs.docker.com/compose/install/).
 
 The provided docker-compose.yml contains a self-contained configuration for running kubernetes-mesos, including its dependencies (etcd & mesos).
-It will launch 5 docker containers linked together with hostnames and port forwarding.
+It will launch several docker containers linked together with hostnames and port forwarding:
+
+- [docker-grand-ambassador](https://github.com/cpuguy83/docker-grand-ambassador) - Proxy to allow circular hostname dependencies in docker
+- [etcd](https://quay.io/repository/coreos/etcd) - Key/Value store used by Mesos
+- Mesos Master - Single (non-HA) Mesos API server
+- Mesos Slave (x2) - Mesos agents that run Kubernetes Kublets
+- Kubernetes API Server
+- Kubernetes Controller Manager
+- Kubernetes Scheduler
+
+### Starting
 
 ```
 # from inside the docker dir
