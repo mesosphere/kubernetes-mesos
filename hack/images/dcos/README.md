@@ -65,7 +65,7 @@ Some prerequisites:
 - build yourself a kubectl, either using the Kubernetes or Kubernetes-Mesos build process
 
 ```shell
-$ export KUBERNETES_MASTER=http://{the-dcos-host-your-kubernetes-master-is-running-on}:25502
+$ export KUBERNETES_MASTER=http://{the-dcos-host-your-kubernetes-master-is-running-on}/services/kubernetes/api
 $ bin/kubectl create -f ../../../examples/guestbook/redis-master.json 
 pods/redis-master-2
 $ bin/kubectl create -f ../../../examples/guestbook/redis-master-service.json 
