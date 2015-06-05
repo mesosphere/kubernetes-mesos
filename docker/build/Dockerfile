@@ -1,4 +1,4 @@
-FROM golang:1.4.2-wheezy
+FROM golang:1.4.2-cross
 MAINTAINER Mesosphere <support@mesosphere.io>
 
 RUN apt-get update && \

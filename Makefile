@@ -37,6 +37,7 @@ PATCH_SCRIPT	:= $(current_dir)/hack/patches/apply.sh
 
 # TODO: make this something more reasonable
 DESTDIR		?= /target
+OUT_DIR		?= $(current_dir)/_output
 
 # default build tags
 TAGS		?=
@@ -63,6 +64,17 @@ all: patch version
 	env GOPATH=$(_GOPATH) go install $(K8S_CMD)
 	env GOPATH=$(_GOPATH) go install -ldflags "$(shell cat $(GIT_VERSION_FILE))" $(FRAMEWORK_FLAGS) $(FRAMEWORK_CMD)
 
+# Cross-compiles the kubectl client binaries and compresses them into platform specific tarballs.
+# Run in mesosphere/kubernetes-mesos-build docker image for best results:
+# docker run --rm \
+#   -v "$(pwd):/go/src/github.com/mesosphere/kubernetes-mesos" \
+#   -w "/go/src/github.com/mesosphere/kubernetes-mesos" \
+#   --entrypoint "bash" \
+#   mesosphere/kubernetes-mesos-build \
+#   -c "make client-cross"
+client-cross: patch version
+	env GOPATH=$(_GOPATH) $(current_dir)/hack/build-client-cross.sh
+
 error:
 	echo -E "$@: ${MSG}" >&2
 	false
@@ -74,7 +86,8 @@ require-vendor:
 
 clean:
 	rm -f $(GIT_VERSION_FILE)
-	test -n "$(BUILDDIR)" && rm -rf $(BUILDDIR)/*
+	test -n "$(BUILDDIR)" && rm -rf $(BUILDDIR)
+	test -n "$(OUT_DIR)" && rm -rf $(OUT_DIR)
 
 format:
 	gofmt -s -w cmd pkg
