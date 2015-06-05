@@ -8,6 +8,7 @@ _obj
 _test
 /bin
 _build
+_output
 
 # Architecture specific extensions/prefixes
 *.[568vq]
