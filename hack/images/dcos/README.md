@@ -2,6 +2,8 @@
 
 This package contains scripts to build the DCOS Kubernetes docker container image.
 
+![Kubernetes-Mesos on DCOS](images/dcos_k8sm.png)
+
 ## DNS Support
 
 Kubernetes supports an add-on called kube-dns.
