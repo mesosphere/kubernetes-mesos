@@ -1,9 +1,11 @@
 {
-  "id": "nginxservice",
+  "id": "nginx-service",
   "kind": "Service",
   "apiVersion": "v1beta1",
-  "port": 8000,
+  "protocol": "TCP",
+  "port": 80,
+  "containerPort": 80,
   "selector": {
-    "name": "nginx"
+    "name": "foo"
   }
 }
