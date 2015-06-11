@@ -1,5 +1,24 @@
 ## Known Issues
 
+### Pod Placement
+
+The initial plan was to implement pod placement (aka scheduling "constraints") using rules similar to those found in Marathon.
+Upon further consideration it has been decided that a greater alignment between the stock Kubernetes scheduler and kubernetes-mesos scheduler would benefit both projects, as well as end-users.
+Currently it is not possible to specify pod placement constraints for the kubernetes-mesos scheduler.
+This issue is being tracked here: https://github.com/mesosphere/kubernetes-mesos/issues/338
+
+### Resource Allocation
+
+Mesos is designed to handle resource accounting and enforcement across the cluster.
+Part of that enforcement involves "growing" and "shrinking" the pool of resources allocated for executor containers.
+The current implementation of the kubelet-executor launches pod-tasks as Docker containers (just like the upstream kubelet) and makes no attempt to actually "contain" the pods that are launched.
+Because the kubernetes-mesos scheduler cannot depend on the kubelet-executor to properly contain resources, it foregoes implementing accurate resource accounting.
+Instead CPU and memory resource limits are hardcoded into the scheduler for the time being.
+
+Recent changes to both the Docker and Kubernetes codebase have made it possible to implement the necessary changes in the kubelet-executor for proper pod containment.
+The current plan is to implement such containment in the kubelet-executor and then modify the kubernetes-mesos scheduler to properly account for CPU and memory resources defined in pod specifications.
+This issue is being tracked here: https://github.com/mesosphere/kubernetes-mesos/issues/68.
+
 ### Ports
 
 Mesos typically defines `ports` resources for each slave and these ports are consumed by tasks, as they are launched, that require one or more host ports.
