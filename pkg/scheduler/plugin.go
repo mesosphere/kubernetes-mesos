@@ -188,17 +188,19 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *pod
 	pod.Annotations[annotation.BindingHostKey] = machine
 	task.SaveRecoveryInfo(pod.Annotations)
 
-	for _, entry := range task.Spec.PortMap {
-		oemPorts := pod.Spec.Containers[entry.ContainerIdx].Ports
-		ports := append([]api.ContainerPort{}, oemPorts...)
-		p := &ports[entry.PortIdx]
-		p.HostPort = int(entry.OfferPort)
-		op := strconv.FormatUint(entry.OfferPort, 10)
-		pod.Annotations[fmt.Sprintf(annotation.PortMappingKeyFormat, p.Protocol, p.ContainerPort)] = op
-		if p.Name != "" {
-			pod.Annotations[fmt.Sprintf(annotation.PortNameMappingKeyFormat, p.Protocol, p.Name)] = op
+	for _, m := range task.Spec.PortMap {
+		container := &pod.Spec.Containers[m.ContainerIndex]
+		ports := append([]api.ContainerPort{}, container.Ports...)
+		port := &ports[m.PortIndex]
+		port.HostPort = int(m.HostPort)
+		op := strconv.FormatUint(m.HostPort, 10)
+		key := fmt.Sprintf(annotation.PortMappingKeyFormat, port.Protocol, port.ContainerPort)
+		pod.Annotations[key] = op
+		if port.Name != "" {
+			key = fmt.Sprintf(annotation.PortNameMappingKeyFormat, port.Protocol, port.Name)
+			pod.Annotations[key] = op
 		}
-		pod.Spec.Containers[entry.ContainerIdx].Ports = ports
+		container.Ports = ports
 	}
 
 	// the kubelet-executor uses this to instantiate the pod
@@ -284,7 +286,7 @@ func (k *kubeScheduler) doSchedule(task *podtask.T, err error) (string, error) {
 		} else {
 			task.Offer.Release()
 			task.Reset()
-			if err = k.api.tasks().Update(task); err != nil {
+			if err := k.api.tasks().Update(task); err != nil {
 				return "", err
 			}
 		}

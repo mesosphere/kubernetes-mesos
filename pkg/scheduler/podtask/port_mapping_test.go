@@ -1,189 +1,83 @@
 package podtask
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/GoogleCloudPlatform/kubernetes/pkg/api"
-	mesos "github.com/mesos/mesos-go/mesosproto"
 )
 
-func TestDefaultHostPortMatching(t *testing.T) {
+func TestNewPortMapper(t *testing.T) {
 	t.Parallel()
-	task, _ := fakePodTask("foo")
-	pod := &task.Pod
 
-	offer := &mesos.Offer{
-		Resources: []*mesos.Resource{
-			rangeResource("ports", []uint64{1, 1}),
-		},
-	}
-	mapping, err := defaultHostPortMapping(task, offer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(mapping) > 0 {
-		t.Fatalf("Found mappings for a pod without ports: %v", pod)
-	}
-
-	//--
-	pod.Spec = api.PodSpec{
-		Containers: []api.Container{{
-			Ports: []api.ContainerPort{{
-				HostPort: 123,
-			}, {
-				HostPort: 123,
-			}},
-		}},
-	}
-	task, err = New(api.NewDefaultContext(), "", *pod, &mesos.ExecutorInfo{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = defaultHostPortMapping(task, offer)
-	if err, _ := err.(*DuplicateHostPortError); err == nil {
-		t.Fatal("Expected duplicate port error")
-	} else if err.m1.OfferPort != 123 {
-		t.Fatal("Expected duplicate host port 123")
+	pod := &api.Pod{ObjectMeta: api.ObjectMeta{Labels: map[string]string{}}}
+	for label, want := range map[string]PortMapper{
+		"fixed":    "fixed",
+		"wildcard": "wildcard",
+		"foobar":   "wildcard",
+		"":         "wildcard",
+	} {
+		pod.Labels[PortMappingLabelKey] = label
+		if got := NewPortMapper(pod); got != want {
+			t.Errorf("label=%q got: %q, want: %q", label, got, want)
+		}
 	}
 }
 
-func TestWildcardHostPortMatching(t *testing.T) {
+func TestPortMapper_PortMap(t *testing.T) {
 	t.Parallel()
-	task, _ := fakePodTask("foo")
-	pod := &task.Pod
 
-	offer := &mesos.Offer{}
-	mapping, err := wildcardHostPortMapping(task, offer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(mapping) > 0 {
-		t.Fatalf("Found mappings for an empty offer and a pod without ports: %v", pod)
-	}
+	const pod = "foo"
 
-	//--
-	offer = &mesos.Offer{
-		Resources: []*mesos.Resource{
-			rangeResource("ports", []uint64{1, 1}),
-		},
-	}
-	mapping, err = wildcardHostPortMapping(task, offer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(mapping) > 0 {
-		t.Fatalf("Found mappings for a pod without ports: %v", pod)
-	}
-
-	//--
-	pod.Spec = api.PodSpec{
-		Containers: []api.Container{{
-			Ports: []api.ContainerPort{{
-				HostPort: 123,
-			}},
-		}},
-	}
-	task, err = New(api.NewDefaultContext(), "", *pod, &mesos.ExecutorInfo{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mapping, err = wildcardHostPortMapping(task, offer)
-	if err == nil {
-		t.Fatalf("expected error instead of mappings: %#v", mapping)
-	} else if err, _ := err.(*PortAllocationError); err == nil {
-		t.Fatal("Expected port allocation error")
-	} else if !(len(err.Ports) == 1 && err.Ports[0] == 123) {
-		t.Fatal("Expected port allocation error for host port 123")
-	}
-
-	//--
-	pod.Spec = api.PodSpec{
-		Containers: []api.Container{{
-			Ports: []api.ContainerPort{{
-				HostPort: 0,
-			}, {
-				HostPort: 123,
-			}},
-		}},
-	}
-	task, err = New(api.NewDefaultContext(), "", *pod, &mesos.ExecutorInfo{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mapping, err = wildcardHostPortMapping(task, offer)
-	if err, _ := err.(*PortAllocationError); err == nil {
-		t.Fatal("Expected port allocation error")
-	} else if !(len(err.Ports) == 1 && err.Ports[0] == 123) {
-		t.Fatal("Expected port allocation error for host port 123")
-	}
-
-	//--
-	pod.Spec = api.PodSpec{
-		Containers: []api.Container{{
-			Ports: []api.ContainerPort{{
-				HostPort: 0,
-			}, {
-				HostPort: 1,
-			}},
-		}},
-	}
-	task, err = New(api.NewDefaultContext(), "", *pod, &mesos.ExecutorInfo{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mapping, err = wildcardHostPortMapping(task, offer)
-	if err, _ := err.(*PortAllocationError); err == nil {
-		t.Fatal("Expected port allocation error")
-	} else if len(err.Ports) != 0 {
-		t.Fatal("Expected port allocation error for wildcard port")
-	}
-
-	//--
-	offer = &mesos.Offer{
-		Resources: []*mesos.Resource{
-			rangeResource("ports", []uint64{1, 2}),
-		},
-	}
-	mapping, err = wildcardHostPortMapping(task, offer)
-	if err != nil {
-		t.Fatal(err)
-	} else if len(mapping) != 2 {
-		t.Fatal("Expected both ports allocated")
-	}
-	valid := 0
-	for _, entry := range mapping {
-		if entry.ContainerIdx == 0 && entry.PortIdx == 0 && entry.OfferPort == 2 {
-			valid++
+	for i, test := range []struct {
+		PortMapper
+		api.Container
+		Ranges
+		want []PortMapping
+		err  error
+	}{
+		{"fixed", container(), Ranges{}, []PortMapping(nil), nil},
+		{"fixed", container(1, 2), Ranges{}, nil, &PortAllocationError{pod, []uint64{2, 1}}},
+		{"fixed", container(0, 124, 123), Ranges{{100, 150}}, []PortMapping{
+			{pod, 0, 1, 124}, {pod, 0, 2, 123}}, nil},
+		{"fixed", container(123, 123), Ranges{{100, 150}}, nil,
+			&DuplicateHostPortError{PortMapping{pod, 0, 1, 123}, PortMapping{pod, 0, 0, 123}}},
+		{"wildcard", container(123, 123), Ranges{{100, 150}}, nil,
+			&DuplicateHostPortError{PortMapping{pod, 0, 1, 123}, PortMapping{pod, 0, 0, 123}}},
+		{"wildcard", container(), Ranges{}, []PortMapping(nil), nil},
+		{"wildcard", container(123), Ranges{{1, 1}}, nil, &PortAllocationError{pod, []uint64{123}}},
+		{"wildcard", container(0, 0, 1), Ranges{{1, 10}}, []PortMapping{{pod, 0, 2, 1}, {pod, 0, 0, 2}, {pod, 0, 1, 3}}, nil},
+	} {
+		got, err := test.PortMap(test.Ranges, pod, test.Container)
+		if !reflect.DeepEqual(got, test.want) || !reflect.DeepEqual(err, test.err) {
+			t.Errorf("\ntest #%d: %q\ngot:  (%+v, %#v)\nwant: (%+v, %#v)",
+				i, test.PortMapper, got, err, test.want, test.err)
 		}
-		if entry.ContainerIdx == 0 && entry.PortIdx == 1 && entry.OfferPort == 1 {
-			valid++
-		}
-	}
-	if valid < 2 {
-		t.Fatalf("Expected 2 valid port mappings, not %d", valid)
 	}
 }
 
-func TestMappingTypeForPod(t *testing.T) {
-	pod := &api.Pod{
-		ObjectMeta: api.ObjectMeta{
-			Labels: map[string]string{},
-		},
+// container returns a api.Container with the given hostports. used for testing only.
+func container(hostports ...int) api.Container {
+	container := api.Container{Ports: make([]api.ContainerPort, len(hostports))}
+	for i, port := range hostports {
+		container.Ports[i].HostPort = port
 	}
-	mt := MappingTypeForPod(pod)
-	if mt != HostPortMappingWildcard {
-		t.Fatalf("expected wildcard mapping")
-	}
+	return container
+}
 
-	pod.Labels[PortMappingLabelKey] = string(HostPortMappingFixed)
-	mt = MappingTypeForPod(pod)
-	if mt != HostPortMappingFixed {
-		t.Fatalf("expected fixed mapping")
+func TestPortAllocationError(t *testing.T) {
+	err := &PortAllocationError{"foo", []uint64{80, 8080}}
+	if got, want := err.Error(), "Failed to allocate ports [80 8080] for pod foo"; got != want {
+		t.Fatalf("got: %s, want: %s", got, want)
 	}
+}
 
-	pod.Labels[PortMappingLabelKey] = string(HostPortMappingWildcard)
-	mt = MappingTypeForPod(pod)
-	if mt != HostPortMappingWildcard {
-		t.Fatalf("expected wildcard mapping")
+func TestDuplicateHostPortError(t *testing.T) {
+	err := &DuplicateHostPortError{
+		PortMapping{"foo", 0, 0, 80},
+		PortMapping{"foo", 1, 0, 80},
+	}
+	if got, want := err.Error(), "Host port 80 wanted by containers (foo:0) and (foo:1)"; got != want {
+		t.Fatalf("got: %s, want: %s", got, want)
 	}
 }

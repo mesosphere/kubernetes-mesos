@@ -73,7 +73,7 @@ func TestAcceptOfferPorts(t *testing.T) {
 		Resources: []*mesos.Resource{
 			mutil.NewScalarResource("cpus", t_min_cpu),
 			mutil.NewScalarResource("mem", t_min_mem),
-			rangeResource("ports", []uint64{1, 1}),
+			NewRanges(1, 1).resource("ports"),
 		},
 	}
 	if ok := task.AcceptOffer(offer); !ok {
