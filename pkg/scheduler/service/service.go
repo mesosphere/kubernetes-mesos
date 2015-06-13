@@ -87,6 +87,7 @@ type SchedulerServer struct {
 	MesosRole                     string
 	MesosAuthPrincipal            string
 	MesosAuthSecretFile           string
+	DockerCfgPath                 string
 	Checkpoint                    bool
 	FailoverTimeout               float64
 	ExecutorBindall               bool
@@ -181,6 +182,7 @@ func (s *SchedulerServer) addCoreFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.MesosAuthPrincipal, "mesos_authentication_principal", s.MesosAuthPrincipal, "Mesos authentication principal.")
 	fs.StringVar(&s.MesosAuthSecretFile, "mesos_authentication_secret_file", s.MesosAuthSecretFile, "Mesos authentication secret file.")
 	fs.StringVar(&s.MesosAuthProvider, "mesos_authentication_provider", s.MesosAuthProvider, fmt.Sprintf("Authentication provider to use, default is SASL that supports mechanisms: %+v", mech.ListSupported()))
+	fs.StringVar(&s.DockerCfgPath, "dockercfg_path", s.DockerCfgPath, "Path to a dockercfg file that will be used by the docker instance of the minions.")
 	fs.BoolVar(&s.Checkpoint, "checkpoint", s.Checkpoint, "Enable/disable checkpointing for the kubernetes-mesos framework.")
 	fs.Float64Var(&s.FailoverTimeout, "failover_timeout", s.FailoverTimeout, fmt.Sprintf("Framework failover timeout, in sec."))
 	fs.UintVar(&s.DriverPort, "driver_port", s.DriverPort, "Port that the Mesos scheduler driver process should listen on.")
@@ -226,33 +228,39 @@ func (s *SchedulerServer) AddHyperkubeFlags(fs *pflag.FlagSet) {
 
 // returns (downloadURI, basename(path))
 func (s *SchedulerServer) serveFrameworkArtifact(path string) (string, string) {
-	serveFile := func(pattern string, filename string) {
+	pathSplit := strings.Split(path, "/")
+
+	var basename string
+	if len(pathSplit) > 0 {
+		basename = pathSplit[len(pathSplit)-1]
+	} else {
+		basename = path
+	}
+
+	return s.serveFrameworkArtifactWithFilename(path, basename), basename
+}
+
+// returns downloadURI
+func (s *SchedulerServer) serveFrameworkArtifactWithFilename(path string, filename string) string {
+	serveFile := func(pattern string, filepath string) {
 		s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-			http.ServeFile(w, r, filename)
+			http.ServeFile(w, r, filepath)
 		})
 	}
 
-	// Create base path (http://foobar:5000/<base>)
-	pathSplit := strings.Split(path, "/")
-	var base string
-	if len(pathSplit) > 0 {
-		base = pathSplit[len(pathSplit)-1]
-	} else {
-		base = path
-	}
-	serveFile("/"+base, path)
+	serveFile("/"+filename, path)
 
 	hostURI := ""
 	if s.AdvertisedAddress != "" {
-		hostURI = fmt.Sprintf("http://%s/%s", s.AdvertisedAddress, base)
+		hostURI = fmt.Sprintf("http://%s/%s", s.AdvertisedAddress, filename)
 	} else if s.HA && s.HADomain != "" {
-		hostURI = fmt.Sprintf("http://%s.%s:%d/%s", SCHEDULER_SERVICE_NAME, s.HADomain, ports.SchedulerPort, base)
+		hostURI = fmt.Sprintf("http://%s.%s:%d/%s", SCHEDULER_SERVICE_NAME, s.HADomain, ports.SchedulerPort, filename)
 	} else {
-		hostURI = fmt.Sprintf("http://%s:%d/%s", s.Address.String(), s.Port, base)
+		hostURI = fmt.Sprintf("http://%s:%d/%s", s.Address.String(), s.Port, filename)
 	}
-	log.V(2).Infof("Hosting artifact '%s' at '%s'", path, hostURI)
+	log.V(2).Infof("Hosting artifact '%s' at '%s'", filename, hostURI)
 
-	return hostURI, base
+	return hostURI
 }
 
 func (s *SchedulerServer) prepareExecutorInfo(hks hyperkube.Interface) (*mesos.ExecutorInfo, *uid.UID, error) {
@@ -301,9 +309,13 @@ func (s *SchedulerServer) prepareExecutorInfo(hks hyperkube.Interface) (*mesos.E
 		return nil, nil, fmt.Errorf("proxy can only use km binary if executor does the same")
 	} // else, executor is smart enough to know when proxy_path is required, or to use km
 
+	if s.DockerCfgPath != "" {
+		uri := s.serveFrameworkArtifactWithFilename(s.DockerCfgPath, ".dockercfg")
+		ci.Uris = append(ci.Uris, &mesos.CommandInfo_URI{Value: proto.String(uri), Executable: proto.Bool(false)})
+	}
+
 	//TODO(jdef): provide some way (env var?) for users to customize executor config
 	//TODO(jdef): set -address to 127.0.0.1 if `address` is 127.0.0.1
-	//TODO(jdef): propagate dockercfg from RootDirectory?
 
 	apiServerArgs := strings.Join(s.APIServerList, ",")
 	ci.Arguments = append(ci.Arguments, fmt.Sprintf("--api_servers=%s", apiServerArgs))
