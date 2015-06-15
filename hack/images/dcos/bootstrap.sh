@@ -26,6 +26,7 @@ apiserver_port=${APISERVER_PORT:-8888}
 apiserver_ro_port=${APISERVER_RO_PORT:-8889}
 apiserver_ro_host=${APISERVER_RO_HOST:-${default_dns_name}}
 apiserver_secure_port=${APISERVER_SECURE_PORT:-6443}
+apiproxy_port=${APIPROXY_PORT:-6444}
 
 scheduler_host=${SCHEDULER_HOST:-${default_dns_name}}
 scheduler_port=${SCHEDULER_PORT:-10251}
@@ -119,6 +120,22 @@ EOF
   fi
   prepare_service_depends etcd-server ${etcd_server_list}/v2/stats/store getsSuccess $deps
 }
+
+#
+# apiserver proxy via kubectl, allows us to serve up additional static content
+# once we upgrade to the v1 kubectl, we'll probably need the --accept-hosts param
+# TODO(jdef) Dockerfile needs to create /static/
+# TODO(jdef) ... use nginx instead of apiproxy so that we can just reuse the built-in apiserver UI
+#
+prepare_service ${monitor_dir} ${service_dir} apiproxy ${APIPROXY_RESPAWN_DELAY:-3} <<EOF
+#!/usr/bin/execlineb
+fdmove -c 2 1
+$apply_uids
+/opt/kubectl proxy
+  --server=http://$host_ip:$apiserver_port
+  --v=${APIPROXY_GLOG_v:-${logv}}
+  --port=$apiproxy_port
+EOF
 
 #
 # apiserver, uses frontend service proxy to connect with etcd

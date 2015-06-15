@@ -5,6 +5,8 @@ FROM	?= $(current_dir)/_build/k8sm
 TARGET_OBJ = km kubectl
 SOURCE_OBJ = $(TARGET_OBJ:%=$(FROM)/%)
 
+NGINX_OBJ = $(current_dir)/_build/nginx
+
 IMAGE	?= kubernetes
 REPO	?= mesosphere/$(IMAGE)
 DCOS_VERSION ?= dev
@@ -53,7 +55,7 @@ DCOS_PREFIX ?= k8s-0.14.2-k8sm-0.5-dcos
 TAG	?= $(DCOS_PREFIX)-$(DCOS_VERSION)
 FQIN	?= $(REPO):$(TAG)
 
-.PHONY:	clean build push s6 $(S6_BINS) deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) version release promote check-sudo-docker info $(SOURCE_OBJ)
+.PHONY:	clean build push s6 $(S6_BINS) deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) version release promote check-sudo-docker info $(SOURCE_OBJ) $(NGINX_OBJ) nginx
 
 all:	build
 
@@ -114,3 +116,8 @@ info: check-sudo-docker
 
 $(SOURCE_OBJ): check-sudo-docker
 	test -x $@ || $(SUDO) docker run --rm -v $(FROM):/target -v $(shell cd ../../.. && pwd):/snapshot mesosphere/kubernetes-mesos:build make clean install
+
+nginx: $(NGINX_OBJ)
+
+$(NGINX_OBJ): check-sudo-docker
+	test -x $@ || (cd $(current_dir)/../nginx && $(SUDO) docker build -t build-nginx . && $(SUDO) docker run --rm -v $(current_dir)/_build:/target build-nginx)
