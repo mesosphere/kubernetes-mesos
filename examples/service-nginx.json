@@ -1,11 +1,20 @@
 {
-  "id": "nginx-service",
   "kind": "Service",
-  "apiVersion": "v1beta1",
-  "protocol": "TCP",
-  "port": 80,
-  "containerPort": 80,
-  "selector": {
-    "name": "foo"
+  "apiVersion": "v1beta3",
+  "metadata": {
+    "name": "nginx"
+  },
+  "spec": {
+    "selector": {
+      "name": "nginx"
+    },
+    "ports": [
+      {
+        "name": "http",
+        "protocol": "TCP",
+        "port": 80,
+        "targetPort": 80
+      }
+    ]
   }
 }
