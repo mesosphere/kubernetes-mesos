@@ -20,6 +20,10 @@ ENV PATH /kubernetes-mesos/bin:$PATH
 
 RUN go get github.com/tools/godep
 
+# required to build k8s-mesos components during k8s builds
+ENV KUBERNETES_CONTRIB mesos
+ENV TARGET /target
+
 VOLUME /target
 CMD [ ]
 

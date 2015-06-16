@@ -1,22 +1,20 @@
 {
-  "id": "redis-master-2",
   "kind": "Pod",
-  "apiVersion": "v1beta1",
-  "desiredState": {
-    "manifest": {
-      "version": "v1beta1",
-      "id": "redis-master-2",
-      "containers": [{
-        "name": "master",
-        "image": "library/redis",
-        "ports": [{
-          "containerPort": 6379
-        }]
-      }]
+  "apiVersion": "v1beta3",
+  "metadata": {
+    "name": "redis-master-2",
+    "labels": {
+      "name": "redis-master"
     }
   },
-  "labels": {
-    "name": "redis-master"
+  "spec": {
+    "containers": [{
+      "name": "master",
+      "image": "library/redis",
+      "ports": [{
+        "containerPort": 6379,
+        "protocol": "TCP"
+      }]
+    }]
   }
 }
-    

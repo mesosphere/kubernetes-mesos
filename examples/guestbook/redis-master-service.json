@@ -1,9 +1,23 @@
 {
-  "id": "redismaster",
   "kind": "Service",
-  "apiVersion": "v1beta1",
-  "port": 10000,
-  "selector": {
-    "name": "redis-master"
+  "apiVersion": "v1beta3",
+  "metadata": {
+    "name": "redismaster",
+    "labels": {
+      "name": "redismaster"
+    }
+  },
+  "spec": {
+    "ports": [
+      {
+        "port": 10000,
+        "targetPort": 6379,
+        "protocol": "TCP",
+        "name": "redis"
+      }
+    ],
+    "selector": {
+      "name": "redis-master"
+    }
   }
 }
