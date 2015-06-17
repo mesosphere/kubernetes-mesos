@@ -2,9 +2,10 @@
   "kind": "Pod",
   "apiVersion": "v1beta3",
   "metadata": {
+    "namespace": "default",
     "name": "nginx-id-01",
     "labels": {
-      "name": "foo"
+      "name": "nginx"
     }
   },
   "spec": {

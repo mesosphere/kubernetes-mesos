@@ -1,27 +1,43 @@
 kubernetes-mesos
 ================
 
-When [Google Kubernetes][2] meets [Apache Mesos][3]
+[Google Kubernetes](https://github.com/GoogleCloudPlatform/kubernetes) on [Apache Mesos](http://mesos.apache.org/)
 
-Kubernetes and Mesos are a match made in heaven.
-Kubernetes enables the Pod, an abstraction that represents a group of co-located containers, along with Labels for service discovery, load-balancing, and replication control.
-Mesos provides the fine-grained resource allocations for pods across nodes in a cluster, and facilitates resource sharing among Kubernetes and other frameworks running on the same cluster.
+Disclaimer: Kubernetes-Mesos is pre-release quality, and not yet recommended for production systems.
 
-This is still very much a work-in-progress, but stay tuned for updates as we continue development.
-If you have ideas or patches, feel free to contribute!
+Status: Mesos integration has now been upstreamed into the Kubernetes repo.
+This repo includes: build scripts, docker images, DCOS integration, and docs.
 
-Refer to the [documentation pages][5] for a review of core concepts, system architecture, and [known issues][6].
+----------------
 
-The project has been migrated upstream into the offical [Kubernetes repository][2].
-Please see the [build documentation][1] if you are interested in building from source.
+Kubernetes is an open source container-orchestration project introduced by Google.
+
+Kubernetes itself is deployable to almost any cluster of (virtual or real) machines, in your own datacenter or on third
+party infrastructures. With the Mesos integration layer, Kubernetes acts as a Mesos framework, scheduling pods as Mesos
+tasks. In addition to integration with vanilla Mesos, Kubernetes can also be installed on [Mesosphere DCOS](https://mesosphere.com/learn/).
+
+Kubernetes Features:
+- Group containers into pods
+- Service abstraction allows for discovery & load-balancing via pod labels
+- Replication Controllers maintain a set number of pod instances
+
+Kubernetes on Mesos Additional Features:
+- Auto-Scaling - Kubernetes minion nodes are created automatically, up to the size of the provisioned Mesos cluster.
+- Resource Sharing - Co-location of Kubernetes with other popular next-generation services on the same cluster (e.g. Marathon, Spark, Hadoop, Caddandra, etc.)
+
+Kubernetes on DCOS Additional Features:
+- High Availability - Kubernetes components themselves run within Marathon, which manages restarting/recreating them if they fail (fail-over NYI)
+- Easy Installation - Via the DCOS command-line cluster management tool
+
+The latest Kubernetes DCOS package is based on [Kubernetes-Mesos v0.5.0](https://github.com/mesosphere/kubernetes-mesos/tree/v0.5.0).
+
+Refer to the [documentation pages](docs/README.md) for a review of core concepts, system architecture, and [known issues](docs/issues.md).
+
+Please see the [development documentation](DEVELOP.md) if you are interested in building from source.
 
 ### Tutorial
 
-Mesosphere maintains a tutorial for running [Kubernetes-Mesos][4], which is periodically updated to coincide with releases of this project.
+The [getting started guide](https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/getting-started-guides/mesos.md)
+is in the Kubernetes repo.
 
-[1]: DEVELOP.md
-[2]: https://github.com/GoogleCloudPlatform/kubernetes
-[3]: http://mesos.apache.org/
-[4]: https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/getting-started-guides/mesos.md
-[5]: docs/README.md
-[6]: docs/issues.md
+The [introductory usage guide](docs/usage.md) is in the docs dir.
