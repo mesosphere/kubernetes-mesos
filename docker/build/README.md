@@ -25,21 +25,27 @@ To build and copy the binaries:
     ...
     git clone https://${GOPKG}.git .
     Cloning into '.'...
-    test "x${GIT_BRANCH}" = "x" || git checkout "${GIT_BRANCH}"
-    make "${MAKE_ARGS[@]}"
-    godep restore
-    go install github.com/GoogleCloudPlatform/kubernetes/cmd/proxy
-    go install github.com/GoogleCloudPlatform/kubernetes/cmd/controller-manager
-    env  go install ${WITH_RACE:+-race} \
-              github.com/mesosphere/kubernetes-mesos/kubernetes-mesos \
-              github.com/mesosphere/kubernetes-mesos/kubernetes-executor
-    mkdir -p /target
-    (pkg="/pkg"; pkg="${pkg%%:*}"; for x in proxy controller-manager kubernetes-mesos kubernetes-executor; do \
-             /bin/cp -vpf -t /target "${pkg}"/bin/$x; done)
-    '/pkg/bin/proxy' -> '/target/proxy'
-    '/pkg/bin/controller-manager' -> '/target/controller-manager'
-    '/pkg/bin/kubernetes-mesos' -> '/target/kubernetes-mesos'
-    '/pkg/bin/kubernetes-executor' -> '/target/kubernetes-executor'
+    + test x = x
+    
+    "${CMD[@]}"
+    + k8sm::build
+    + make
+    hack/build-go.sh
+    +++ [0617 14:03:01] Building go targets for linux/amd64:
+        ...
+        contrib/mesos/cmd/k8sm-scheduler
+        contrib/mesos/cmd/k8sm-executor
+        contrib/mesos/cmd/k8sm-controller-manager
+        contrib/mesos/cmd/km
+        ...
+    +++ [0617 14:04:10] Placing binaries
+    + cp -vpr _output/local/go/bin/e2e.test _output/local/go/bin/genbashcomp _output/local/go/bin/genconversion _output/local/go/bin/gendeepcopy _output/local/go/bin/gendocs _output/local/go/bin/genman _output/local/go/bin/hyperkube _output/local/go/bin/integration _output/local/go/bin/k8sm-controller-manager _output/local/go/bin/k8sm-executor _output/local/go/bin/k8sm-redirfd _output/local/go/bin/k8sm-scheduler _output/local/go/bin/km _output/local/go/bin/kube-apiserver _output/local/go/bin/kube-controller-manager _output/local/go/bin/kube-proxy _output/local/go/bin/kube-scheduler _output/local/go/bin/kubectl _output/local/go/bin/kubelet _output/local/go/bin/kubernetes _output/local/go/bin/web-server /target
+    ...
+    '_output/local/go/bin/k8sm-controller-manager' -> '/target/k8sm-controller-manager'
+    '_output/local/go/bin/k8sm-executor' -> '/target/k8sm-executor'
+    '_output/local/go/bin/km' -> '/target/km'
+    '_output/local/go/bin/k8sm-scheduler' -> '/target/k8sm-scheduler'
+    ...
 
 Alternatively, it can be used to generate binaries from a branch:
 
