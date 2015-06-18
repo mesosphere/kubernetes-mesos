@@ -55,5 +55,6 @@ cp ${project_dir}/${EXPECTED_SCRIPT_DIR}/Dockerfile ${WORKSPACE}/
 cd ${WORKSPACE}
 
 # build docker image
-echo "Building $IMAGE_REPO docker image"
-sudo docker build -t "$IMAGE_REPO:${IMAGE_TAG}" .
+echo "Building docker image"
+exec docker build -t "${IMAGE_REPO}:${IMAGE_TAG}" .
+echo "Built docker image: ${IMAGE_REPO}:${IMAGE_TAG}"
