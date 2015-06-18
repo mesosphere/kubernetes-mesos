@@ -101,6 +101,7 @@ The one that builds just kubernetes-mesos (not mesos or etcd) can be built with 
 ./docker/km/build.sh
 ```
 
+`SOURCE_DIR=<path>` can be used to specify a local path to a kubernetes git repo clone to build (instead of master)
 
 <a name="local"/>
 ## K8SM Local

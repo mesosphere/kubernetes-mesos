@@ -3,6 +3,7 @@
 # paths relative to project dir
 EXPECTED_SCRIPT_DIR=docker/km
 EXPECTED_BINARY_DIR=bin
+IMAGE_REPO=mesosphere/kubernetes-mesos
 
 set -ex
 
@@ -19,15 +20,20 @@ WORKSPACE=$(env TMPDIR=$PWD mktemp -d -t "k8sm-workspace-XXXXXX")
 echo "Workspace created: $WORKSPACE"
 
 cleanup() {
-    rm -rf ${WORKSPACE}
-    echo "Workspace deleted: $WORKSPACE"
+  rm -rf ${WORKSPACE}
+  echo "Workspace deleted: $WORKSPACE"
 }
 trap 'cleanup' EXIT
 
 mkdir ${WORKSPACE}/bin
 
+source_mount=''
+if [ -n "${SOURCE_DIR}" ]; then
+  source_mount="-v ${SOURCE_DIR}:/snapshot"
+fi
+
 echo "Building kubernetes-mesos binaries"
-docker run --rm -v ${WORKSPACE}/bin:/target -v ${project_dir}:/snapshot mesosphere/kubernetes-mesos-build
+docker run --rm -v ${WORKSPACE}/bin:/target ${source_mount} mesosphere/kubernetes-mesos-build
 
 echo "Binaries produced:"
 ls ${WORKSPACE}/bin
@@ -46,5 +52,6 @@ cp ${project_dir}/${EXPECTED_SCRIPT_DIR}/Dockerfile ${WORKSPACE}/
 cd ${WORKSPACE}
 
 # build docker image
-echo "Building kubernetes-mesos docker image"
-docker build -t mesosphere/kubernetes-mesos .
+echo "Building docker image"
+docker build -t ${IMAGE_REPO} .
+echo "Built docker image: ${IMAGE_REPO}:latest"
