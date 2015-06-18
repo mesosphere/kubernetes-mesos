@@ -86,28 +86,20 @@ popd >/dev/null
 # delete it so that docker can start.
 rm -rf /var/run/docker.pid
 
-# If we were given a PORT environment variable, start as a simple daemon;
-# otherwise, spawn a shell as well
-if [ "$PORT" ]
+# start docker daemon
+if [ "$LOG" == "file" ]
 then
-	exec docker -d -H 0.0.0.0:$PORT -H unix:///var/run/docker.sock \
-		$DOCKER_DAEMON_ARGS
+	docker -d $DOCKER_DAEMON_ARGS &>/var/log/docker.log &
 else
-	if [ "$LOG" == "file" ]
-	then
-		docker -d $DOCKER_DAEMON_ARGS &>/var/log/docker.log &
-	else
-		docker -d $DOCKER_DAEMON_ARGS &
-	fi
-	(( timeout = 60 + SECONDS ))
-	until docker info >/dev/null 2>&1
-	do
-		if (( SECONDS >= timeout )); then
-			echo 'Timed out trying to connect to internal docker host.' >&2
-			break
-		fi
-		sleep 1
-	done
-	[[ $1 ]] && exec "$@"
-	exec bash --login
+	docker -d $DOCKER_DAEMON_ARGS &
 fi
+(( timeout = 60 + SECONDS ))
+until docker info >/dev/null 2>&1
+do
+	if (( SECONDS >= timeout )); then
+		echo 'Timed out trying to connect to internal docker host.' >&2
+		break
+	fi
+	sleep 1
+done
+exec mesos-slave "$@"
