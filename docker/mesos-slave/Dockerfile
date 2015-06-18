@@ -11,7 +11,7 @@ RUN apt-get update -qq && \
         && \
     apt-get clean
 
-# Install Docker from Docker Inc. repositories.
-RUN curl -sSL https://get.docker.com/ubuntu/ | sh
+COPY ./resolveip /usr/local/bin/resolveip
+RUN chmod +x /usr/local/bin/resolveip
 
 ENTRYPOINT ["mesos-slave"]
