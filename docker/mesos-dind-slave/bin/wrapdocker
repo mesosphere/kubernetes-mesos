@@ -7,10 +7,10 @@ dmsetup mknodes
 CGROUP=/sys/fs/cgroup
 : {LOG:=stdio}
 
-[ -d $CGROUP ] ||
+[ -d $CGROUP ] || 
 	mkdir $CGROUP
 
-mountpoint -q $CGROUP ||
+mountpoint -q $CGROUP || 
 	mount -n -t tmpfs -o uid=0,gid=0,mode=0755 cgroup $CGROUP || {
 		echo "Could not make a tmpfs mount. Did you use --privileged?"
 		exit 1
@@ -28,7 +28,7 @@ fi
 for SUBSYS in $(cut -d: -f2 /proc/1/cgroup)
 do
         [ -d $CGROUP/$SUBSYS ] || mkdir $CGROUP/$SUBSYS
-        mountpoint -q $CGROUP/$SUBSYS ||
+        mountpoint -q $CGROUP/$SUBSYS || 
                 mount -n -t cgroup -o $SUBSYS cgroup $CGROUP/$SUBSYS
 
         # The two following sections address a bug which manifests itself
@@ -86,9 +86,28 @@ popd >/dev/null
 # delete it so that docker can start.
 rm -rf /var/run/docker.pid
 
+# create docker0 bridge manually and attach it to the veth interface eth0
+brctl addbr docker0
+brctl addif docker0 eth0
+ip link set docker0 up
+
+# move ip to the bridge and restore routing via the old gateway
+IP_CIDR=$(ip addr show eth0 | grep -w inet | awk '{ print $2; }')
+IP=$(echo $IP_CIDR | sed 's,/.*,,')
+DEFAULT_ROUTE=$(ip route | grep default | sed 's/eth0/docker0/')
+ip addr del $IP_CIDR dev eth0
+ip addr add $IP_CIDR dev docker0
+ip route add $DEFAULT_ROUTE
+
+# let docker reuse the given IP. If you run more than one dind slave, add
+# --fixed-cidr=a.b.c.d/24 to DOCKER_DAEMON_ARGS with disjunct networks.
+DOCKER_DAEMON_ARGS="$DOCKER_DAEMON_ARGS --bip $IP_CIDR --storage-driver=aufs"
+
+# stop docker daemon on shutdown to avoid loopback leaks
+trap "service docker stop" EXIT
+
 # start docker daemon
-if [ "$LOG" == "file" ]
-then
+if [ "$LOG" == "file" ]; then
 	docker -d $DOCKER_DAEMON_ARGS &>/var/log/docker.log &
 else
 	docker -d $DOCKER_DAEMON_ARGS &
@@ -102,4 +121,4 @@ do
 	fi
 	sleep 1
 done
-exec mesos-slave "$@"
+exec mesos-slave "$@" --ip=$IP
