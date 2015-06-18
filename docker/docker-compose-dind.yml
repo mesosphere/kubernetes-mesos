@@ -1,0 +1,137 @@
+ambassador:
+  image: cpuguy83/docker-grand-ambassador:0.9.1
+  volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+  command: "-name docker_apiserver_1"
+etcd:
+  hostname: etcd
+  image: quay.io/coreos/etcd:v2.0.10
+  ports: [ "4001:4001" ]
+  command: >
+    --listen-client-urls 'http://etcd:4001'
+    --advertise-client-urls 'http://etcd:4001'
+    --initial-cluster-state new
+mesosmaster1:
+  hostname: mesosmaster1
+  image: mesosphere/mesos:0.22.0-1.0.ubuntu1404
+  entrypoint: mesos-master
+  ports: [ "5050:5050" ]
+  environment:
+  - MESOS_HOSTNAME=mesosmaster1
+  - MESOS_PORT=5050
+  - MESOS_LOG_DIR=/var/log/mesos
+  - MESOS_QUORUM=1
+  - MESOS_REGISTRY=in_memory
+  - MESOS_WORK_DIR=/var/lib/mesos
+  links:
+  - etcd
+  - "ambassador:apiserver"
+mesosslave1:
+  hostname: mesosslave1
+  privileged: true
+  image: mesosphere/kubernetes-mesos-dind-slave:latest
+  environment:
+  - MESOS_HOSTNAME=mesosslave1
+  - MESOS_MASTER=mesosmaster1:5050
+  - MESOS_PORT=5051
+  - MESOS_LOG_DIR=/var/log/mesos
+  - MESOS_LOGGING_LEVEL=INFO
+  - MESOS_RESOURCES=cpus:4;mem:1280;disk:25600;ports:[21000-21099]
+  - MESOS_SWITCH_USER=0
+  - MESOS_CONTAINERIZERS=docker,mesos
+  - DOCKER_DAEMON_ARGS=--log-level=error --fixed-cidr=192.168.41.0/24
+  links:
+  - etcd
+  - mesosmaster1
+  - "ambassador:apiserver"
+  volumes:
+  - /var/tmp/mesosslave1:/var/lib/docker
+mesosslave2:
+  hostname: mesosslave2
+  privileged: true
+  image: mesosphere/kubernetes-mesos-dind-slave:latest
+  environment:
+  - MESOS_HOSTNAME=mesosslave2
+  - MESOS_MASTER=mesosmaster1:5050
+  - MESOS_PORT=5051
+  - MESOS_LOG_DIR=/var/log/mesos
+  - MESOS_LOGGING_LEVEL=INFO
+  - MESOS_RESOURCES=cpus:4;mem:1280;disk:25600;ports:[21000-21099]
+  - MESOS_SWITCH_USER=0
+  - MESOS_CONTAINERIZERS=docker,mesos
+  - DOCKER_DAEMON_ARGS=--log-level=error --fixed-cidr=192.168.42.0/24
+  links:
+  - etcd
+  - mesosmaster1
+  - "ambassador:apiserver"
+  volumes:
+  - /var/tmp/mesosslave1:/var/lib/docker
+apiserver:
+  hostname: apiserver
+  image: mesosphere/kubernetes-mesos
+  entrypoint:
+  - /bin/bash
+  - "-c"
+  - >
+    echo "Hostname: $(hostname -f) ($(hostname -f | xargs resolveip))" &&
+    (grep "mesos-master\s*=" /opt/mesos-cloud.conf || echo "  mesos-master = mesosmaster1:5050" >> /opt/mesos-cloud.conf) &&
+    await-health-check http://etcd:4001/health &&
+    await-health-check http://mesosmaster1:5050/health &&
+    km apiserver
+    --address=$(resolveip apiserver)
+    --external-hostname=apiserver
+    --etcd-servers=http://etcd:4001
+    --portal-net=10.10.10.0/24
+    --port=8888
+    --service-node-port-range=22075-22125
+    --cloud-provider=mesos
+    --cloud-config=/opt/mesos-cloud.conf
+    --v=2
+  ports: [ "8888:8888" ]
+  links:
+  - etcd
+  - mesosmaster1
+controller:
+  hostname: controller
+  image: mesosphere/kubernetes-mesos
+  entrypoint:
+  - /bin/bash
+  - "-c"
+  - >
+    echo "Hostname: $(hostname -f) ($(hostname -f | xargs resolveip))" &&
+    (grep "mesos-master\s*=" /opt/mesos-cloud.conf || echo "  mesos-master = mesosmaster1:5050" >> /opt/mesos-cloud.conf) &&
+    await-health-check http://mesosmaster1:5050/health &&
+    await-health-check -t=60 http://apiserver:8888/healthz &&
+    km controller-manager
+    --master=http://apiserver:8888
+    --cloud-config=/opt/mesos-cloud.conf
+    --v=2
+  links:
+  - mesosmaster1
+  - apiserver
+scheduler:
+  hostname: scheduler
+  image: mesosphere/kubernetes-mesos
+  entrypoint:
+  - /bin/bash
+  - "-c"
+  - >
+    echo "Hostname: $(hostname -f) ($(hostname -f | xargs resolveip))" &&
+    (grep "mesos-master\s*=" /opt/mesos-cloud.conf || echo "  mesos-master = mesosmaster1:5050" >> /opt/mesos-cloud.conf) &&
+    await-health-check http://etcd:4001/health &&
+    await-health-check http://mesosmaster1:5050/health &&
+    await-health-check -t=60 http://apiserver:8888/healthz &&
+    km scheduler
+    --address=$(resolveip scheduler)
+    --hostname-override=scheduler
+    --etcd-servers=http://etcd:4001
+    --mesos-user=root
+    --api-servers=http://apiserver:8888
+    --mesos-master=mesosmaster1:5050
+    --v=2
+  links:
+  - etcd
+  - mesosmaster1
+  - mesosslave1
+  - mesosslave2
+  - apiserver
