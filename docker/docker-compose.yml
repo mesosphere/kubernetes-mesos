@@ -1,8 +1,3 @@
-ambassador:
-  image: cpuguy83/docker-grand-ambassador:0.9.1
-  volumes:
-  - /var/run/docker.sock:/var/run/docker.sock
-  command: "-name docker_apiserver_1"
 etcd:
   hostname: etcd
   image: quay.io/coreos/etcd:v2.0.10
@@ -17,22 +12,16 @@ mesosmaster1:
   entrypoint: mesos-master
   ports: [ "5050:5050" ]
   environment:
-  - MESOS_HOSTNAME=mesosmaster1
   - MESOS_PORT=5050
   - MESOS_LOG_DIR=/var/log/mesos
   - MESOS_QUORUM=1
   - MESOS_REGISTRY=in_memory
   - MESOS_WORK_DIR=/var/lib/mesos
-  links:
-  - etcd
-  - "ambassador:apiserver"
 mesosslave1:
   hostname: mesosslave1
   privileged: true
   image: mesosphere/kubernetes-mesos-slave:latest
-  ports: [ "5051:5051" ]
   environment:
-  - MESOS_HOSTNAME=mesosslave1
   - MESOS_MASTER=mesosmaster1:5050
   - MESOS_PORT=5051
   - MESOS_LOG_DIR=/var/log/mesos
@@ -42,32 +31,40 @@ mesosslave1:
   - MESOS_CONTAINERIZERS=docker,mesos
   - DOCKER_DAEMON_ARGS="--log-level=error"
   links:
-  - etcd
   - mesosmaster1
-  - "ambassador:apiserver"
   volumes:
   - /var/run/docker.sock:/var/run/docker.sock
+  - /sys:/sys
+  - /usr/local/bin/docker:/usr/bin/docker
+  entrypoint:
+  - /bin/bash
+  - "-c"
+  - >
+    mesos-slave --hostname=$(resolveip mesosslave1)
 mesosslave2:
   hostname: mesosslave2
   privileged: true
   image: mesosphere/kubernetes-mesos-slave:latest
-  ports: [ "5052:5052" ]
   environment:
-  - MESOS_HOSTNAME=mesosslave2
   - MESOS_MASTER=mesosmaster1:5050
-  - MESOS_PORT=5052
+  - MESOS_PORT=5051
   - MESOS_LOG_DIR=/var/log/mesos
   - MESOS_LOGGING_LEVEL=INFO
-  - MESOS_RESOURCES=cpus:4;mem:1280;disk:25600;ports:[22000-22099]
+  - MESOS_RESOURCES=cpus:4;mem:1280;disk:25600;ports:[21000-21099]
   - MESOS_SWITCH_USER=0
   - MESOS_CONTAINERIZERS=docker,mesos
   - DOCKER_DAEMON_ARGS="--log-level=error"
   links:
-  - etcd
   - mesosmaster1
-  - "ambassador:apiserver"
   volumes:
   - /var/run/docker.sock:/var/run/docker.sock
+  - /sys:/sys
+  - /usr/local/bin/docker:/usr/bin/docker
+  entrypoint:
+  - /bin/bash
+  - "-c"
+  - >
+    mesos-slave --hostname=$(resolveip mesosslave2)
 apiserver:
   hostname: apiserver
   image: mesosphere/kubernetes-mesos
@@ -81,7 +78,7 @@ apiserver:
     await-health-check http://mesosmaster1:5050/health &&
     km apiserver
     --address=$(resolveip apiserver)
-    --external-hostname=apiserver
+    --external-hostname=$(resolveip apiserver)
     --etcd-servers=http://etcd:4001
     --portal-net=10.10.10.0/24
     --port=8888
@@ -93,8 +90,6 @@ apiserver:
   links:
   - etcd
   - mesosmaster1
-  - mesosslave1
-  - mesosslave2
 controller:
   hostname: controller
   image: mesosphere/kubernetes-mesos
@@ -104,18 +99,14 @@ controller:
   - >
     echo "Hostname: $(hostname -f) ($(hostname -f | xargs resolveip))" &&
     (grep "mesos-master\s*=" /opt/mesos-cloud.conf || echo "  mesos-master = mesosmaster1:5050" >> /opt/mesos-cloud.conf) &&
-    await-health-check http://etcd:4001/health &&
     await-health-check http://mesosmaster1:5050/health &&
     await-health-check -t=60 http://apiserver:8888/healthz &&
     km controller-manager
-    --master=http://apiserver:8888
+    --master=http://$(resolveip apiserver):8888
     --cloud-config=/opt/mesos-cloud.conf
     --v=2
   links:
-  - etcd
   - mesosmaster1
-  - mesosslave1
-  - mesosslave2
   - apiserver
 scheduler:
   hostname: scheduler
@@ -134,12 +125,10 @@ scheduler:
     --hostname-override=scheduler
     --etcd-servers=http://etcd:4001
     --mesos-user=root
-    --api-servers=http://apiserver:8888
+    --api-servers=http://$(resolveip apiserver):8888
     --mesos-master=mesosmaster1:5050
     --v=2
   links:
   - etcd
   - mesosmaster1
-  - mesosslave1
-  - mesosslave2
   - apiserver
