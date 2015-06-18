@@ -14,11 +14,11 @@ RUN apt-get update && \
         && \
     apt-get clean
 
+RUN go get github.com/tools/godep
+
 COPY ./docker/bin/* /kubernetes-mesos/bin/
 COPY ./docker/build/bin/* /kubernetes-mesos/bin/
 ENV PATH /kubernetes-mesos/bin:$PATH
-
-RUN go get github.com/tools/godep
 
 # required to build k8s-mesos components during k8s builds
 ENV KUBERNETES_CONTRIB mesos
