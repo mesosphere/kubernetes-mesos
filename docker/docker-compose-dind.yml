@@ -39,7 +39,8 @@ mesosslave1:
   - MESOS_RESOURCES=cpus:4;mem:1280;disk:25600;ports:[21000-21099]
   - MESOS_SWITCH_USER=0
   - MESOS_CONTAINERIZERS=docker,mesos
-  - DOCKER_DAEMON_ARGS=--log-level=error --fixed-cidr=192.168.41.0/24
+  - DOCKER_NETWORK_OFFSET=0.0.1.0
+  - DOCKER_DAEMON_ARGS=--log-level=error
   links:
   - etcd
   - mesosmaster1
@@ -59,7 +60,8 @@ mesosslave2:
   - MESOS_RESOURCES=cpus:4;mem:1280;disk:25600;ports:[21000-21099]
   - MESOS_SWITCH_USER=0
   - MESOS_CONTAINERIZERS=docker,mesos
-  - DOCKER_DAEMON_ARGS=--log-level=error --fixed-cidr=192.168.42.0/24
+  - DOCKER_NETWORK_OFFSET=0.0.2.0
+  - DOCKER_DAEMON_ARGS=--log-level=error
   links:
   - etcd
   - mesosmaster1

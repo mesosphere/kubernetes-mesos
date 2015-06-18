@@ -94,17 +94,41 @@ ip link set docker0 up
 # move ip to the bridge and restore routing via the old gateway
 IP_CIDR=$(ip addr show eth0 | grep -w inet | awk '{ print $2; }')
 IP=$(echo $IP_CIDR | sed 's,/.*,,')
+NETWORK_SIZE=$(echo $IP_CIDR | sed 's,.*/,,')
 DEFAULT_ROUTE=$(ip route | grep default | sed 's/eth0/docker0/')
+
 ip addr del $IP_CIDR dev eth0
 ip addr add $IP_CIDR dev docker0
 ip route add $DEFAULT_ROUTE
 
-# let docker reuse the given IP. If you run more than one dind slave, add
-# --fixed-cidr=a.b.c.d/24 to DOCKER_DAEMON_ARGS with disjunct networks.
-DOCKER_DAEMON_ARGS="$DOCKER_DAEMON_ARGS --bip $IP_CIDR --storage-driver=aufs"
+
+# compute a network for the containers to live in
+# by adding DOCKER_NETWORK_OFFSET to the current IP and cutting off
+# non-network bits according to DOCKER_NETWORK_SIZE
+DOCKER_NETWORK_SIZE=${DOCKER_NETWORK_SIZE:-24}
+DOCKER_NETWORK_OFFSET=${DOCKER_NETWORK_OFFSET:-0.0.1.0}
+NETWORK=$(ip route | grep docker0 | grep -v default | sed 's,/.*,,')
+
+IFS=. read -r i1 i2 i3 i4 <<< $IP
+IFS=. read -r n1 n2 n3 n4 <<< $NETWORK
+IFS=. read -r o1 o2 o3 o4 <<< $DOCKER_NETWORK_OFFSET
+IFS=. read -r w1 w2 w3 w4 <<< $(ipcalc $IP_CIDR | grep Wildcard | awk '{print $2;}')
+
+IP_PLUS_OFFSET=$(printf "%d.%d.%d.%d\n" \
+    "$(( n1 + ((i1 - n1 + o1) & w1) ))" \
+    "$(( n2 + ((i2 - n2 + o2) & w2) ))" \
+    "$(( n3 + ((i3 - n3 + o3) & w3) ))" \
+    "$(( n4 + ((i4 - n4 + o4) & w4) ))")
+
+FIXED_CIDR=$(ipcalc $IP_PLUS_OFFSET/$DOCKER_NETWORK_SIZE | grep Network | awk '{print $2;}')
+echo "Using network $FIXED_CIDR for docker containers"
 
 # stop docker daemon on shutdown to avoid loopback leaks
 trap "service docker stop" EXIT
+
+# let docker reuse the given IP. If you run more than one dind slave, add
+# --fixed-cidr=a.b.c.d/24 to DOCKER_DAEMON_ARGS with disjunct networks.
+DOCKER_DAEMON_ARGS="$DOCKER_DAEMON_ARGS --bip $IP_CIDR --fixed-cidr=$FIXED_CIDR --storage-driver=aufs"
 
 # start docker daemon
 if [ "$LOG" == "file" ]; then

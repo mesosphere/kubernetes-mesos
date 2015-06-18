@@ -8,6 +8,7 @@ RUN apt-get update -qq && \
         curl \
         lxc \
         iptables \
+        ipcalc \
         && \
     apt-get clean
 
