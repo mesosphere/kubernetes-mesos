@@ -23,7 +23,7 @@ Kubernetes Features:
 
 Kubernetes on Mesos Additional Features:
 - Auto-Scaling - Kubernetes minion nodes are created automatically, up to the size of the provisioned Mesos cluster.
-- Resource Sharing - Co-location of Kubernetes with other popular next-generation services on the same cluster (e.g. Marathon, Spark, Hadoop, Caddandra, etc.)
+- Resource Sharing - Co-location of Kubernetes with other popular next-generation services on the same cluster (e.g. Marathon, Spark, Hadoop, Cassandra, etc.)
 
 Kubernetes on DCOS Additional Features:
 - High Availability - Kubernetes components themselves run within Marathon, which manages restarting/recreating them if they fail (fail-over NYI)
