@@ -31,7 +31,7 @@ cd ${project_dir}
 IMAGE_TAG=${IMAGE_TAG:-$(generate_image_tag)}
 
 # create temp dir in project dir to avoid permission issues
-WORKSPACE=$(env TMPDIR=$PWD mktemp -d -t "k8sm-workspace.XXX")
+WORKSPACE=$(env TMPDIR=$PWD mktemp -d -t "k8sm-workspace-XXXXXX")
 echo "Workspace created: $WORKSPACE"
 
 cleanup() {
@@ -55,5 +55,6 @@ cp ${project_dir}/${EXPECTED_SCRIPT_DIR}/Dockerfile ${WORKSPACE}/
 cd ${WORKSPACE}
 
 # build docker image
-echo "Building $IMAGE_REPO docker image"
-sudo docker build -t "$IMAGE_REPO:${IMAGE_TAG}" .
+echo "Building docker image"
+exec docker build -t "${IMAGE_REPO}:${IMAGE_TAG}" .
+echo "Built docker image: ${IMAGE_REPO}:${IMAGE_TAG}"
