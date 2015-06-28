@@ -9,8 +9,9 @@ lookup_ip() {
 }
 
 leading_master_ip() {
-  test -n "$K8SM_MESOS_MASTER" && {
-    echo $K8SM_MESOS_MASTER
+  local master="${K8SM_MESOS_MASTER:+${K8SM_MESOS_MASTER}}"
+  test -n "$master" && {
+    echo $master
     return
   }
   local leader=$(nslookup leader.mesos | sed -e '/^Server:/,/^Address .*$/{ d }' -e '/^$/d'|grep -e '^Address '|cut -f3 -d' ')

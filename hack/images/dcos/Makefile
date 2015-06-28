@@ -49,7 +49,7 @@ ifneq ($(RELEASE),)
 DCOS_VERSION = $(RELEASE_VERSION)
 endif
 
-DCOS_PREFIX ?= k8s-0.14.2-k8sm-0.5-dcos
+DCOS_PREFIX ?= k8s-1.0.pre-k8sm-0.6-dcos
 TAG	?= $(DCOS_PREFIX)-$(DCOS_VERSION)
 FQIN	?= $(REPO):$(TAG)
 
@@ -112,5 +112,13 @@ info: check-sudo-docker
 	@echo ".version : $$(cat .version 2>/dev/null)"
 	@echo "dockertag: $$(cat dockertag 2>/dev/null)"
 
+# by default we build kubernetes-mesos components from the kubernetes@master branch.
+# you can override this on the command like like so:
+#     make KUBERNTES_BRANCH=v0.19.1
+KUBERNETES_BRANCH ?= master
+K8SM_BUILDER ?= mesosphere/kubernetes-mesos-build
+
 $(SOURCE_OBJ): check-sudo-docker
-	test -x $@ || $(SUDO) docker run --rm -v $(FROM):/target -v $(shell cd ../../.. && pwd):/snapshot mesosphere/kubernetes-mesos:build make clean install
+	test -x $@ || \
+		$(SUDO) docker run --rm -ti -v $(FROM):/target -e GIT_BRANCH=$(KUBERNETES_BRANCH) $(K8SM_BUILDER) \
+		bash -c './hack/build-cross.sh && cp -vp _output/local/bin/linux/amd64/* /target/ && find _output/local/bin/ -name kubectl | while IFS=/ read -r a b c os arch app; do cp -vp "$$a/$$b/$$c/$$os/$$arch/$$app" "/target/$${app}-$${os}-$${arch}"; done'

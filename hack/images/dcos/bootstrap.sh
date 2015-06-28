@@ -10,10 +10,21 @@ die() {
   exit 1
 }
 
-sandbox=${MESOS_SANDBOX:-${MESOS_DIRECTORY}}
-test -n "$sandbox" || die failed to identify mesos sandbox. neither MESOS_DIRECTORY or MESOS_SANDBOX was specified
+#TODO(jdef) we may want additional flags here
+# -e for failed commands
+# -C for failing when files are clobbered
+set -u
 
-. /opt/functions.sh
+# NOTE: uppercase env variables are generally indended to be possibly customized
+# by callers. lowercase env variables are generally defined within this script.
+
+sandbox=${MESOS_SANDBOX:-${MESOS_DIRECTORY:-false}}
+test "$sandbox" != "false" || die "failed to identify mesos sandbox. neither MESOS_DIRECTORY or MESOS_SANDBOX was specified"
+
+script=/opt/functions.sh
+test -f $script || script=./functions.sh
+
+. $script
 cp /opt/.version ${sandbox}
 
 mesos_leader=$(leading_master_ip) || die
@@ -23,8 +34,6 @@ default_dns_name=${DEFAULT_DNS_NAME:-k8sm.marathon.mesos}
 
 apiserver_host=${APISERVER_HOST:-${default_dns_name}}
 apiserver_port=${APISERVER_PORT:-8888}
-apiserver_ro_port=${APISERVER_RO_PORT:-8889}
-apiserver_ro_host=${APISERVER_RO_HOST:-${default_dns_name}}
 apiserver_secure_port=${APISERVER_SECURE_PORT:-6443}
 
 scheduler_host=${SCHEDULER_HOST:-${default_dns_name}}
@@ -48,7 +57,9 @@ service_proxy=${SERVICE_PROXY:-${mesos_leader}}
 # else a static IP.
 etcd_server_port=${ETCD_SERVER_PORT:-4001}
 etcd_server_peer_port=${ETCD_SERVER_PEER_PORT:-4002}
-if test -n "$DISABLE_ETCD_SERVER"; then
+
+: ${DISABLE_ETCD_SERVER=""}
+if test -n "${DISABLE_ETCD_SERVER}"; then
   etcd_server_list=${ETCD_SERVER_LIST:-http://${service_proxy}:${etcd_server_port}}
 else
   etcd_advertise_server_host=${ETCD_ADVERTISE_SERVER_HOST:-127.0.0.1}
@@ -64,6 +75,9 @@ else
   etcd_server_data=${ETCD_SERVER_DATA:-${sandbox}/etcd-data}
   etcd_server_list=${etcd_listen_client_urls}
 fi
+
+# optional variable, no default; avoid bash errors
+: ${ENABLE_DNS=""}
 
 # run service procs as "nobody"
 apply_uids="s6-applyuidgid -u 99 -g 99"
@@ -98,26 +112,26 @@ prepare_etcd_service() {
 #TODO(jdef) don't run this as root
 #TODO(jdef) would be super-cool to have socket-activation here so that clients can connect before etcd is really ready
 exec 2>&1
-mkdir -p $etcd_server_data
-PATH=/opt:$PATH
+mkdir -p ${etcd_server_data}
+PATH=/opt:${PATH}
 export PATH
 exec /opt/etcd \\
-  -data-dir $etcd_server_data \\
-  -name $etcd_server_name \\
-  -initial-cluster ${etcd_server_name}=${etcd_initial_advertise_peer_urls} \\
-  -initial-advertise-peer-urls ${etcd_initial_advertise_peer_urls} \\
   -advertise-client-urls ${etcd_advertise_client_urls} \\
+  -data-dir ${etcd_server_data} \\
+  -initial-advertise-peer-urls ${etcd_initial_advertise_peer_urls} \\
+  -initial-cluster ${etcd_server_name}=${etcd_initial_advertise_peer_urls} \\
   -listen-client-urls ${etcd_listen_client_urls} \\
-  -listen-peer-urls ${etcd_listen_peer_urls}
+  -listen-peer-urls ${etcd_listen_peer_urls} \\
+  -name ${etcd_server_name}
 EOF
 
   local deps="controller-manager scheduler"
-  if test -n "$ENABLE_DNS"; then
-    deps="$deps apiserver-depends"
+  if test -n "${ENABLE_DNS}"; then
+    deps="${deps} apiserver-depends"
   else
-    deps="$deps apiserver"
+    deps="${deps} apiserver"
   fi
-  prepare_service_depends etcd-server ${etcd_server_list}/v2/stats/store getsSuccess $deps
+  prepare_service_depends etcd-server ${etcd_server_list}/v2/stats/store getsSuccess ${deps}
 }
 
 #
@@ -126,16 +140,15 @@ EOF
 prepare_service ${monitor_dir} ${service_dir} apiserver ${APISERVER_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
-$apply_uids
+${apply_uids}
 /opt/km apiserver
-  --address=$host_ip
-  --port=$apiserver_port
-  --read_only_port=$apiserver_ro_port
-  --secure_port=${apiserver_secure_port}
-  --etcd_servers=${etcd_server_list}
-  --portal_net=${PORTAL_NET:-10.10.10.0/24}
-  --cloud_provider=mesos
-  --cloud_config=${cloud_config}
+  --address=${host_ip}
+  --cloud-config=${cloud_config}
+  --cloud-provider=mesos
+  --etcd-servers=${etcd_server_list}
+  --port=${apiserver_port}
+  --secure-port=${apiserver_secure_port}
+  --service-cluster-ip-range=${SERVICE_CLUSTER_IP_RANGE:-10.10.10.0/24}
   --v=${APISERVER_GLOG_v:-${logv}}
 EOF
 
@@ -146,13 +159,13 @@ EOF
 prepare_service ${monitor_dir} ${service_dir} controller-manager ${CONTROLLER_MANAGER_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
-$apply_uids
+${apply_uids}
 /opt/km controller-manager
-  --address=$host_ip
-  --port=$controller_manager_port
-  --master=http://$host_ip:$apiserver_port
-  --cloud_provider=mesos
-  --cloud_config=${cloud_config}
+  --address=${host_ip}
+  --cloud-config=${cloud_config}
+  --cloud-provider=mesos
+  --master=http://${host_ip}:${apiserver_port}
+  --port=${controller_manager_port}
   --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}}
 EOF
 
@@ -162,38 +175,37 @@ EOF
 # --api_servers and if the IPs change (because this container changes
 # hosts) then the executors become zombies.
 #
-mesos_role="${K8SM_MESOS_ROLE}"
+mesos_role="${K8SM_MESOS_ROLE:-}"
 test -n "$mesos_role" || mesos_role="*"
-failover_timeout="${K8SM_FAILOVER_TIMEOUT}"
+
+failover_timeout="${K8SM_FAILOVER_TIMEOUT:-}"
 if test -n "$failover_timeout"; then
-  failover_timeout="--failover_timeout=$failover_timeout"
-else
-  unset failover_timeout
+  failover_timeout="--failover-timeout=$failover_timeout"
 fi
 
 # pick a fixed scheduler service address if DNS enabled because we don't want to
 # accidentally conflict with it if the scheduler randomly chooses the same addr.
 scheduler_service_address=""
-test -n "$ENABLE_DNS" && scheduler_service_address="--service_address=${SCHEDULER_SERVICE_ADDRESS:-10.10.10.9}"
+test -n "$ENABLE_DNS" && scheduler_service_address="--service-address=${SCHEDULER_SERVICE_ADDRESS:-10.10.10.9}"
 
 prepare_service ${monitor_dir} ${service_dir} scheduler ${SCHEDULER_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
-$apply_uids
-/opt/km scheduler $failover_timeout $scheduler_service_address
-  --address=$host_ip
-  --port=$scheduler_port
-  --mesos_master=${mesos_master}
-  --api_servers=http://${apiserver_host}:${apiserver_port}
-  --etcd_servers=${etcd_server_list}
-  --mesos_user=${K8SM_MESOS_USER:-root}
-  --mesos_role="$mesos_role"
+${apply_uids}
+/opt/km scheduler ${failover_timeout} ${scheduler_service_address}
+  --address=${host_ip}
+  --advertised-address=${scheduler_host}:${scheduler_port}
+  --api-servers=http://${apiserver_host}:${apiserver_port}
+  --driver-port=${scheduler_driver_port}
+  --etcd-servers=${etcd_server_list}
+  --framework-name=${framework_name}
+  --framework-weburi=${framework_weburi}
+  --km-path="${sandbox}/executor-installer.sh"
+  --mesos-master=${mesos_master}
+  --mesos-role="${mesos_role}"
+  --mesos-user=${K8SM_MESOS_USER:-root}
+  --port=${scheduler_port}
   --v=${SCHEDULER_GLOG_v:-${logv}}
-  --km_path=${sandbox}/executor-installer.sh
-  --advertised_address=${scheduler_host}:${scheduler_port}
-  --framework_name=${framework_name}
-  --framework_weburi=${framework_weburi}
-  --driver_port=${scheduler_driver_port}
 EOF
 
 prepare_kube_dns() {
@@ -251,13 +263,9 @@ tail -n+$ARCHIVE $0 | tar xzv
 echo mounts before unshare:
 cat /proc/$$/mounts
 KUBERNETES_MASTER=http://'"${apiserver_host}:${apiserver_port}"'
-KUBERNETES_RO_SERVICE_HOST='"${host_ip}"'
-KUBERNETES_RO_SERVICE_PORT='"${apiserver_ro_port}"'
 KUBE_CLUSTER_DNS='"${kube_cluster_dns}"'
 KUBE_CLUSTER_DOMAIN='"${kube_cluster_domain}"'
 export KUBERNETES_MASTER
-export KUBERNETES_RO_SERVICE_HOST
-export KUBERNETES_RO_SERVICE_PORT
 export KUBE_CLUSTER_DNS
 export KUBE_CLUSTER_DOMAIN
 exec unshare -m -- ./opt/executor.sh "$@"
