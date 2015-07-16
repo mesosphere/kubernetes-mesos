@@ -12,7 +12,7 @@
              "id": "redis-slave-controller",
              "containers": [{
                "name": "redis-slave",
-               "image": "mesosphere/kubernetes:guestbook-redis-slave-5",
+               "image": "mesosphere/kubernetes-redis-slave:latest",
                "ports": [{"containerPort": 6379}],
                "env": [{"key": "REDIS_MASTER_SERVICE_HOST", "value": "redis-master.default.kubernetes.local"}]
              }]

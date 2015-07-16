@@ -12,7 +12,7 @@
              "id": "frontend-controller",
              "containers": [{
                "name": "guestbook-frontend",
-               "image": "mesosphere/kubernetes:guestbook-frontend-php-5",
+               "image": "mesosphere/kubernetes-guestbook-frontend-php:latest",
                "ports": [{"containerPort": 80}],
                "env": [{"key": "REDIS_MASTER_HOSTNAME", "value": "redis-master.default.kubernetes.local"}]
              }]
