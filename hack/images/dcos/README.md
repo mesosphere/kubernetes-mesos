@@ -64,26 +64,30 @@ Some prerequisites:
 
 ```shell
 $ export KUBERNETES_MASTER=http://{the-dcos-host-your-kubernetes-master-is-running-on}:25502
-$ bin/kubectl create -f ../../../examples/guestbook/redis-master.json 
-pods/redis-master-2
+$ bin/kubectl create -f ../../../examples/guestbook/redis-master-controller.json
+replicationControllers/redis-master-controller
 $ bin/kubectl create -f ../../../examples/guestbook/redis-master-service.json 
-services/redismaster
+services/redis-master
 $ bin/kubectl create -f ../../../examples/guestbook/redis-slave-controller.json 
 replicationControllers/redis-slave-controller
 $ bin/kubectl create -f ../../../examples/guestbook/redis-slave-service.json 
-services/redisslave
+services/redis-slave
 $ bin/kubectl create -f ../../../examples/guestbook/frontend-controller.json 
 replicationControllers/frontend-controller
 $ bin/kubectl create -f ../../../examples/guestbook/frontend-service.json 
 services/frontend
 
 $ bin/kubectl get pods
-POD                        IP          CONTAINER(S)  IMAGE(S)        HOST                             LABELS         STATUS   CREATED
-frontend-controller-jf2zt  172.17.0.8  php-redis     jdef/php-redis  ec2-52-24-192-202.../10.0.0.221  name=frontend  Running  51s
-frontend-controller-kypr9  172.17.0.6  php-redis     jdef/php-redis  ec2-52-24-218-42.../10.0.0.223   name=frontend  Running  51s
+POD                             IP            CONTAINER(S)         IMAGE(S)                                          HOST                                    LABELS              STATUS    CREATED
+frontend-controller-e0ado       172.17.0.19   guestbook-frontend   mesosphere/kubernetes:guestbook-frontend-php      ip-10-0-1-218.ec2.internal/10.0.1.218   name=frontend       Running   1 minutes
+frontend-controller-fkm7m       172.17.0.21   guestbook-frontend   mesosphere/kubernetes:guestbook-frontend-php      ip-10-0-1-215.ec2.internal/10.0.1.215   name=frontend       Running   1 minutes
+frontend-controller-inpl7       172.17.0.17   guestbook-frontend   mesosphere/kubernetes:guestbook-frontend-php      ip-10-0-1-216.ec2.internal/10.0.1.216   name=frontend       Running   1 minutes
+redis-master-controller-r2769   172.17.0.22   redis-master         library/redis                                     ip-10-0-1-215.ec2.internal/10.0.1.215   name=redis-master   Running   1 seconds
+redis-slave-controller-k33t0    172.17.0.17   redis-slave          mesosphere/kubernetes:guestbook-redis-slave       ip-10-0-1-218.ec2.internal/10.0.1.218   name=redis-slave    Running   1 minutes
+redis-slave-controller-vnnja    172.17.0.20   redis-slave          mesosphere/kubernetes:guestbook-redis-slave       ip-10-0-1-215.ec2.internal/10.0.1.215   name=redis-slave    Running   1 minutes
 ...
 
-$ bin/kubectl exec -p frontend-controller-jf2zt -c php-redis -ti curl http://frontend
+$ bin/kubectl exec -p frontend-controller-e0ado -c php-redis -ti curl http://frontend
 <html ng-app="redis">
   <head>
     <title>Guestbook</title>

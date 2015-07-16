@@ -11,9 +11,10 @@
              "version": "v1beta1",
              "id": "frontend-controller",
              "containers": [{
-               "name": "php-redis",
-               "image": "jdef/php-redis",
-               "ports": [{"containerPort": 80}]
+               "name": "guestbook-frontend",
+               "image": "mesosphere/kubernetes:guestbook-frontend-php-5",
+               "ports": [{"containerPort": 80}],
+               "env": [{"key": "REDIS_MASTER_HOSTNAME", "value": "redis-master.default.kubernetes.local"}]
              }]
            }
          },

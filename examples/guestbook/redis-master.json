@@ -7,7 +7,7 @@
       "version": "v1beta1",
       "id": "redis-master-2",
       "containers": [{
-        "name": "master",
+        "name": "redis-master",
         "image": "library/redis",
         "ports": [{
           "containerPort": 6379

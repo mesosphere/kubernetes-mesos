@@ -83,7 +83,7 @@ Create a file named `redis-master-service.json` that contains:
 
 ```js
 {
-  "id": "redismaster",
+  "id": "redis-master",
   "kind": "Service",
   "apiVersion": "v1beta1",
   "port": 10000,
@@ -109,7 +109,7 @@ $ bin/kubectl get services
 NAME            LABELS                                    SELECTOR            IP            PORT
 kubernetes      component=apiserver,provider=kubernetes   <none>              10.10.10.2    443
 kubernetes-ro   component=apiserver,provider=kubernetes   <none>              10.10.10.1    80
-redismaster     <none>                                    name=redis-master   10.10.10.49   10000
+redis-master    <none>                                    name=redis-master   10.10.10.49   10000
 ```
 
 Once created, the service proxy on each minion is configured to set up a proxy on the specified port (in this case port 10000).
@@ -127,22 +127,22 @@ Create a file named `redis-slave-controller.json` that contains:
   "apiVersion": "v1beta1",
   "desiredState": {
     "replicas": 2,
-    "replicaSelector": {"name": "redisslave"},
+    "replicaSelector": {"name": "redis-slave"},
     "podTemplate": {
       "desiredState": {
          "manifest": {
            "version": "v1beta1",
            "id": "redis-slave-controller",
            "containers": [{
-             "name": "slave",
-             "image": "jdef/redis-slave",
+             "name": "redis-slave",
+             "image": "mesosphere/kubernetes:guestbook-redis-slave",
              "ports": [{"containerPort": 6379}]
            }]
          }
        },
-       "labels": {"name": "redisslave"}
+       "labels": {"name": "redis-slave"}
       }},
-  "labels": {"name": "redisslave"}
+  "labels": {"name": "redis-slave"}
 }
 ```
 
@@ -155,25 +155,25 @@ $ curl ${KUBERNETES_MASTER}/api/v1beta1/replicationControllers -XPOST -d@example
 ```
 ```
 $ bin/kubectl get rc
-CONTROLLER               CONTAINER(S)    IMAGE(S)            SELECTOR            REPLICAS
-redis-slave-controller   slave           jdef/redis-slave    name=redisslave     2
+CONTROLLER               CONTAINER(S)    IMAGE(S)                                       SELECTOR            REPLICAS
+redis-slave-controller   redis-slave     mesosphere/kubernetes:guestbook-redis-slave    name=redis-slave     2
 ```
 
 The redis slave configures itself by looking for the Kubernetes service environment variables in the container environment.
 In particular, the redis slave is started with the following command:
 
 ```shell
-redis-server --slaveof $SERVICE_HOST $REDISMASTER_SERVICE_PORT
+redis-server --slaveof $SERVICE_HOST $REDIS_MASTER_SERVICE_PORT
 ```
 
 Once that's up you can list the pods in the cluster, to verify that the master and slaves are running:
 
 ```shell
 $ bin/kubectl get pods
-POD                            IP             CONTAINER(S)   IMAGE(S)            HOST                        LABELS              STATUS
-redis-master-2                 172.17.6.19    master         dockerfile/redis    10.22.211.18/10.22.211.18   name=redis-master   Running
-redis-slave-controller-0133o   172.17.9.2     slave          jdef/redis-slave    10.150.52.19/10.150.52.19   name=redisslave     Running
-redis-slave-controller-oh43e   172.17.82.98   slave          jdef/redis-slave    10.72.72.178/10.72.72.178   name=redisslave     Running
+POD                            IP             CONTAINER(S)   IMAGE(S)                                       HOST                        LABELS              STATUS
+redis-master-2                 172.17.6.19    master         dockerfile/redis                               10.22.211.18/10.22.211.18   name=redis-master   Running
+redis-slave-controller-0133o   172.17.9.2     redis-slave    mesosphere/kubernetes:guestbook-redis-slave    10.150.52.19/10.150.52.19   name=redis-slave    Running
+redis-slave-controller-oh43e   172.17.82.98   redis-slave    mesosphere/kubernetes:guestbook-redis-slave    10.72.72.178/10.72.72.178   name=redis-slave    Running
 ```
 
 You will see a single redis master pod and two redis slave pods.
@@ -186,24 +186,24 @@ As before, create a service specification:
 
 ```js
 {
-  "id": "redisslave",
+  "id": "redis-slave",
   "kind": "Service",
   "apiVersion": "v1beta1",
   "port": 10001,
   "labels": {
-    "name": "redisslave"
+    "name": "redis-slave"
   },
   "selector": {
-    "name": "redisslave"
+    "name": "redis-slave"
   }
 }
 ```
 
-This time the selector for the service is `name=redisslave`, because that identifies the pods running redis slaves.
+This time the selector for the service is `name=redis-slave`, because that identifies the pods running redis slaves.
 It may also be helpful to set labels on your service itself--as we've done here--to make it easy to locate them with:
 
-* `bin/kubectl get services -l "name=redisslave"`, or
-* `curl ${KUBERNETES_MASTER}/api/v1beta1/services?labels=name=redisslave`
+* `bin/kubectl get services -l "name=redis-slave"`, or
+* `curl ${KUBERNETES_MASTER}/api/v1beta1/services?labels=name=redis-slave`
 
 Now that you have created the service specification, create it in your cluster via the REST API:
 
@@ -216,8 +216,8 @@ $ bin/kubectl get services
 NAME            LABELS                                    SELECTOR            IP            PORT
 kubernetes      component=apiserver,provider=kubernetes   <none>              10.10.10.2    443
 kubernetes-ro   component=apiserver,provider=kubernetes   <none>              10.10.10.1    80
-redismaster     <none>                                    name=redis-master   10.10.10.49   10000
-redisslave      name=redisslave                           name=redisslave     10.10.10.109  10001
+redis-master    <none>                                    name=redis-master   10.10.10.49   10000
+redis-slave     name=redis-slave                          name=redis-slave    10.10.10.109  10001
 ```
 
 ### Step Five: Create the frontend pod.
@@ -242,8 +242,8 @@ Create a file named `frontend-controller.json`:
            "version": "v1beta1",
            "id": "frontend-controller",
            "containers": [{
-             "name": "php-redis",
-             "image": "jdef/php-redis",
+             "name": "guestbook-frontend",
+             "image": "mesosphere/kubernetes:guestbook-frontend-php",
              "ports": [{"containerPort": 80}]
            }]
          }
@@ -262,22 +262,22 @@ $ bin/kubectl create -f examples/guestbook/frontend-controller.json
 $ curl ${KUBERNETES_MASTER}/api/v1beta1/replicationControllers -XPOST -d@examples/guestbook/frontend-controller.json
 
 $ bin/kubectl get rc
-CONTROLLER               CONTAINER(S)    IMAGE(S)            SELECTOR            REPLICAS
-frontend-controller      php-redis       jdef/php-redis      name=frontend       3
-redis-slave-controller   slave           jdef/redis-slave    name=redisslave     2
+CONTROLLER               CONTAINER(S)       IMAGE(S)                                        SELECTOR            REPLICAS
+frontend-controller      guestbook-frontend mesosphere/kubernetes:guestbook-frontend-php    name=frontend       3
+redis-slave-controller   slave              mesosphere/kubernetes:guestbook-redis-slave     name=redis-slave     2
 ```
 
 Once that's up you can list the pods in the cluster, to verify that the master, slaves and frontends are running:
 
 ```shell
 $ bin/kubectl get pods
-POD                            IP             CONTAINER(S)  IMAGE(S)          HOST                       LABELS             STATUS
-frontend-controller-hh2gd      172.17.9.3     php-redis     jdef/php-redis    10.150.52.19/10.150.52.19  name=frontend      Running
-frontend-controller-ls6k1      172.17.6.21    php-redis     jdef/php-redis    10.22.211.18/10.22.211.18  name=frontend      Running
-frontend-controller-nyxxv      172.17.82.99   php-redis     jdef/php-redis    10.72.72.178/10.72.72.178  name=frontend      Running
-redis-master-2                 172.17.6.19    master        dockerfile/redis  10.22.211.18/10.22.211.18  name=redis-master  Running
-redis-slave-controller-0133o   172.17.9.2     slave         jdef/redis-slave  10.150.52.19/10.150.52.19  name=redisslave    Running
-redis-slave-controller-oh43e   172.17.82.98   slave         jdef/redis-slave  10.72.72.178/10.72.72.178  name=redisslave    Running
+POD                            IP             CONTAINER(S)          IMAGE(S)                                        HOST                        LABELS             STATUS
+frontend-controller-hh2gd      172.17.9.3     guestbook-frontend    mesosphere/kubernetes:guestbook-frontend-php    10.150.52.19/10.150.52.19   name=frontend      Running
+frontend-controller-ls6k1      172.17.6.21    guestbook-frontend    mesosphere/kubernetes:guestbook-frontend-php    10.22.211.18/10.22.211.18   name=frontend      Running
+frontend-controller-nyxxv      172.17.82.99   guestbook-frontend    mesosphere/kubernetes:guestbook-frontend-php    10.72.72.178/10.72.72.178   name=frontend      Running
+redis-master-2                 172.17.6.19    master                dockerfile/redis                                10.22.211.18/10.22.211.18   name=redis-master  Running
+redis-slave-controller-0133o   172.17.9.2     slave                 mesosphere/kubernetes:guestbook-redis-slave     10.150.52.19/10.150.52.19   name=redis-slave   Running
+redis-slave-controller-oh43e   172.17.82.98   slave                 mesosphere/kubernetes:guestbook-redis-slave     10.72.72.178/10.72.72.178   name=redis-slave   Running
 ```
 
 You will see a single redis master pod, two redis slaves, and three frontend pods.
@@ -299,15 +299,15 @@ if (isset($_GET['cmd']) === true) {
     $client = new Predis\Client([
       'scheme' => 'tcp',
       'host'   => getenv('SERVICE_HOST'),
-      'port'   => getenv('REDISMASTER_SERVICE_PORT'),
+      'port'   => getenv('REDIS_MASTER_SERVICE_PORT'),
     ]);
     $client->set($_GET['key'], $_GET['value']);
     print('{"message": "Updated"}');
   } else {
-    $read_port = getenv('REDISMASTER_SERVICE_PORT');
+    $read_port = getenv('REDIS_MASTER_SERVICE_PORT');
 
-    if (isset($_ENV['REDISSLAVE_SERVICE_PORT'])) {
-      $read_port = getenv('REDISSLAVE_SERVICE_PORT');
+    if (isset($_ENV['REDIS_SLAVE_SERVICE_PORT'])) {
+      $read_port = getenv('REDIS_SLAVE_SERVICE_PORT');
     }
     $client = new Predis\Client([
       'scheme' => 'tcp',
@@ -325,11 +325,11 @@ if (isset($_GET['cmd']) === true) {
 
 To play with the service itself, find an endpoint of the frontend service and enter it into a web browser.
 ```shell
-$ kc get endpoints
+$ bin/kubectl get endpoints
 NAME             ENDPOINTS
 frontend         10.150.52.19:3889,10.22.211.18:3889,10.72.72.178:2182
-redismaster      10.22.211.18:1025
-redisslave       10.150.52.19:2182,10.72.72.178:1025
+redis-master     10.22.211.18:1025
+redis-slave      10.150.52.19:2182,10.72.72.178:1025
 ...
 
 # You'll actually want to interact with this app via a browser but you can test its access using curl:
@@ -404,4 +404,16 @@ $ curl http://${servicehost}:5050/master/state.json
             }
         },
 ...
+```
+
+### TL;DR
+
+If you already know what you're doing (and have kubectl in your PATH), you can turn up the whole guestbook with just the following commands:
+
+```
+kubectl create -f examples/guestbook/redis-master-controller.json
+kubectl create -f examples/guestbook/redis-master-service.json
+kubectl create -f examples/guestbook/redis-slave-controller.json
+kubectl create -f examples/guestbook/frontend-controller.json
+kubectl create -f examples/guestbook/frontend-service.json
 ```
