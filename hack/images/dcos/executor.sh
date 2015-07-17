@@ -109,10 +109,10 @@ exec 2>&1
 exec \\
   foreground s6-svc -u ${service_dir}/shutdown '' \\
   ${sandbox}/opt/km executor ${@} \\
-    --run_proxy=false \\
+    --run-proxy=false \\
     --address=$binding_ip \\
-    --shutdown_fd=3 \\
-    --shutdown_fifo=$shutdown_fifo $KUBE_CLUSTER_DNS $KUBE_CLUSTER_DOMAIN
+    --shutdown-fd=3 \\
+    --shutdown-fifo=$shutdown_fifo $KUBE_CLUSTER_DNS $KUBE_CLUSTER_DOMAIN
 EOF
 
 prepare_service_script ${service_dir} executor finish <<EOF
@@ -141,7 +141,7 @@ prepare_service_script ${service_dir} proxy run <<EOF
 exec 2>&1
 unset LD_LIBRARY_PATH
 exec ${sandbox}/opt/km proxy \\
-  --bind_address=$binding_ip \\
+  --bind-address=$binding_ip \\
   --logtostderr=true \\
   --master=${KUBERNETES_MASTER}
 EOF
