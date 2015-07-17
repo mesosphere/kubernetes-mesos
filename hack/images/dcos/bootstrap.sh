@@ -103,7 +103,7 @@ prepare_var_run || die Failed to initialize apiserver run directory
 prepare_service_script ${service_dir} .s6-svscan finish <<EOF
 #!/usr/bin/execlineb
   define hostpath /var/run/kubernetes
-  foreground { if { test -L ${hostpath} } rm -f ${hostpath} } exit 0
+  foreground { if { test -L \${hostpath} } rm -f \${hostpath} } exit 0
 EOF
 
 prepare_etcd_service() {
@@ -113,7 +113,7 @@ prepare_etcd_service() {
 #TODO(jdef) would be super-cool to have socket-activation here so that clients can connect before etcd is really ready
 exec 2>&1
 mkdir -p ${etcd_server_data}
-PATH=/opt:${PATH}
+PATH="/opt:${PATH}"
 export PATH
 exec /opt/etcd \\
   -advertise-client-urls ${etcd_advertise_client_urls} \\
