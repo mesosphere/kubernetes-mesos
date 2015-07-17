@@ -9,6 +9,7 @@ IMAGE	?= kubernetes
 REPO	?= mesosphere/$(IMAGE)
 DCOS_VERSION ?= dev
 SUDO	?= $(shell test "$$(whoami)" = "root" || echo sudo)
+READLINK := $(shell if which greadlink &>/dev/null; then echo greadlink; else echo readlink; fi)
 
 COMMON_ARCH ?= linux-amd64
 
@@ -87,7 +88,7 @@ s6: check-sudo-docker
 	test -f _build/s6/.gitignore || git clone --depth=1 $(S6_GIT) _build/s6
 	test -f _build/dist/manifest.txt || ( \
 		cd _build/s6 && $(SUDO) docker build . | tail -n 1 | awk '{ print $$3; }' | \
-		xargs $(SUDO) docker run --rm -v $$(readlink -f ../dist):/skarnet-builder/dist)
+		xargs $(SUDO) docker run --rm -v $$($(READLINK) -f ../dist):/skarnet-builder/dist)
 
 $(S6_BINS): s6
 	tar xzf _build/dist/$@
