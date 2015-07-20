@@ -1,20 +1,25 @@
-VERSION ?= $(shell date -Iseconds | sed -e 's/[:+]//g')
-IMAGE   ?= mesosphere/kubernetes:kube2sky-$(shell cat .version)
+# Makefile for the Docker image gcr.io/google_containers/kube2sky
+# MAINTAINER: Tim Hockin <thockin@google.com>
+# If you update this image please bump the tag value before pushing.
 
-all: kube2sky
+.PHONY: all kube2sky container push clean test
 
-version:
-	echo "$(VERSION)" >.version
+TAG = 1.10
+PREFIX = gcr.io/google_containers
+
+all: container
 
 kube2sky: kube2sky.go
-	echo GOPATH=$$GOPATH
-	env CGO_ENABLED=0 go build -a -o $$(pwd)/kube2sky -installsuffix cgo --ldflags '-w' ./kube2sky.go
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 godep go build -a -installsuffix cgo --ldflags '-w' ./kube2sky.go
 
-container: version
-	sudo docker build -t $(IMAGE) .
+container: kube2sky
+	docker build -t $(PREFIX)/kube2sky:$(TAG) .
 
 push:
-	sudo docker push $(IMAGE)
+	gcloud docker push $(PREFIX)/kube2sky:$(TAG)
 
 clean:
 	rm -f kube2sky
+
+test: clean
+	godep go test -v --vmodule=*=4

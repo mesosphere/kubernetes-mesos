@@ -1,21 +1,13 @@
-VERSION	?= $(shell date -Iseconds | sed -e 's/[:+]//g')
-IMAGE	?= mesosphere/kubernetes:skydns-$(shell cat .version)
-
-.PHONY: all skydns container push clean version
-
 all: skydns
 
-version:
-	echo "$(VERSION)" >.version
-
 skydns:
-	mkdir -p go && env GOPATH=$$(pwd)/go CGO_ENABLED=0 go get -a -installsuffix cgo --ldflags '-w' github.com/skynetservices/skydns
+	CGO_ENABLED=0 go build -a -installsuffix cgo --ldflags '-w' github.com/skynetservices/skydns
 
-container: version
-	sudo docker build -t $(IMAGE) .
+container: skydns
+	sudo docker build -t gcr.io/google_containers/skydns .
 
 push:
-	sudo docker push $(IMAGE)
+	sudo gcloud docker push gcr.io/google_containers/skydns
 
 clean:
-	rm -rf skydns go
+	rm -f skydns

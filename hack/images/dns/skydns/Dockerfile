@@ -1,5 +1,4 @@
 FROM busybox
-MAINTAINER James DeFelice <james@mesosphere.io>
-ADD go/bin/skydns /
-ADD .version /
+MAINTAINER Tim Hockin <thockin@google.com>
+ADD skydns skydns
 ENTRYPOINT ["/skydns"]
