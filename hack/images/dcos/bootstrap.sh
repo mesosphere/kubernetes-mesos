@@ -215,22 +215,22 @@ prepare_kube_dns() {
   kube_cluster_domain=${DNS_DOMAIN:-kubernetes.local}
   local kube_nameservers=$(cat /etc/resolv.conf|grep -e ^nameserver|head -3|cut -f2 -d' '|sed -e 's/$/:53/g'|xargs echo -n|tr ' ' ,)
   kube_nameservers=${kube_nameservers:-${DNS_NAMESERVERS:-8.8.8.8:53,8.8.4.4:53}}
-  for f in $obj; do
-    cat /opt/$f.in | sed \
-      -e "s/___dns_domain___/${kube_cluster_domain}/g" \
-      -e "s/___dns_replicas___/${DNS_REPLICAS:-1}/g" \
-      -e "s/___dns_server___/${kube_cluster_dns}/g" \
-      -e "s/___dns_nameservers___/${kube_nameservers}/g" \
-      >${sandbox}/$f
-  done
+  local kube_master="http://${host_ip}:${apiserver_port}"
+
+  sed -e "s/{{ pillar\['dns_replicas'\] }}/1/g" \
+      -e "s,\(command = \"/kube2sky\"\),\\1\\"$'\n'"        - --kube_master_url=${kube_master}," \
+      -e "s/{{ pillar\['dns_domain'\] }}/${kube_cluster_domain}/g" \
+      /opt/skydns-rc.yaml.in > ${sandbox}/skydns-rc.yaml
+  sed -e "s/{{ pillar\['dns_server'\] }}/${kube_cluster_dns}/g" \
+    /opt/skydns-svc.yaml.in > ${sandbox}/skydns-svc.yaml
+
   prepare_service ${monitor_dir} ${service_dir} kube_dns ${KUBE_DNS_RESPAWN_DELAY:-3} <<EOF
 #!/bin/sh
 exec 2>&1
 
-KUBERNETES_MASTER=http://${host_ip}:${apiserver_port}
-export KUBERNETES_MASTER
+export KUBERNETES_MASTER="${kube_master}"
 
-/opt/kubectl get rc kube-dns >/dev/null && \
+/opt/kubectl get rc kube-dns-v4 >/dev/null && \
   /opt/kubectl get service kube-dns >/dev/null && \
   touch kill && exit 0
 
@@ -241,15 +241,15 @@ EOF
 
   sed -i -e '$i test -f kill && exec s6-svc -d $(pwd) || exec \\' ${service_dir}/kube_dns/finish
 
-  prepare_service_depends apiserver http://${host_ip}:${apiserver_port}/healthz ok kube_dns
+  prepare_service_depends apiserver ${kube_master}/healthz ok kube_dns
 }
 
 kube_cluster_dns=""
 kube_cluster_domain=""
 if test -n "$ENABLE_DNS"; then
   prepare_kube_dns
-  kube_cluster_dns="--cluster_dns=$kube_cluster_dns"
-  kube_cluster_domain="--cluster_domain=$kube_cluster_domain"
+  kube_cluster_dns="--cluster-dns=$kube_cluster_dns"
+  kube_cluster_domain="--cluster-domain=$kube_cluster_domain"
 fi
 
 test -n "$DISABLE_ETCD_SERVER" || prepare_etcd_service
