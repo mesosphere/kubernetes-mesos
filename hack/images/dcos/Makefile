@@ -8,7 +8,7 @@ SOURCE_OBJ = $(TARGET_OBJ:%=$(FROM)/%)
 IMAGE	?= kubernetes
 REPO	?= mesosphere/$(IMAGE)
 DCOS_VERSION ?= dev
-SUDO	?= $(shell test "$$(whoami)" = "root" || echo sudo)
+SUDO	?=
 READLINK := $(shell if which greadlink &>/dev/null; then echo greadlink; else echo readlink; fi)
 
 COMMON_ARCH ?= linux-amd64
