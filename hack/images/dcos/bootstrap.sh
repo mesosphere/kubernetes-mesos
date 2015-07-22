@@ -22,6 +22,10 @@ echo
 # -C for failing when files are clobbered
 set -ue
 
+if [ "${DEBUG}" == "true" ]; then
+  set -x
+fi
+
 # NOTE: uppercase env variables are generally indended to be possibly customized
 # by callers. lowercase env variables are generally defined within this script.
 
