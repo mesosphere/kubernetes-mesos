@@ -33,7 +33,7 @@ echo "$sandbox"
 # source utility functions
 . /opt/functions.sh
 
-echo -n "* Version: $(cat /opt/.version)"
+echo "* Version: $(cat /opt/.version)"
 cp /opt/.version ${sandbox}
 
 # find the leader
