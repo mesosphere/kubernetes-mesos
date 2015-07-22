@@ -109,10 +109,9 @@ fi
 apply_uids="s6-applyuidgid -u 99 -g 99"
 
 # find IP address of the container
-echo -n "* container IP: "
-host_ip=$(echo $HOST | grep -e '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+' >/dev/null 2>&1)
-test -n "$host_ip" || host_ip=$(lookup_ip "$HOST")
-test -n "$host_ip" || die "cannot find container IP"
+echo -n "* host IP: "
+host_ip=$(lookup_ip $HOST)
+test -n "$host_ip" || die "cannot find host IP"
 echo "$host_ip"
 
 # mesos cloud provider configuration
