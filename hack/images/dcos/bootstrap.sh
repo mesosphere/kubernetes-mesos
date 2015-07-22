@@ -38,8 +38,8 @@ cp /opt/.version ${sandbox}
 
 # find the leader
 echo -n "* Mesos master leader: "
-mesos_leader="$(leading_master_ip)" || die "cannot find Mesos master leader"
-mesos_master="${mesos_leader}:5050"
+mesos_master="${K8SM_MESOS_MASTER:-}"
+test -n "${mesos_master}" || mesos_master="$(leading_master_ip):5050" || die "cannot find Mesos master leader"
 echo "$mesos_master"
 
 # set configuration values
@@ -69,7 +69,7 @@ echo "* controller manager: $controller_manager_host:$controller_manager_port"
 
 # assume that the leading mesos master is always running a marathon
 # service proxy, perhaps using haproxy.
-service_proxy=${SERVICE_PROXY:-${mesos_leader}}
+service_proxy=${SERVICE_PROXY:-leader.mesos}
 echo "* service proxy: $service_proxy"
 
 # would be nice if this was auto-discoverable. if this value changes
