@@ -45,7 +45,6 @@ docker run --rm --name=k8s -e GLOG_v=3 -e HOST=<docker-host-IP> \
 * Makefile - coordinate the build process: build s6, bundle it with km into a Docker and push the repo
 * Dockerfile - recipe for building the docker
 * bootstrap.sh - default target of Dockerfile, launches the framework: apiserver, scheduler, controller
-* executor.sh - wrapper script that runs the executor on a slave host
 * leapsecs.dat - requirement for s6 to work properly
 * webhook.sh - helper that can communicate with simple HTTP webhook endpoints
 
