@@ -9,14 +9,9 @@ lookup_ip() {
 }
 
 leading_master_ip() {
-  local master="${K8SM_MESOS_MASTER:+${K8SM_MESOS_MASTER}}"
-  test -n "$master" && {
-    echo $master
-    return
-  }
   local leader=$(nslookup leader.mesos | sed -e '/^Server:/,/^Address .*$/{ d }' -e '/^$/d'|grep -e '^Address '|cut -f3 -d' ')
   test -n "$leader" || die Failed to identify mesos master, missing K8SM_MESOS_MASTER variable and cannot find leader.mesos
-  echo leader.mesos
+  echo leader.mesos:5050
 }
 
 # NOTE: this is really intended only for the apiserver since it runs in a
