@@ -198,43 +198,6 @@ ${apply_uids}
   --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}}
 EOF
 
-#
-# scheduler, uses frontend service proxy to access apiserver and
-# etcd. it spawns executors configured with the same address for
-# --api_servers and if the IPs change (because this container changes
-# hosts) then the executors become zombies.
-#
-mesos_role="${K8SM_MESOS_ROLE:-*}"
-
-failover_timeout="${K8SM_FAILOVER_TIMEOUT:-}"
-if test -n "$failover_timeout"; then
-  failover_timeout="--failover-timeout=$failover_timeout"
-fi
-
-# pick a fixed scheduler service address if DNS enabled because we don't want to
-# accidentally conflict with it if the scheduler randomly chooses the same addr.
-scheduler_service_address=""
-test -n "$ENABLE_DNS" && scheduler_service_address="--service-address=${SCHEDULER_SERVICE_ADDRESS:-10.10.10.9}"
-
-prepare_service ${monitor_dir} ${service_dir} scheduler ${SCHEDULER_RESPAWN_DELAY:-3} <<EOF
-#!/usr/bin/execlineb
-fdmove -c 2 1
-${apply_uids}
-/opt/km scheduler ${failover_timeout} ${scheduler_service_address}
-  --address=${host_ip}
-  --advertised-address=${scheduler_host}:${scheduler_port}
-  --api-servers=http://${apiserver_host}:${apiserver_port}
-  --driver-port=${scheduler_driver_port}
-  --etcd-servers=${etcd_server_list}
-  --framework-name=${framework_name}
-  --framework-weburi=${framework_weburi}
-  --mesos-master=${mesos_master}
-  --mesos-role="${mesos_role}"
-  --mesos-user=${K8SM_MESOS_USER:-root}
-  --port=${scheduler_port}
-  --v=${SCHEDULER_GLOG_v:-${logv}}
-EOF
-
 prepare_kube_dns() {
   local obj="skydns-rc.yaml skydns-svc.yaml"
   local f
@@ -271,14 +234,51 @@ EOF
   prepare_service_depends apiserver ${kube_master}/healthz ok kube_dns
 }
 
-# launch kube-dns if enabled
 kube_cluster_dns=""
 kube_cluster_domain=""
+# launch kube-dns if enabled
 if test -n "$ENABLE_DNS"; then
   prepare_kube_dns
-  kube_cluster_dns="--cluster-dns=$kube_cluster_dns"
-  kube_cluster_domain="--cluster-domain=$kube_cluster_domain"
 fi
+
+#
+# scheduler, uses frontend service proxy to access apiserver and
+# etcd. it spawns executors configured with the same address for
+# --api_servers and if the IPs change (because this container changes
+# hosts) then the executors become zombies.
+#
+mesos_role="${K8SM_MESOS_ROLE:-*}"
+
+failover_timeout="${K8SM_FAILOVER_TIMEOUT:-}"
+if test -n "$failover_timeout"; then
+  failover_timeout="--failover-timeout=$failover_timeout"
+fi
+
+# pick a fixed scheduler service address if DNS enabled because we don't want to
+# accidentally conflict with it if the scheduler randomly chooses the same addr.
+scheduler_service_address=""
+test -n "$ENABLE_DNS" && scheduler_service_address="--service-address=${SCHEDULER_SERVICE_ADDRESS:-10.10.10.9}"
+
+prepare_service ${monitor_dir} ${service_dir} scheduler ${SCHEDULER_RESPAWN_DELAY:-3} <<EOF
+#!/usr/bin/execlineb
+fdmove -c 2 1
+${apply_uids}
+/opt/km scheduler ${failover_timeout} ${scheduler_service_address}
+  --address=${host_ip}
+  --advertised-address=${scheduler_host}:${scheduler_port}
+  --api-servers=http://${apiserver_host}:${apiserver_port}
+  --cluster-dns=${kube_cluster_dns}
+  --cluster-domain=${kube_cluster_domain}
+  --driver-port=${scheduler_driver_port}
+  --etcd-servers=${etcd_server_list}
+  --framework-name=${framework_name}
+  --framework-weburi=${framework_weburi}
+  --mesos-master=${mesos_master}
+  --mesos-role="${mesos_role}"
+  --mesos-user=${K8SM_MESOS_USER:-root}
+  --port=${scheduler_port}
+  --v=${SCHEDULER_GLOG_v:-${logv}}
+EOF
 
 test -n "$DISABLE_ETCD_SERVER" || prepare_etcd_service
 
