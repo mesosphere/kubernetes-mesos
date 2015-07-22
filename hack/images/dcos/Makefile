@@ -33,7 +33,7 @@ KUBE_DNS_TEMPLATES_SOURCES = $(KUBE_DNS_TEMPLATES:%=../dns/%)
 #	make release FROM=~/bin RELEASE=1
 #
 RELEASE ?=
-RELEASE_VERSION ?= $(shell date -Iseconds | sed -e 's/[-:+]//g')
+RELEASE_VERSION ?= $(shell date +"%Y%m%dT%H%M%S")
 
 ifneq ($(RELEASE),)
 DCOS_VERSION = $(RELEASE_VERSION)
