@@ -11,9 +11,8 @@ die() {
 }
 
 #TODO(jdef) we may want additional flags here
-# -e for failed commands
 # -C for failing when files are clobbered
-set -u
+set -ue
 
 # NOTE: uppercase env variables are generally indended to be possibly customized
 # by callers. lowercase env variables are generally defined within this script.
