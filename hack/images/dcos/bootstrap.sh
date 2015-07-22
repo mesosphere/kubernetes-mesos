@@ -10,6 +10,14 @@ die() {
   exit 1
 }
 
+indent() {
+  sed 's/^/    /'
+}
+
+echo "* Environment:"
+env | indent
+echo
+
 #TODO(jdef) we may want additional flags here
 # -C for failing when files are clobbered
 set -ue
@@ -17,38 +25,52 @@ set -ue
 # NOTE: uppercase env variables are generally indended to be possibly customized
 # by callers. lowercase env variables are generally defined within this script.
 
+echo -n "* Sandbox: "
 sandbox=${MESOS_SANDBOX:-${MESOS_DIRECTORY:-}}
 test -n "$sandbox" || die "failed to identify mesos sandbox. neither MESOS_DIRECTORY or MESOS_SANDBOX was specified"
+echo "$sandbox"
 
 # source utility functions
 . /opt/functions.sh
 
+echo -n "* Version: $(cat /opt/.version)"
 cp /opt/.version ${sandbox}
 
 # find the leader
+echo -n "* Mesos master leader: "
 mesos_leader="$(leading_master_ip)" || die "cannot find Mesos master leader"
 mesos_master="${mesos_leader}:5050"
+echo "$mesos_master"
 
 # set configuration values
 default_dns_name=${DEFAULT_DNS_NAME:-k8sm.marathon.mesos}
+echo "* DNS name: $default_dns_name"
 
 apiserver_host=${APISERVER_HOST:-${default_dns_name}}
 apiserver_port=${APISERVER_PORT:-8888}
 apiserver_secure_port=${APISERVER_SECURE_PORT:-6443}
+echo "* apiserver: $apiserver_host:$apiserver_port"
+echo "* secure apiserver: $apiserver_host:$apiserver_secure_port"
 
 scheduler_host=${SCHEDULER_HOST:-${default_dns_name}}
 scheduler_port=${SCHEDULER_PORT:-10251}
 scheduler_driver_port=${SCHEDULER_DRIVER_PORT:-25501}
+echo "* scheduler: $scheduler_host:$scheduler_port"
+echo "* scheduler driver port: $scheduler_driver_port"
 
 framework_name=${FRAMEWORK_NAME:-kubernetes}
 framework_weburi=${FRAMEWORK_WEBURI:-http://${apiserver_host}:${apiserver_port}/static/}
+echo "* framework name: $framework_name"
+echo "* framework_weburi: $framework_weburi"
 
 controller_manager_host=${CONTROLLER_MANAGER_HOST:-${default_dns_name}}
 controller_manager_port=${CONTROLLER_MANAGER_PORT:-10252}
+echo "* controller manager: $controller_manager_host:$controller_manager_port"
 
 # assume that the leading mesos master is always running a marathon
 # service proxy, perhaps using haproxy.
 service_proxy=${SERVICE_PROXY:-${mesos_leader}}
+echo "* service proxy: $service_proxy"
 
 # would be nice if this was auto-discoverable. if this value changes
 # between launches of the framework, there can be dangling executors,
@@ -83,9 +105,11 @@ fi
 apply_uids="s6-applyuidgid -u 99 -g 99"
 
 # find IP address of the container
+echo -n "* container IP: "
 host_ip=$(echo $HOST | grep -e '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+' >/dev/null 2>&1)
 test -n "$host_ip" || host_ip=$(lookup_ip "$HOST")
 test -n "$host_ip" || die "cannot find container IP"
+echo "$host_ip"
 
 # mesos cloud provider configuration
 cloud_config=${sandbox}/cloud.cfg
@@ -276,5 +300,6 @@ foreground {
 /usr/bin/s6-svscan -t${S6_RESCAN:-30000} ${service_dir}
 EOF
 
+echo -n "* Monitoring apiserver, controller-manager and scheduler..."
 chmod +x monitor.sh
 exec ./monitor.sh
