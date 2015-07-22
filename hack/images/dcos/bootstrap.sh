@@ -17,18 +17,19 @@ set -ue
 # NOTE: uppercase env variables are generally indended to be possibly customized
 # by callers. lowercase env variables are generally defined within this script.
 
-sandbox=${MESOS_SANDBOX:-${MESOS_DIRECTORY:-false}}
-test "$sandbox" != "false" || die "failed to identify mesos sandbox. neither MESOS_DIRECTORY or MESOS_SANDBOX was specified"
+sandbox=${MESOS_SANDBOX:-${MESOS_DIRECTORY:-}}
+test -n "$sandbox" || die "failed to identify mesos sandbox. neither MESOS_DIRECTORY or MESOS_SANDBOX was specified"
 
-script=/opt/functions.sh
-test -f $script || script=./functions.sh
+# source utility functions
+. /opt/functions.sh
 
-. $script
 cp /opt/.version ${sandbox}
 
-mesos_leader=$(leading_master_ip) || die
-mesos_master=${mesos_leader}:5050
+# find the leader
+mesos_leader="$(leading_master_ip)" || die "cannot find Mesos master leader"
+mesos_master="${mesos_leader}:5050"
 
+# set configuration values
 default_dns_name=${DEFAULT_DNS_NAME:-k8sm.marathon.mesos}
 
 apiserver_host=${APISERVER_HOST:-${default_dns_name}}
@@ -80,9 +81,11 @@ fi
 
 # run service procs as "nobody"
 apply_uids="s6-applyuidgid -u 99 -g 99"
+
+# find IP address of the container
 host_ip=$(echo $HOST | grep -e '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+' >/dev/null 2>&1)
 test -n "$host_ip" || host_ip=$(lookup_ip "$HOST")
-echo host_ip=$host_ip
+test -n "$host_ip" || die "cannot find container IP"
 
 # mesos cloud provider configuration
 cloud_config=${sandbox}/cloud.cfg
@@ -174,8 +177,7 @@ EOF
 # --api_servers and if the IPs change (because this container changes
 # hosts) then the executors become zombies.
 #
-mesos_role="${K8SM_MESOS_ROLE:-}"
-test -n "$mesos_role" || mesos_role="*"
+mesos_role="${K8SM_MESOS_ROLE:-*}"
 
 failover_timeout="${K8SM_FAILOVER_TIMEOUT:-}"
 if test -n "$failover_timeout"; then
@@ -242,6 +244,7 @@ EOF
   prepare_service_depends apiserver ${kube_master}/healthz ok kube_dns
 }
 
+# launch kube-dns if enabled
 kube_cluster_dns=""
 kube_cluster_domain=""
 if test -n "$ENABLE_DNS"; then
