@@ -13,16 +13,6 @@ READLINK := $(shell if which greadlink &>/dev/null; then echo greadlink; else ec
 
 COMMON_ARCH ?= linux-amd64
 
-S6_GIT	?= https://github.com/just-containers/skaware.git
-S6_VER	?= 2.1.3.0
-S6_REV	?= v1.11.0
-S6_ARCH	?= $(COMMON_ARCH)
-S6_OBJ	?= s6-$(S6_VER)-$(S6_ARCH)-bin.tar.gz
-
-EXECLINE_VER ?= 2.1.2.2
-EXECLINE_ARCH ?= $(COMMON_ARCH)
-EXECLINE_OBJ ?= execline-$(EXECLINE_VER)-$(EXECLINE_ARCH)-bin.tar.gz
-
 ETCD_IMAGE = etcd
 ETCD_TAG = 2.0.12
 ETCD_OUTPUT_DIR = $(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64
@@ -31,8 +21,6 @@ ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ET
 
 KUBE_DNS_TEMPLATES = skydns-rc.yaml.in skydns-svc.yaml.in
 KUBE_DNS_TEMPLATES_SOURCES = $(KUBE_DNS_TEMPLATES:%=../dns/%)
-
-S6_BINS ?= $(S6_OBJ) $(EXECLINE_OBJ)
 
 #
 # normally you'll be generating dev images via:
@@ -55,14 +43,14 @@ DCOS_PREFIX ?= k8s-1.0.pre-k8sm-0.6-dcos
 TAG	?= $(DCOS_PREFIX)-$(DCOS_VERSION)
 FQIN	?= $(REPO):$(TAG)
 
-.PHONY:	clean build push s6 $(S6_BINS) deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) version release promote check-sudo-docker info $(SOURCE_OBJ)
+.PHONY:	clean build push deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) version release promote check-sudo-docker info $(SOURCE_OBJ)
 
 all:	build
 
 clean:
 	rm -rf $(TARGET_OBJ)
 
-deps: $(S6_BINS) $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) $(SOURCE_OBJ)
+deps: $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) $(SOURCE_OBJ)
 
 version:
 	@echo "$(RELEASE_VERSION)" | tee .version
@@ -83,16 +71,6 @@ promote: check-sudo-docker
 
 release:
 	$(MAKE) build push FROM=$(FROM) RELEASE=$(RELEASE)
-
-s6: check-sudo-docker
-	mkdir -pv _build/s6 _build/dist && chmod -v o+rw _build/dist
-	test -f _build/s6/.gitignore || git clone --depth=1 $(S6_GIT) -b $(S6_REV) _build/s6
-	test -f _build/dist/manifest.txt || ( \
-		cd _build/s6 && $(SUDO) docker build . | tail -n 1 | awk '{ print $$3; }' | \
-		xargs $(SUDO) docker run --rm -v $$($(READLINK) -f ../dist):/skarnet-builder/dist)
-
-$(S6_BINS): s6
-	tar xzf _build/dist/$@
 
 etcd:
 	test 1 = 1 $(ETCD_BINS:%= -a -f "%") || ( \
