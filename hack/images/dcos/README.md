@@ -11,7 +11,7 @@ kube-dns is intended to resolve Kubernetes service names, such as `frontend.defa
 These service portal IP addresses are managed by the Kubernetes cluster and traffic is routed to them via special iptables DNAT rules that are maintained by the k8s proxy.
 Service portal IP addresses are not intended to be referenced by anything other than other k8s pods/services (read: no other mesos client or task should reference them).
 
-Deploying the kube-dns addon is optional (defaults to off) and it can be enabled by setting the 'enable-dns' package option (see the walkthrough example below).
+Deploying the kube-dns addon is optional (defaults to on) and it can be disabled by setting the 'enable-dns' package option (see the walkthrough example below).
 There is no funny interaction between kube-dns and mesos-dns;
 mesos-dns servers may be used as fallbacks for name resolution since their IP addresses are present in the slave's `/etc/resolv.conf`.
 
@@ -27,6 +27,18 @@ mesos-dns servers may be used as fallbacks for name resolution since their IP ad
 ## HOWEVER, to generate a fresh release image and push it up (skip the -dev tag cycle):
 ## (this is probably an exceptional case, images should usually be promoted from -dev)
 :; make release FROM=~/bin RELEASE=1
+```
+
+## Development and Testing
+
+The Docker container can be run manually outside of a DCOS cluster, e.g.:
+
+```
+docker run --rm --name=k8s -e GLOG_v=3 -e HOST=<docker-host-IP> \
+  -e K8SM_MESOS_MASTER=<mesos-master-ip>:5050 \
+  -e DEFAULT_DNS_NAME=<docker-host-IP> \
+  -e MESOS_SANDBOX=/tmp \
+  --net=host -it mesosphere/kubernetes:k8s-1.0.pre-k8sm-0.6-dcos-dev
 ```
 
 ## Files
