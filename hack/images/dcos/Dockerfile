@@ -17,5 +17,4 @@ ADD skydns-rc.yaml.in	/opt/
 ADD skydns-svc.yaml.in	/opt/
 ADD functions.sh	/opt/
 ADD bootstrap.sh	/opt/
-ADD executor.sh		/opt/
 ADD .version		/opt/

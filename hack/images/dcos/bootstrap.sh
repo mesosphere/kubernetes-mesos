@@ -200,7 +200,6 @@ ${apply_uids}
   --etcd-servers=${etcd_server_list}
   --framework-name=${framework_name}
   --framework-weburi=${framework_weburi}
-  --km-path="${sandbox}/executor-installer.sh"
   --mesos-master=${mesos_master}
   --mesos-role="${mesos_role}"
   --mesos-user=${K8SM_MESOS_USER:-root}
@@ -255,24 +254,6 @@ fi
 test -n "$DISABLE_ETCD_SERVER" || prepare_etcd_service
 
 cd ${sandbox}
-
->executor-extractor echo '#!/bin/bash
-echo "Self Extracting Installer"
-ARCHIVE=`awk "/^__ARCHIVE_BELOW__/ {print NR + 1; exit 0; }" $0`
-tail -n+$ARCHIVE $0 | tar xzv
-echo mounts before unshare:
-cat /proc/$$/mounts
-KUBERNETES_MASTER=http://'"${apiserver_host}:${apiserver_port}"'
-KUBE_CLUSTER_DNS='"${kube_cluster_dns}"'
-KUBE_CLUSTER_DOMAIN='"${kube_cluster_domain}"'
-export KUBERNETES_MASTER
-export KUBE_CLUSTER_DNS
-export KUBE_CLUSTER_DOMAIN
-exec unshare -m -- ./opt/executor.sh "$@"
-__ARCHIVE_BELOW__'
-
-(cat executor-extractor; tar czf - -C / opt etc/leapsecs.dat usr bin sbin) >executor-installer.sh
-chmod +x executor-installer.sh
 
 #--- service monitor
 #
