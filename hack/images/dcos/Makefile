@@ -1,17 +1,9 @@
 mkfile_path     := $(abspath $(lastword $(MAKEFILE_LIST)))
 current_dir     := $(patsubst %/,%,$(dir $(mkfile_path)))
 
-FROM	?= $(current_dir)/_build/k8sm
+FROM ?= $(current_dir)/_build/k8sm
 TARGET_OBJ = km kubectl
 SOURCE_OBJ = $(TARGET_OBJ:%=$(FROM)/%)
-
-IMAGE	?= kubernetes
-REPO	?= mesosphere/$(IMAGE)
-DCOS_VERSION ?= dev
-SUDO	?=
-READLINK := $(shell if which greadlink &>/dev/null; then echo greadlink; else echo readlink; fi)
-
-COMMON_ARCH ?= linux-amd64
 
 ETCD_IMAGE = etcd
 ETCD_TAG = 2.0.12
@@ -22,55 +14,30 @@ ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ET
 KUBE_DNS_TEMPLATES = skydns-rc.yaml.in skydns-svc.yaml.in
 KUBE_DNS_TEMPLATES_SOURCES = $(KUBE_DNS_TEMPLATES:%=../dns/%)
 
-#
-# normally you'll be generating dev images via:
-#	make release 
-#
-# and promoting (re-tagging them with a release version) them via:
-#	make promote
-#
-# HOWEVER, to generate a fresh release image and push it up (skip the -dev tag cycle):
-#	make release FROM=~/bin RELEASE=1
-#
-RELEASE ?=
-RELEASE_VERSION ?= $(shell date +"%Y%m%dT%H%M%S")
+REPO ?= mesosphere/kubernetes
+REF ?= v1.0.1
+VERSION = $(REF)-$(shell git describe --tags --dirty)-alpha
+IMAGE ?= $(REPO):$(VERSION)
+BUILDER_IMAGE ?= mesosphere/kubernetes-mesos-build
 
-ifneq ($(RELEASE),)
-DCOS_VERSION = $(RELEASE_VERSION)
-endif
+.PHONY: clean build push deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) version info $(SOURCE_OBJ)
 
-DCOS_PREFIX ?= k8s-1.0.pre-k8sm-0.6-dcos
-TAG	?= $(DCOS_PREFIX)-$(DCOS_VERSION)
-FQIN	?= $(REPO):$(TAG)
-
-.PHONY:	clean build push deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) version release promote check-sudo-docker info $(SOURCE_OBJ)
-
-all:	build
+all: build
 
 clean:
-	rm -rf $(TARGET_OBJ)
+	rm -rf $(TARGET_OBJ) $(KUBE_DNS_TEMPLATES)
 
 deps: $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) $(SOURCE_OBJ)
 
 version:
-	@echo "$(RELEASE_VERSION)" | tee .version
+	@echo "$(VERSION)" | tee .version
 
-build: deps version check-sudo-docker
+build: deps version
 	cp -pv $(SOURCE_OBJ) .
-	@echo $(FQIN) >dockertag
-	$(SUDO) docker build -q -t $$(cat dockertag) .
+	docker build -q -t $(IMAGE) .
 
-push: check-sudo-docker
-	(dockertag=$$(cat dockertag); echo pushing $$dockertag; $(SUDO) docker push $$dockertag)
-
-# would be nice to validate that the image contains .version that matches what's in the dir
-promote: check-sudo-docker
-	echo $(REPO):$(DCOS_PREFIX)-$$(cat .version) >dockertag
-	(dockertag=$$(cat dockertag); echo promoting $$dockertag; $(SUDO) docker tag -f $(REPO):$(DCOS_PREFIX)-dev $$dockertag) && \
-	$(MAKE) push
-
-release:
-	$(MAKE) build push FROM=$(FROM) RELEASE=$(RELEASE)
+push:
+	echo pushing $(IMAGE); docker push $(IMAGE)
 
 etcd:
 	test 1 = 1 $(ETCD_BINS:%= -a -f "%") || ( \
@@ -80,25 +47,13 @@ $(ETCD_BINS): etcd
 	test -f "$$(basename $@)" || cp -v $@ .
 
 $(KUBE_DNS_TEMPLATES): $(KUBE_DNS_TEMPLATES_SOURCES)
-	@if test -f $@ -a ../dns/$@ -ot $@; then true; else cp -v ../dns/$@ $@; fi
+	@cp -v ../dns/$@ .
 
-$(KUBE_DNS_TEMPLATES_SOURCES):
-
-check-sudo-docker:
-	@$(SUDO) docker version >/dev/null || (echo You do not have privileges to execute \"$(SUDO) docker\" commands, or else docker is not properly installed/configured >&2; exit 1)
-
-info: check-sudo-docker
-	@$(SUDO) docker version
+info:
+	@docker version
 	@echo ".version : $$(cat .version 2>/dev/null)"
-	@echo "dockertag: $$(cat dockertag 2>/dev/null)"
 
-# by default we build kubernetes-mesos components from the kubernetes@master branch.
-# you can override this on the command like like so:
-#     make KUBERNTES_BRANCH=v0.19.1
-KUBERNETES_BRANCH ?= master
-K8SM_BUILDER ?= mesosphere/kubernetes-mesos-build
-
-$(SOURCE_OBJ): check-sudo-docker
+$(SOURCE_OBJ):
 	test -x $@ || \
-		$(SUDO) docker run --rm -ti -v $(FROM):/target -e GIT_BRANCH=$(KUBERNETES_BRANCH) $(K8SM_BUILDER) \
+		docker run --rm -ti -v $(FROM):/target -e GIT_BRANCH=$(REF) $(BUILDER_IMAGE) \
 		bash -c './hack/build-cross.sh && cp -vp _output/local/bin/linux/amd64/* /target/ && find _output/local/bin/ -name kubectl | while IFS=/ read -r a b c os arch app; do cp -vp "$$a/$$b/$$c/$$os/$$arch/$$app" "/target/$${app}-$${os}-$${arch}"; done'
