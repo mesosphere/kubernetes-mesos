@@ -54,9 +54,7 @@ EOF
   chmod +x ${svcdir}/${name}/log/run
 
   local loglink=log/$name/current
-  ln -sv $loglink ${sandbox}/${name}.log
-
-  echo prepared script $script for service $name in dir $svcdir
+  ln -s $loglink ${sandbox}/${name}.log
 }
 
 prepare_monitor_script() {
