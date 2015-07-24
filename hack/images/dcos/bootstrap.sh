@@ -22,7 +22,7 @@ echo
 # -C for failing when files are clobbered
 set -ue
 
-if [ "${DEBUG}" == "true" ]; then
+if [ "${DEBUG:-false}" == "true" ]; then
   set -x
 fi
 
