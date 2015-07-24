@@ -27,7 +27,7 @@ REF_BASE_URL = https://raw.githubusercontent.com/GoogleCloudPlatform/kubernetes/
 all: build
 
 clean:
-	rm -rf $(TARGET_OBJ) $(KUBE_DNS_TEMPLATES)
+	rm -rf $(TARGET_OBJ) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
 
 deps: $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES) $(SOURCE_OBJ)
 
