@@ -71,6 +71,9 @@ controller_manager_host=${CONTROLLER_MANAGER_HOST:-${default_dns_name}}
 controller_manager_port=${CONTROLLER_MANAGER_PORT:-10252}
 echo "* controller manager: $controller_manager_host:$controller_manager_port"
 
+enable_dns=${ENABLE_DNS:-true}
+echo "* kube-dns: ${enable_dns}"
+
 # assume that the leading mesos master is always running a marathon
 # service proxy, perhaps using haproxy.
 service_proxy=${SERVICE_PROXY:-leader.mesos}
@@ -101,9 +104,6 @@ else
   etcd_server_data=${ETCD_SERVER_DATA:-${sandbox}/etcd-data}
   etcd_server_list=${etcd_listen_client_urls}
 fi
-
-# optional variable, no default; avoid bash errors
-: ${ENABLE_DNS=""}
 
 # run service procs as "nobody"
 apply_uids="s6-applyuidgid -u 99 -g 99"
@@ -155,7 +155,7 @@ exec /opt/etcd \\
 EOF
 
   local deps="controller-manager scheduler"
-  if test -n "${ENABLE_DNS}"; then
+  if test -n "${enable_dns}"; then
     deps="${deps} apiserver-depends"
   else
     deps="${deps} apiserver"
@@ -234,10 +234,10 @@ EOF
   prepare_service_depends apiserver ${kube_master}/healthz ok kube_dns
 }
 
+# launch kube-dns if enabled
 kube_cluster_dns=""
 kube_cluster_domain=""
-# launch kube-dns if enabled
-if test -n "$ENABLE_DNS"; then
+if test -n "$enable_dns"; then
   prepare_kube_dns
 fi
 
@@ -267,8 +267,6 @@ ${apply_uids}
   --address=${host_ip}
   --advertised-address=${scheduler_host}:${scheduler_port}
   --api-servers=http://${apiserver_host}:${apiserver_port}
-  --cluster-dns=${kube_cluster_dns}
-  --cluster-domain=${kube_cluster_domain}
   --driver-port=${scheduler_driver_port}
   --etcd-servers=${etcd_server_list}
   --framework-name=${framework_name}
@@ -278,6 +276,8 @@ ${apply_uids}
   --mesos-user=${K8SM_MESOS_USER:-root}
   --port=${scheduler_port}
   --v=${SCHEDULER_GLOG_v:-${logv}}
+  $(if [ -n "${kube_cluster_dns}" ]; then echo "--cluster-dns=${kube_cluster_dns}"; fi)
+  $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
 EOF
 
 test -n "$DISABLE_ETCD_SERVER" || prepare_etcd_service
