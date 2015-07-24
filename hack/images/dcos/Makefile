@@ -20,6 +20,7 @@ REF ?= v1.0.1
 VERSION = $(REF)-$(shell git describe --tags --dirty)-alpha
 IMAGE ?= $(REPO):$(VERSION)
 BUILDER_IMAGE ?= mesosphere/kubernetes-mesos-build
+REF_BASE_URL = https://raw.githubusercontent.com/GoogleCloudPlatform/kubernetes/$(REF)
 
 .PHONY: clean build push deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES) version info $(SOURCE_OBJ)
 
@@ -49,10 +50,10 @@ $(ETCD_BINS): etcd
 	test -f "$$(basename $@)" || cp -v $@ .
 
 $(KUBE_DNS_TEMPLATES):
-	curl -f https://raw.githubusercontent.com/GoogleCloudPlatform/kubernetes/$(REF)/cluster/addons/dns/$@ > $@
+	curl -f $(REF_BASE_URL)/cluster/addons/dns/$@ > $@
 
 $(KUBE_UI_TEMPLATES):
-	curl -f https://raw.githubusercontent.com/GoogleCloudPlatform/kubernetes/$(REF)/cluster/addons/kube-ui/$@ > $@
+	curl -f $(REF_BASE_URL)/cluster/addons/kube-ui/$@ > $@
 
 info:
 	@docker version
