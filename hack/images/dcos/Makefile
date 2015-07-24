@@ -12,7 +12,6 @@ ETCD_BINS = $(ETCD_OUTPUT_DIR)/etcd $(ETCD_OUTPUT_DIR)/etcdctl
 ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz
 
 KUBE_DNS_TEMPLATES = skydns-rc.yaml.in skydns-svc.yaml.in
-KUBE_DNS_TEMPLATES_SOURCES = $(KUBE_DNS_TEMPLATES:%=../dns/%)
 
 REPO ?= mesosphere/kubernetes
 REF ?= v1.0.1
@@ -46,8 +45,8 @@ etcd:
 $(ETCD_BINS): etcd
 	test -f "$$(basename $@)" || cp -v $@ .
 
-$(KUBE_DNS_TEMPLATES): $(KUBE_DNS_TEMPLATES_SOURCES)
-	@cp -v ../dns/$@ .
+$(KUBE_DNS_TEMPLATES):
+	curl -f https://raw.githubusercontent.com/GoogleCloudPlatform/kubernetes/$(REF)/cluster/addons/dns/$@ > $@
 
 info:
 	@docker version
