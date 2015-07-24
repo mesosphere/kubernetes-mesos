@@ -34,6 +34,7 @@ version:
 build: deps version
 	cp -pv $(SOURCE_OBJ) .
 	docker build -q -t $(IMAGE) .
+	docker tag -f $(IMAGE) $(REPO):latest
 
 push:
 	echo pushing $(IMAGE); docker push $(IMAGE)
