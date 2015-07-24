@@ -71,12 +71,6 @@ controller_manager_host=${CONTROLLER_MANAGER_HOST:-${default_dns_name}}
 controller_manager_port=${CONTROLLER_MANAGER_PORT:-10252}
 echo "* controller manager: $controller_manager_host:$controller_manager_port"
 
-enable_dns=${ENABLE_DNS:-true}
-echo "* kube-dns enabled: ${enable_dns}"
-
-enable_ui=${ENABLE_UI:-true}
-echo "* kube-ui enabled: ${enable_ui}"
-
 # assume that the leading mesos master is always running a marathon
 # service proxy, perhaps using haproxy.
 service_proxy=${SERVICE_PROXY:-leader.mesos}
@@ -161,7 +155,7 @@ exec /opt/etcd \\
 EOF
 
   local deps="controller-manager scheduler"
-  if test -n "${enable_dns}"; then
+  if [ -n "${apiserver_depends}" ]; then
     deps="${deps} apiserver-depends"
   else
     deps="${deps} apiserver"
@@ -240,7 +234,7 @@ EOF
 # launch kube-dns if enabled
 kube_cluster_dns=""
 kube_cluster_domain=""
-if [ "$enable_dns" == true ]; then
+if [ "${ENABLE_DNS:-true}" == true ]; then
   prepare_kube_dns
 fi
 
@@ -266,7 +260,7 @@ EOF
   apiserver_depends="${apiserver_depends} kube_ui"
 }
 
-if [ "$enable_ui" == true ]; then
+if [ "${ENABLE_UI:-true}" == true ]; then
   prepare_kube_ui
 fi
 
