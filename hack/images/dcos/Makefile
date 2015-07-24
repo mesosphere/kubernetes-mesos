@@ -12,6 +12,7 @@ ETCD_BINS = $(ETCD_OUTPUT_DIR)/etcd $(ETCD_OUTPUT_DIR)/etcdctl
 ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz
 
 KUBE_DNS_TEMPLATES = skydns-rc.yaml.in skydns-svc.yaml.in
+KUBE_UI_TEMPLATES = kube-ui-rc.yaml kube-ui-svc.yaml
 
 REPO ?= mesosphere/kubernetes
 REF ?= v1.0.1
@@ -19,14 +20,14 @@ VERSION = $(REF)-$(shell git describe --tags --dirty)-alpha
 IMAGE ?= $(REPO):$(VERSION)
 BUILDER_IMAGE ?= mesosphere/kubernetes-mesos-build
 
-.PHONY: clean build push deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) version info $(SOURCE_OBJ)
+.PHONY: clean build push deps etcd $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES) version info $(SOURCE_OBJ)
 
 all: build
 
 clean:
 	rm -rf $(TARGET_OBJ) $(KUBE_DNS_TEMPLATES)
 
-deps: $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) $(SOURCE_OBJ)
+deps: $(ETCD_BINS) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES) $(SOURCE_OBJ)
 
 version:
 	@echo "$(VERSION)" | tee .version
@@ -48,6 +49,9 @@ $(ETCD_BINS): etcd
 
 $(KUBE_DNS_TEMPLATES):
 	curl -f https://raw.githubusercontent.com/GoogleCloudPlatform/kubernetes/$(REF)/cluster/addons/dns/$@ > $@
+
+$(KUBE_UI_TEMPLATES):
+	curl -f https://raw.githubusercontent.com/GoogleCloudPlatform/kubernetes/$(REF)/cluster/addons/kube-ui/$@ > $@
 
 info:
 	@docker version

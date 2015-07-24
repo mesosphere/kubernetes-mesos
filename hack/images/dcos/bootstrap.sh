@@ -72,7 +72,10 @@ controller_manager_port=${CONTROLLER_MANAGER_PORT:-10252}
 echo "* controller manager: $controller_manager_host:$controller_manager_port"
 
 enable_dns=${ENABLE_DNS:-true}
-echo "* kube-dns: ${enable_dns}"
+echo "* kube-dns enabled: ${enable_dns}"
+
+enable_ui=${ENABLE_UI:-true}
+echo "* kube-ui enabled: ${enable_ui}"
 
 # assume that the leading mesos master is always running a marathon
 # service proxy, perhaps using haproxy.
@@ -183,6 +186,7 @@ ${apply_uids}
   --service-cluster-ip-range=${SERVICE_CLUSTER_IP_RANGE:-10.10.10.0/24}
   --v=${APISERVER_GLOG_v:-${logv}}
 EOF
+apiserver_depends=""
 
 #
 # controller-manager, doesn't need to use frontend proxy to access
@@ -230,14 +234,45 @@ EOF
 
   sed -i -e '$i test -f kill && exec s6-svc -d $(pwd) || exec \\' ${service_dir}/kube_dns/finish
 
-  prepare_service_depends apiserver ${kube_master}/healthz ok kube_dns
+  apiserver_depends="${apiserver_depends} kube_dns"
 }
 
 # launch kube-dns if enabled
 kube_cluster_dns=""
 kube_cluster_domain=""
-if test -n "$enable_dns"; then
+if [ "$enable_dns" == true ]; then
   prepare_kube_dns
+fi
+
+#
+# kube-ui, deployed as pod and service, later available under
+# <apiserver-url>/api/v1/proxy/namespaces/default/services/kube-ui
+#
+prepare_kube_ui() {
+  prepare_service ${monitor_dir} ${service_dir} kube_ui ${KUBE_UI_RESPAWN_DELAY:-3} <<EOF
+#!/bin/sh
+exec 2>&1
+
+export KUBERNETES_MASTER="${kube_master}"
+
+/opt/kubectl get rc --namespace=kube-system -l k8s-app=kube-ui | grep -q kube-ui >/dev/null && \
+  /opt/kubectl get service --namespace=kube-system kube-ui >/dev/null && \
+  touch kill && exit 0
+
+/opt/kubectl create -f /opt/kube-ui-rc.yaml
+/opt/kubectl create -f /opt/kube-ui-svc.yaml
+EOF
+  sed -i -e '$i test -f kill && exec s6-svc -d $(pwd) || exec \\' ${service_dir}/kube_ui/finish
+  apiserver_depends="${apiserver_depends} kube_ui"
+}
+
+if [ "$enable_ui" == true ]; then
+  prepare_kube_ui
+fi
+
+# create dependency service for all services that need apiserver to be started
+if [ -n "${apiserver_depends}" ]; then
+  prepare_service_depends apiserver ${kube_master}/healthz ok ${apiserver_depends}
 fi
 
 #
