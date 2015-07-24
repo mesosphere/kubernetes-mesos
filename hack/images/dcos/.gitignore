@@ -6,3 +6,5 @@ dockertag
 kubectl
 skydns-rc.yaml.in
 skydns-svc.yaml.in
+kube-ui-rc.yaml
+kube-ui-svc.yaml
