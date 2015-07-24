@@ -22,7 +22,7 @@ echo
 # -C for failing when files are clobbered
 set -ue
 
-if [ "${DEBUG}" == "true" ]; then
+if [ "${DEBUG:-false}" == "true" ]; then
   set -x
 fi
 
@@ -102,9 +102,6 @@ else
   etcd_server_list=${etcd_listen_client_urls}
 fi
 
-# optional variable, no default; avoid bash errors
-: ${ENABLE_DNS=""}
-
 # run service procs as "nobody"
 apply_uids="s6-applyuidgid -u 99 -g 99"
 
@@ -122,6 +119,9 @@ cat <<EOF >${cloud_config}
   http-client-timeout	= ${K8SM_CLOUD_HTTP_CLIENT_TIMEOUT:-5s}
   state-cache-ttl	= ${K8SM_CLOUD_STATE_CACHE_TTL:-20s}
 EOF
+
+# address of the apiserver
+kube_master="http://${host_ip}:${apiserver_port}"
 
 #
 # create services directories and scripts
@@ -155,7 +155,7 @@ exec /opt/etcd \\
 EOF
 
   local deps="controller-manager scheduler"
-  if test -n "${ENABLE_DNS}"; then
+  if [ -n "${apiserver_depends}" ]; then
     deps="${deps} apiserver-depends"
   else
     deps="${deps} apiserver"
@@ -180,6 +180,7 @@ ${apply_uids}
   --service-cluster-ip-range=${SERVICE_CLUSTER_IP_RANGE:-10.10.10.0/24}
   --v=${APISERVER_GLOG_v:-${logv}}
 EOF
+apiserver_depends=""
 
 #
 # controller-manager, doesn't need to use frontend proxy to access
@@ -199,13 +200,10 @@ ${apply_uids}
 EOF
 
 prepare_kube_dns() {
-  local obj="skydns-rc.yaml skydns-svc.yaml"
-  local f
   kube_cluster_dns=${DNS_SERVER_IP:-10.10.10.10}
   kube_cluster_domain=${DNS_DOMAIN:-kubernetes.local}
   local kube_nameservers=$(cat /etc/resolv.conf|grep -e ^nameserver|head -3|cut -f2 -d' '|sed -e 's/$/:53/g'|xargs echo -n|tr ' ' ,)
   kube_nameservers=${kube_nameservers:-${DNS_NAMESERVERS:-8.8.8.8:53,8.8.4.4:53}}
-  local kube_master="http://${host_ip}:${apiserver_port}"
 
   sed -e "s/{{ pillar\['dns_replicas'\] }}/1/g" \
       -e "s,\(command = \"/kube2sky\"\),\\1\\"$'\n'"        - --kube_master_url=${kube_master}," \
@@ -220,25 +218,55 @@ exec 2>&1
 
 export KUBERNETES_MASTER="${kube_master}"
 
-/opt/kubectl get rc kube-dns-v4 >/dev/null && \
-  /opt/kubectl get service kube-dns >/dev/null && \
+/opt/kubectl get rc --namespace=kube-system -l k8s-app=kube-dns | grep kube-dns >/dev/null && \
+  /opt/kubectl get service --namespace=kube-system kube-dns >/dev/null && \
   touch kill && exit 0
 
-for i in $obj; do
-  /opt/kubectl create -f ${sandbox}/\$i
-done
+/opt/kubectl create -f ${sandbox}/skydns-rc.yaml
+/opt/kubectl create -f ${sandbox}/skydns-svc.yaml
 EOF
 
   sed -i -e '$i test -f kill && exec s6-svc -d $(pwd) || exec \\' ${service_dir}/kube_dns/finish
 
-  prepare_service_depends apiserver ${kube_master}/healthz ok kube_dns
+  apiserver_depends="${apiserver_depends} kube_dns"
 }
 
+# launch kube-dns if enabled
 kube_cluster_dns=""
 kube_cluster_domain=""
-# launch kube-dns if enabled
-if test -n "$ENABLE_DNS"; then
+if [ "${ENABLE_DNS:-true}" == true ]; then
   prepare_kube_dns
+fi
+
+#
+# kube-ui, deployed as pod and service, later available under
+# <apiserver-url>/api/v1/proxy/namespaces/default/services/kube-ui
+#
+prepare_kube_ui() {
+  prepare_service ${monitor_dir} ${service_dir} kube_ui ${KUBE_UI_RESPAWN_DELAY:-3} <<EOF
+#!/bin/sh
+exec 2>&1
+
+export KUBERNETES_MASTER="${kube_master}"
+
+/opt/kubectl get rc --namespace=kube-system -l k8s-app=kube-ui | grep -q kube-ui >/dev/null && \
+  /opt/kubectl get service --namespace=kube-system kube-ui >/dev/null && \
+  touch kill && exit 0
+
+/opt/kubectl create -f /opt/kube-ui-rc.yaml
+/opt/kubectl create -f /opt/kube-ui-svc.yaml
+EOF
+  sed -i -e '$i test -f kill && exec s6-svc -d $(pwd) || exec \\' ${service_dir}/kube_ui/finish
+  apiserver_depends="${apiserver_depends} kube_ui"
+}
+
+if [ "${ENABLE_UI:-true}" == true ]; then
+  prepare_kube_ui
+fi
+
+# create dependency service for all services that need apiserver to be started
+if [ -n "${apiserver_depends}" ]; then
+  prepare_service_depends apiserver ${kube_master}/healthz ok ${apiserver_depends}
 fi
 
 #
@@ -247,42 +275,30 @@ fi
 # --api_servers and if the IPs change (because this container changes
 # hosts) then the executors become zombies.
 #
-mesos_role="${K8SM_MESOS_ROLE:-*}"
-
-failover_timeout="${K8SM_FAILOVER_TIMEOUT:-}"
-if test -n "$failover_timeout"; then
-  failover_timeout="--failover-timeout=$failover_timeout"
-fi
-
-# pick a fixed scheduler service address if DNS enabled because we don't want to
-# accidentally conflict with it if the scheduler randomly chooses the same addr.
-scheduler_service_address=""
-test -n "$ENABLE_DNS" && scheduler_service_address="--service-address=${SCHEDULER_SERVICE_ADDRESS:-10.10.10.9}"
-
 prepare_service ${monitor_dir} ${service_dir} scheduler ${SCHEDULER_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
 ${apply_uids}
-/opt/km scheduler ${failover_timeout} ${scheduler_service_address}
+/opt/km scheduler
   --address=${host_ip}
   --advertised-address=${scheduler_host}:${scheduler_port}
   --api-servers=http://${apiserver_host}:${apiserver_port}
-  --cluster-dns=${kube_cluster_dns}
-  --cluster-domain=${kube_cluster_domain}
   --driver-port=${scheduler_driver_port}
+  --service-address=${SCHEDULER_SERVICE_ADDRESS:-10.10.10.9}
   --etcd-servers=${etcd_server_list}
   --framework-name=${framework_name}
   --framework-weburi=${framework_weburi}
   --mesos-master=${mesos_master}
-  --mesos-role="${mesos_role}"
+  --mesos-role="${K8SM_MESOS_ROLE:-*}"
   --mesos-user=${K8SM_MESOS_USER:-root}
   --port=${scheduler_port}
   --v=${SCHEDULER_GLOG_v:-${logv}}
+  $(if [ -n "${K8SM_FAILOVER_TIMEOUT:-}" ]; then echo "--failover-timeout=${K8SM_FAILOVER_TIMEOUT}"; fi)
+  $(if [ -n "${kube_cluster_dns}" ]; then echo "--cluster-dns=${kube_cluster_dns}"; fi)
+  $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
 EOF
 
 test -n "$DISABLE_ETCD_SERVER" || prepare_etcd_service
-
-cd ${sandbox}
 
 #--- service monitor
 #
@@ -291,6 +307,7 @@ cd ${sandbox}
 # (2) after all monitors have reported "up" once,
 # (3) spawn the service tree
 #
+cd ${sandbox}
 cat <<EOF >monitor.sh
 #!/usr/bin/execlineb
 foreground {

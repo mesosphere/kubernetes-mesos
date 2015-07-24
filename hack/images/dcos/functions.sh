@@ -74,6 +74,7 @@ prepare_service() {
   local name="$3"
   local respawnSec="$4"
 
+  echo "* prepare service ${name}"
   cat | prepare_service_script ${svcd} ${name} run
   prepare_monitor_script ${mond} ${svcd} ${name}
   prepare_service_script ${svcd} ${name} finish <<EOF

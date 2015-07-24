@@ -17,6 +17,8 @@ ADD km			/opt/
 ADD kubectl		/opt/
 ADD skydns-rc.yaml.in	/opt/
 ADD skydns-svc.yaml.in	/opt/
+ADD kube-ui-rc.yaml	/opt/
+ADD kube-ui-svc.yaml	/opt/
 ADD functions.sh	/opt/
 ADD bootstrap.sh	/opt/
 ADD .version		/opt/
