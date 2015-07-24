@@ -14,7 +14,8 @@ ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ET
 KUBE_DNS_TEMPLATES = skydns-rc.yaml.in skydns-svc.yaml.in
 KUBE_UI_TEMPLATES = kube-ui-rc.yaml kube-ui-svc.yaml
 
-REPO ?= mesosphere/kubernetes
+ORG ?= mesosphere
+REPO ?= $(ORG)/kubernetes
 REF ?= v1.0.1
 VERSION = $(REF)-$(shell git describe --tags --dirty)-alpha
 IMAGE ?= $(REPO):$(VERSION)
