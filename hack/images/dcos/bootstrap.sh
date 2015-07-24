@@ -220,8 +220,8 @@ exec 2>&1
 
 export KUBERNETES_MASTER="${kube_master}"
 
-/opt/kubectl get rc kube-dns-v4 >/dev/null && \
-  /opt/kubectl get service kube-dns >/dev/null && \
+/opt/kubectl get rc --namespace=kube-system -l k8s-app=kube-dns | grep kube-dns >/dev/null && \
+  /opt/kubectl get service --namespace=kube-system kube-dns >/dev/null && \
   touch kill && exit 0
 
 for i in $obj; do
