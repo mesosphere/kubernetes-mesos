@@ -121,7 +121,7 @@ cat <<EOF >${cloud_config}
 EOF
 
 # address of the apiserver
-kube_master="http://${host_ip}:${apiserver_port}"
+kube_master="http://${apiserver_host}:${apiserver_port}"
 
 #
 # create services directories and scripts
