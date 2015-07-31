@@ -10,15 +10,16 @@ RUN echo 'nobody::99:' >>/etc/group
 CMD [ ]
 ENTRYPOINT [ "/opt/bootstrap.sh" ]
 
-ADD leapsecs.dat	/etc/
-ADD etcd		/opt/
-ADD etcdctl		/opt/
-ADD km			/opt/
-ADD kubectl		/opt/
-ADD skydns-rc.yaml.in	/opt/
-ADD skydns-svc.yaml.in	/opt/
-ADD kube-ui-rc.yaml	/opt/
-ADD kube-ui-svc.yaml	/opt/
-ADD functions.sh	/opt/
-ADD bootstrap.sh	/opt/
-ADD .version		/opt/
+ADD leapsecs.dat				/etc/
+ADD functions.sh				/opt/
+ADD bootstrap.sh				/opt/
+
+ADD _build/etcd					/opt/
+ADD _build/etcdctl				/opt/
+ADD _build/skydns-rc.yaml.in	/opt/
+ADD _build/skydns-svc.yaml.in	/opt/
+ADD _build/kube-ui-rc.yaml		/opt/
+ADD _build/kube-ui-svc.yaml		/opt/
+ADD _build/.version				/opt/
+ADD _build/km                   /opt/
+ADD _build/kubectl              /opt/
