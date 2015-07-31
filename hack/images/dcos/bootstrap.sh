@@ -293,6 +293,11 @@ ${apply_uids}
   --mesos-user=${K8SM_MESOS_USER:-root}
   --port=${scheduler_port}
   --v=${SCHEDULER_GLOG_v:-${logv}}
+  --executor-logv=${EXECUTOR_GLOG_v:-${logv}}
+  --proxy-logv=${PROXY_GLOG_v:-${logv}}
+  --default-container-cpu-limit=${DEFAULT_CONTAINER_CPU_LMIIT:-0.25}
+  --default-container-mem-limit=${DEFAULT_CONTAINER_MEM_LMIIT:-64}
+  --cgroup-prefix=${CGROUP_PREFIX:-/mesos}
   $(if [ -n "${K8SM_FAILOVER_TIMEOUT:-}" ]; then echo "--failover-timeout=${K8SM_FAILOVER_TIMEOUT}"; fi)
   $(if [ -n "${kube_cluster_dns}" ]; then echo "--cluster-dns=${kube_cluster_dns}"; fi)
   $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
