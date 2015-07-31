@@ -297,7 +297,7 @@ ${apply_uids}
   --proxy-logv=${PROXY_GLOG_v:-${logv}}
   --default-container-cpu-limit=${DEFAULT_CONTAINER_CPU_LMIIT:-0.25}
   --default-container-mem-limit=${DEFAULT_CONTAINER_MEM_LMIIT:-64}
-  --cgroup-prefix=${CGROUP_PREFIX:-/mesos}
+  --executor-cgroup-prefix=${CGROUP_PREFIX:-/mesos}
   $(if [ -n "${K8SM_FAILOVER_TIMEOUT:-}" ]; then echo "--failover-timeout=${K8SM_FAILOVER_TIMEOUT}"; fi)
   $(if [ -n "${kube_cluster_dns}" ]; then echo "--cluster-dns=${kube_cluster_dns}"; fi)
   $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
