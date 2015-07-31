@@ -1,23 +1,3 @@
-mkfile_path     := $(abspath $(lastword $(MAKEFILE_LIST)))
-current_dir     := $(patsubst %/,%,$(dir $(mkfile_path)))
-
-BUILD_DIR = _build
-
-K8S_LINUX_BIN_DIR = $(BUILD_DIR)/kubernetes/_output/dockerized/bin/linux/amd64
-K8S_BINARIES = km kubectl
-K8S_BINARIES_SOURCE = $(addprefix $(K8S_LINUX_BIN_DIR)/,$(K8S_BINARIES))
-K8S_BINARIES_DEST = $(addprefix $(BUILD_DIR)/,$(K8S_BINARIES))
-
-ETCD_IMAGE = etcd
-ETCD_TAG = 2.0.12
-ETCD_BINARIES = etcd etcdctl
-ETCD_BINARIES_SOURCE = $(addprefix $(BUILD_DIR)/$(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64/,$(ETCD_BINARIES))
-ETCD_BINARIES_DEST = $(addprefix $(BUILD_DIR)/,$(ETCD_BINARIES))
-ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz
-
-KUBE_DNS_TEMPLATES = $(BUILD_DIR)/skydns-rc.yaml.in $(BUILD_DIR)/skydns-svc.yaml.in
-KUBE_UI_TEMPLATES = $(BUILD_DIR)/kube-ui-rc.yaml $(BUILD_DIR)/kube-ui-svc.yaml
-
 GIT_REF ?= v1.0.1-v0.6.1
 GIT_REPO ?= mesosphere/kubernetes
 GIT_REF_BASE_URL = https://raw.githubusercontent.com/mesosphere/kubernetes/$(GIT_REF)
@@ -28,9 +8,25 @@ DOCKER_ORG ?= mesosphere
 DOCKER_REPO ?= $(DOCKER_ORG)/kubernetes
 DOCKER_IMAGE ?= $(DOCKER_REPO):$(VERSION)
 
-BUILDER_IMAGE ?= mesosphere/kubernetes-mesos-build
+BUILD_DIR = _build
 
-.PHONY: clean build test clone_k8s push deps etcd version info
+K8S_BINARIES = km kubectl
+K8S_BINARIES_SOURCE_DIR = $(BUILD_DIR)/kubernetes/_output/dockerized/bin/linux/amd64
+K8S_BINARIES_SOURCE = $(addprefix $(K8S_BINARIES_SOURCE_DIR)/,$(K8S_BINARIES))
+K8S_BINARIES_DEST = $(addprefix $(BUILD_DIR)/,$(K8S_BINARIES))
+
+ETCD_IMAGE = etcd
+ETCD_TAG = 2.0.12
+ETCD_BINARIES = etcd etcdctl
+ETCD_BINARIES_SOURCE_DIR = $(BUILD_DIR)/$(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64
+ETCD_BINARIES_DEST = $(addprefix $(BUILD_DIR)/,$(ETCD_BINARIES))
+ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz
+
+KUBE_DNS_TEMPLATES = $(BUILD_DIR)/skydns-rc.yaml.in $(BUILD_DIR)/skydns-svc.yaml.in
+KUBE_UI_TEMPLATES = $(BUILD_DIR)/kube-ui-rc.yaml $(BUILD_DIR)/kube-ui-svc.yaml
+
+.PHONY: clean build clone test push deps etcd version info
+.INTERMEDIATE: build-kubernetes copy-kubernetes-binaries download-etcd
 
 all: build
 
@@ -41,29 +37,42 @@ version:
 	@echo "$(VERSION)" | tee $(BUILD_DIR)/.version
 
 clone:
-	cd $(BUILD_DIR) && \
+	@cd $(BUILD_DIR) && \
 	if [ ! -d "kubernetes" ]; then \
-		git clone --branch $(GIT_REF) https://github.com/$(GIT_REPO).git kubernetes; \
+		git clone --branch $(GIT_REF) https://github.com/$(GIT_REPO).git kubernetes && \
+		touch rebuild; \
 	else \
-		cd kubernetes && git checkout $(GIT_REF); \
+		cd kubernetes && \
+		PREV=$$(git rev-parse HEAD) && \
+		git fetch && git checkout $(GIT_REF) && \
+		if [ "$$PREV" != "$$(git rev-parse HEAD)" ]; then touch ../rebuild; fi; \
+	fi
+
+check_dirty:
+	@cd $(BUILD_DIR)/kubernetes && \
+	if [ -n "$$(git status --porcelain)" ]; then \
+		echo "unclean $(BUILD_DIR)/kubernetes checkout" && \
+		exit 1; \
 	fi
 
 test: clone
 	cd "$(BUILD_DIR)/kubernetes" && KUBERNETES_CONTRIB=mesos build/run.sh hack/test-go.sh
 	cd "$(BUILD_DIR)/kubernetes" && KUBERNETES_CONTRIB=mesos build/run.sh hack/test-integration.sh
 
-$(K8S_BINARIES_SOURCE):
+build-kubernetes: $(BUILD_DIR)/rebuild
 	cd "$(BUILD_DIR)/kubernetes" && KUBERNETES_CONTRIB=mesos build/run.sh hack/build-go.sh
-	touch $(BUILD_DIR)/built
+$(K8S_BINARIES_SOURCE): build-kubernetes
 
-$(K8S_BINARIES_DEST): $(K8S_BINARIES_SOURCE)
-	cp -av $(K8S_BINARIES_SOURCE) $(BUILD_DIR)
+copy-kubernetes-binaries: $(K8S_BINARIES_SOURCE)
+	cp -pv $(K8S_BINARIES_SOURCE) $(BUILD_DIR)
+	touch $(K8S_BINARIES_DEST)
+$(K8S_BINARIES_DEST): copy-kubernetes-binaries
 
-$(ETCD_BINARIES_SOURCE):
+download-etcd:
 	cd $(BUILD_DIR) && curl -L -O $(ETCD_SOURCE) && tar xzvf $(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz
-
-$(ETCD_BINARIES_DEST): $(ETCD_BINARIES_SOURCE)
-	cp -av $(ETCD_BINARIES_SOURCE) $(BUILD_DIR)
+	cp -pv $(addprefix $(ETCD_BINARIES_SOURCE_DIR)/,$(ETCD_BINARIES)) $(BUILD_DIR)
+	touch $(ETCD_BINARIES_DEST)
+$(ETCD_BINARIES_DEST): download-etcd
 
 $(KUBE_DNS_TEMPLATES):
 	curl -f $(GIT_REF_BASE_URL)/cluster/addons/dns/$(shell basename $@) > $@
@@ -76,7 +85,7 @@ $(BUILD_DIR):
 
 deps: $(BUILD_DIR) $(ETCD_BINARIES_DEST) $(K8S_BINARIES_DEST) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
 
-build: deps version
+build: clone check_dirty deps version
 	docker build -q -t $(DOCKER_IMAGE) .
 	docker tag -f $(DOCKER_IMAGE) $(DOCKER_REPO):latest
 
