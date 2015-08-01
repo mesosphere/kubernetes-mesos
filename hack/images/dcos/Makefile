@@ -30,7 +30,7 @@ ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ET
 KUBE_DNS_TEMPLATES = $(BUILD_DIR)/skydns-rc.yaml.in $(BUILD_DIR)/skydns-svc.yaml.in
 KUBE_UI_TEMPLATES = $(BUILD_DIR)/kube-ui-rc.yaml $(BUILD_DIR)/kube-ui-svc.yaml
 
-.PHONY: clean build clone test push deps etcd version info
+.PHONY: clean build build_dir clone test push deps etcd version info
 .INTERMEDIATE: build-kubernetes copy-kubernetes-binaries download-etcd
 
 all: build
