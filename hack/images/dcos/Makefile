@@ -38,11 +38,14 @@ all: build
 clean:
 	rm -rf $(BUILD_DIR)
 
-version:
-	@echo "$(VERSION)" | tee $(BUILD_DIR)/.version
-
 build_dir:
-	mkdir -p $(BUILD_DIR)
+	@mkdir -p $(BUILD_DIR)
+
+version: build_dir
+	@echo "GIT_REF=$(GIT_REF)"
+	@echo "VERSION=$(VERSION)"
+	@echo
+	@echo "$(VERSION)" > $(BUILD_DIR)/.version
 
 clone: build_dir
 	@cd $(BUILD_DIR) && \
@@ -93,7 +96,7 @@ $(BUILD_DIR):
 
 deps: $(BUILD_DIR) $(ETCD_BINARIES_DEST) $(K8S_BINARIES_DEST) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
 
-build: build_dir clone check_dirty deps version
+build: version clone check_dirty deps
 	docker build -q -t $(DOCKER_IMAGE) .
 	docker tag -f $(DOCKER_IMAGE) $(DOCKER_REPO):latest
 
