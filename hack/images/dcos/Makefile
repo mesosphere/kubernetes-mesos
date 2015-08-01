@@ -8,12 +8,15 @@ GIT_REF_BASE_URL = https://raw.githubusercontent.com/mesosphere/kubernetes/$(GIT
 GIT_REF_MINOR = $(lastword $(subst -, ,$(GIT_REF)))
 GIT_REF_MAJOR = $(firstword $(subst -, ,$(GIT_REF)))
 
-VERSION = $(GIT_REF_MAJOR)-$(shell git describe --match $(GIT_REF_MINOR) --always --tags --dirty)$(shell if [ -d $(BUILD_DIR) ]; then echo "-unclean"; fi)-alpha
+BUILD_DIR = _build
+
+ifneq ($(wildcard $(BUILD_DIR)),)
+UNCLEAN_INFIX := -unclean
+endif
+VERSION := $(GIT_REF_MAJOR)-$(shell git describe --match $(GIT_REF_MINOR) --always --tags --dirty)$(UNCLEAN_INFIX)-alpha
 
 DOCKER_REPO = $(DOCKER_ORG)/kubernetes
 DOCKER_IMAGE = $(DOCKER_REPO):$(VERSION)
-
-BUILD_DIR = _build
 
 K8S_BINARIES = km kubectl
 K8S_BINARIES_SOURCE_DIR = $(BUILD_DIR)/kubernetes/_output/dockerized/bin/linux/amd64
