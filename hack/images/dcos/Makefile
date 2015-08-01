@@ -1,5 +1,5 @@
 # input variables
-GIT_REF ?= v1.0.1-v0.6.1
+GIT_REF ?= v1.0.2-v0.6.1
 GIT_REPO ?= mesosphere/kubernetes
 DOCKER_ORG ?= mesosphere
 
