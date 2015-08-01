@@ -59,7 +59,7 @@ Some prerequisites:
 
 
 ```shell
-$ export KUBERNETES_MASTER=http://{the-dcos-host-your-kubernetes-master-is-running-on}/services/kubernetes/api
+$ export KUBERNETES_MASTER=http://{the-dcos-host-your-kubernetes-master-is-running-on}/service/kubernetes/api
 
 $ bin/kubectl get pods --all-namespaces
 NAMESPACE     NAME                READY     STATUS    RESTARTS   AGE
