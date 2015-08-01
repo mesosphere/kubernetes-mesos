@@ -19,9 +19,10 @@ DOCKER_REPO = $(DOCKER_ORG)/kubernetes
 DOCKER_IMAGE = $(DOCKER_REPO):$(VERSION)
 
 K8S_BINARIES = km kubectl
-K8S_BINARIES_SOURCE_DIR = $(BUILD_DIR)/kubernetes/_output/dockerized/bin/linux/amd64
-K8S_BINARIES_SOURCE = $(addprefix $(K8S_BINARIES_SOURCE_DIR)/,$(K8S_BINARIES))
+K8S_BINARIES_SOURCE_DIR = $(BUILD_DIR)/kubernetes/_output/dockerized/bin/$(1)/amd64
+K8S_BINARIES_SOURCE = $(addprefix $(call K8S_BINARIES_SOURCE_DIR,linux)/,$(K8S_BINARIES))
 K8S_BINARIES_DEST = $(addprefix $(BUILD_DIR)/,$(K8S_BINARIES))
+KUBECTL_BINARIES = $(call K8S_BINARIES_SOURCE_DIR,linux)/kubectl $(call K8S_BINARIES_SOURCE_DIR,darwin)/kubectl
 
 ETCD_IMAGE = etcd
 ETCD_TAG = 2.0.12
@@ -33,7 +34,9 @@ ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ET
 KUBE_DNS_TEMPLATES = $(BUILD_DIR)/skydns-rc.yaml.in $(BUILD_DIR)/skydns-svc.yaml.in
 KUBE_UI_TEMPLATES = $(BUILD_DIR)/kube-ui-rc.yaml $(BUILD_DIR)/kube-ui-svc.yaml
 
-.PHONY: clean build build_dir check_dirty clone test push deps version
+GITHUB_RELEASE = $(shell pwd)/$(BUILD_DIR)/go/bin/github-release
+
+.PHONY: clean build build_dir check_dirty clone test push deps version check_github_token release
 .INTERMEDIATE: build_kubernetes copy_kubernetes_binaries download_etcd
 
 all: build
@@ -74,7 +77,7 @@ test: clone
 	cd "$(BUILD_DIR)/kubernetes" && KUBERNETES_CONTRIB=mesos build/run.sh hack/test-integration.sh
 
 build_kubernetes: $(BUILD_DIR)/rebuild
-	cd "$(BUILD_DIR)/kubernetes" && KUBERNETES_CONTRIB=mesos build/run.sh hack/build-go.sh
+	cd "$(BUILD_DIR)/kubernetes" && KUBERNETES_CONTRIB=mesos build/run.sh hack/build-cross.sh
 $(K8S_BINARIES_SOURCE): build_kubernetes
 
 copy_kubernetes_binaries: $(K8S_BINARIES_SOURCE)
@@ -105,3 +108,24 @@ build: version clone check_dirty deps
 
 push:
 	echo pushing $(DOCKER_IMAGE); docker push $(DOCKER_IMAGE)
+
+$(GITHUB_RELEASE):
+	@mkdir -p $(BUILD_DIR)/go && \
+	export GOPATH=$$(pwd)/$(BUILD_DIR)/go && \
+	go get github.com/aktau/github-release
+
+check_github_token:
+	test -n "$$GITHUB_TOKEN"
+
+$(KUBECTL_BINARIES): build_kubernetes
+
+release: $(GITHUB_RELEASE) check_github_token clone $(KUBECTL_BINARIES)
+	$(GITHUB_RELEASE) release -u mesosphere --repo kubernetes --tag $(GIT_REF) --name "Kubernetes on Mesos $(GIT_REF)" --draft
+	@set -x; for OS in linux darwin; do \
+		BUILD_DIR=$$PWD/$(BUILD_DIR) && \
+		cd $(call K8S_BINARIES_SOURCE_DIR,$$OS) && \
+		TAR=kubectl-$(GIT_REF)-$$OS-amd64.tgz && \
+		tar -cvzf $$BUILD_DIR/$$TAR kubectl && \
+		cd - &>/dev/null && \
+		$(GITHUB_RELEASE) upload -u mesosphere --repo kubernetes --tag $(GIT_REF) --file $(BUILD_DIR)/$$TAR --name $$TAR || exit 1; \
+	done
