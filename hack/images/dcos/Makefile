@@ -8,7 +8,7 @@ GIT_REF_BASE_URL = https://raw.githubusercontent.com/mesosphere/kubernetes/$(GIT
 GIT_REF_MINOR = $(lastword $(subst -, ,$(GIT_REF)))
 GIT_REF_MAJOR = $(firstword $(subst -, ,$(GIT_REF)))
 
-VERSION = $(GIT_REF_MAJOR)-$(shell git describe --match $(GIT_REF_MINOR) --always --dirty)$(shell if [ -d $(BUILD_DIR) ]; then echo "-unclean"; fi)-alpha
+VERSION = $(GIT_REF_MAJOR)-$(shell git describe --match $(GIT_REF_MINOR) --always --tags --dirty)$(shell if [ -d $(BUILD_DIR) ]; then echo "-unclean"; fi)-alpha
 
 DOCKER_REPO = $(DOCKER_ORG)/kubernetes
 DOCKER_IMAGE = $(DOCKER_REPO):$(VERSION)
