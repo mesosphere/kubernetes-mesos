@@ -41,7 +41,10 @@ clean:
 version:
 	@echo "$(VERSION)" | tee $(BUILD_DIR)/.version
 
-clone:
+build_dir:
+	mkdir -p $(BUILD_DIR)
+
+clone: build_dir
 	@cd $(BUILD_DIR) && \
 	if [ ! -d "kubernetes" ]; then \
 		git clone --branch $(GIT_REF) https://github.com/$(GIT_REPO).git kubernetes && \
@@ -90,7 +93,7 @@ $(BUILD_DIR):
 
 deps: $(BUILD_DIR) $(ETCD_BINARIES_DEST) $(K8S_BINARIES_DEST) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
 
-build: clone check_dirty deps version
+build: build_dir clone check_dirty deps version
 	docker build -q -t $(DOCKER_IMAGE) .
 	docker tag -f $(DOCKER_IMAGE) $(DOCKER_REPO):latest
 
