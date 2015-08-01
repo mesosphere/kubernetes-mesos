@@ -1,8 +1,13 @@
+# input variables
 GIT_REF ?= v1.0.1-v0.6.1
 GIT_REPO ?= mesosphere/kubernetes
-GIT_REF_BASE_URL = https://raw.githubusercontent.com/mesosphere/kubernetes/$(GIT_REF)
 
-VERSION = v1.0.1-$(shell git describe --tags --dirty)-alpha$(shell if [ -d $(BUILD_DIR) ]; then echo "-unclean"; fi)
+# fixed values
+GIT_REF_BASE_URL = https://raw.githubusercontent.com/mesosphere/kubernetes/$(GIT_REF)
+GIT_REF_MINOR = $(lastword $(subst -, ,$(GIT_REF)))
+GIT_REF_MAJOR = $(firstword $(subst -, ,$(GIT_REF)))
+
+VERSION = $(GIT_REF_MAJOR)-$(shell git describe --match $(GIT_REF_MINOR) --always --dirty)$(shell if [ -d $(BUILD_DIR) ]; then echo "-unclean"; fi)-alpha
 
 DOCKER_ORG ?= mesosphere
 DOCKER_REPO ?= $(DOCKER_ORG)/kubernetes
