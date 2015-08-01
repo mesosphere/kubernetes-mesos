@@ -57,35 +57,37 @@ Some prerequisites:
 - build yourself a kubectl using the Kubernetes build process (`make`)
 - wait until kubernetes is up
 
-
 ```shell
 $ export KUBERNETES_MASTER=http://{the-dcos-host-your-kubernetes-master-is-running-on}/service/kubernetes/api
+$ kubectl config set-cluster dcos --server=$KUBERNETES_MASTER
+$ kubectl config set-context dcos
+$ kubectl config use-context dcos
 
-$ bin/kubectl get pods --all-namespaces
+$ kubectl get pods --all-namespaces
 NAMESPACE     NAME                READY     STATUS    RESTARTS   AGE
 kube-system   kube-dns-v8-vruvs   4/4       Running   0          22h
 kube-system   kube-ui-v1-1r5km    1/1       Running   0          22h
 
-$ bin/kubectl create -f kubernetes/examples/guestbook/redis-master.json 
+$ kubectl create -f kubernetes/examples/guestbook/redis-master.json 
 pods/redis-master-2
-$ bin/kubectl create -f kubernetes/examples/guestbook/redis-master-service.json 
+$ kubectl create -f kubernetes/examples/guestbook/redis-master-service.json 
 services/redismaster
-$ bin/kubectl create -f kubernetes/examples/guestbook/redis-slave-controller.json 
+$ kubectl create -f kubernetes/examples/guestbook/redis-slave-controller.json 
 replicationControllers/redis-slave-controller
-$ bin/kubectl create -f kubernetes/examples/guestbook/redis-slave-service.json 
+$ kubectl create -f kubernetes/examples/guestbook/redis-slave-service.json 
 services/redisslave
-$ bin/kubectl create -f kubernetes/examples/guestbook/frontend-controller.json 
+$ kubectl create -f kubernetes/examples/guestbook/frontend-controller.json 
 replicationControllers/frontend-controller
-$ bin/kubectl create -f kubernetes/examples/guestbook/frontend-service.json 
+$ kubectl create -f kubernetes/examples/guestbook/frontend-service.json 
 services/frontend
 
-$ bin/kubectl get pods
+$ kubectl get pods
 POD                        IP          CONTAINER(S)  IMAGE(S)        HOST                             LABELS         STATUS   CREATED
 frontend-controller-jf2zt  172.17.0.8  php-redis     jdef/php-redis  ec2-52-24-192-202.../10.0.0.221  name=frontend  Running  51s
 frontend-controller-kypr9  172.17.0.6  php-redis     jdef/php-redis  ec2-52-24-218-42.../10.0.0.223   name=frontend  Running  51s
 ...
 
-$ bin/kubectl exec -p frontend-controller-jf2zt -c php-redis -ti curl http://frontend
+$ kubectl exec -p frontend-controller-jf2zt -c php-redis -ti curl http://frontend
 <html ng-app="redis">
   <head>
     <title>Guestbook</title>
