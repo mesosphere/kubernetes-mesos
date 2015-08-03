@@ -11,7 +11,7 @@
   },
   "env":{
     "GLOG_v": "1",
-    "DISABLE_ETCD_SERVER": "1",
+    "ENABLE_ETCD_SERVER": "false",
     "ETCD_SERVER_LIST": "http://leader.mesos:4001",
     "APISERVER_PORT": "8888",
     "APISERVER_RO_PORT": "8889",

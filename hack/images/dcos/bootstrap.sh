@@ -84,8 +84,8 @@ echo "* service proxy: $service_proxy"
 etcd_server_port=${ETCD_SERVER_PORT:-4001}
 etcd_server_peer_port=${ETCD_SERVER_PEER_PORT:-4002}
 
-: ${DISABLE_ETCD_SERVER=""}
-if test -n "${DISABLE_ETCD_SERVER}"; then
+: ${ENABLE_ETCD_SERVER="true"}
+if [ "${ENABLE_ETCD_SERVER}" == "false" ]; then
   etcd_server_list=${ETCD_SERVER_LIST:-http://${service_proxy}:${etcd_server_port}}
 else
   etcd_advertise_server_host=${ETCD_ADVERTISE_SERVER_HOST:-127.0.0.1}
@@ -298,7 +298,9 @@ ${apply_uids}
   $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
 EOF
 
-test -n "$DISABLE_ETCD_SERVER" || prepare_etcd_service
+if [ "${ENABLE_ETCD_SERVER}" == "true" ]; then
+  prepare_etcd_service
+fi
 
 #--- service monitor
 #
