@@ -18,12 +18,14 @@ VERSION := $(GIT_REF_MAJOR)-$(shell git describe --match $(GIT_REF_MINOR) --alwa
 DOCKER_REPO = $(DOCKER_ORG)/kubernetes
 DOCKER_IMAGE = $(DOCKER_REPO):$(VERSION)
 
+# kubernetes binaries distributed in the Docker container
 K8S_BINARIES = km kubectl
 K8S_BINARIES_SOURCE_DIR = $(BUILD_DIR)/kubernetes/_output/dockerized/bin/$(1)/amd64
 K8S_BINARIES_SOURCE = $(addprefix $(call K8S_BINARIES_SOURCE_DIR,linux)/,$(K8S_BINARIES))
 K8S_BINARIES_DEST = $(addprefix $(BUILD_DIR)/,$(K8S_BINARIES))
 KUBECTL_BINARIES = $(call K8S_BINARIES_SOURCE_DIR,linux)/kubectl $(call K8S_BINARIES_SOURCE_DIR,darwin)/kubectl
 
+# etcd distributed in the Docker container
 ETCD_IMAGE = etcd
 ETCD_TAG = 2.0.12
 ETCD_BINARIES = etcd etcdctl
@@ -31,11 +33,14 @@ ETCD_BINARIES_SOURCE_DIR = $(BUILD_DIR)/$(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64
 ETCD_BINARIES_DEST = $(addprefix $(BUILD_DIR)/,$(ETCD_BINARIES))
 ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz
 
+# kubernetes addons: kube-dns and kube-ui
 KUBE_DNS_TEMPLATES = $(BUILD_DIR)/skydns-rc.yaml.in $(BUILD_DIR)/skydns-svc.yaml.in
 KUBE_UI_TEMPLATES = $(BUILD_DIR)/kube-ui-rc.yaml $(BUILD_DIR)/kube-ui-svc.yaml
 
+# github-release utility to upload release assets to Github
 GITHUB_RELEASE = $(shell pwd)/$(BUILD_DIR)/go/bin/github-release
 
+# meta targets
 .PHONY: clean build build_dir check_dirty clone test push deps version check_github_token release
 .INTERMEDIATE: build_kubernetes copy_kubernetes_binaries download_etcd
 
@@ -47,12 +52,14 @@ clean:
 build_dir:
 	@mkdir -p $(BUILD_DIR)
 
+# print out the version and create .version
 version: build_dir
 	@echo "GIT_REF=$(GIT_REF)"
 	@echo "VERSION=$(VERSION)"
 	@echo
 	@echo "$(VERSION)" > $(BUILD_DIR)/.version
 
+# clone the given kubernetes git ref
 clone: build_dir
 	@cd $(BUILD_DIR) && \
 	if [ ! -d "kubernetes" ]; then \
@@ -65,6 +72,7 @@ clone: build_dir
 		if [ "$$PREV" != "$$(git rev-parse HEAD)" ]; then touch ../rebuild; fi; \
 	fi
 
+# check that everything in the repo is commited
 check_dirty:
 	@cd $(BUILD_DIR)/kubernetes && \
 	if [ -n "$$(git status --porcelain)" ]; then \
@@ -72,19 +80,24 @@ check_dirty:
 		exit 1; \
 	fi
 
+# run the kubernetes unit and integration tests inside Docker
 test: clone
 	cd "$(BUILD_DIR)/kubernetes" && KUBERNETES_CONTRIB=mesos build/run.sh hack/test-go.sh
 	cd "$(BUILD_DIR)/kubernetes" && KUBERNETES_CONTRIB=mesos build/run.sh hack/test-integration.sh
 
+# cross-compile the kubernetes binaries inside Docker
 build_kubernetes: $(BUILD_DIR)/rebuild
 	cd "$(BUILD_DIR)/kubernetes" && KUBERNETES_CONTRIB=mesos build/run.sh hack/build-cross.sh
 $(K8S_BINARIES_SOURCE): build_kubernetes
+$(KUBECTL_BINARIES): build_kubernetes
 
+# copy km and kubectl from the kubernetes _output directory to _build
 copy_kubernetes_binaries: $(K8S_BINARIES_SOURCE)
 	cp -pv $(K8S_BINARIES_SOURCE) $(BUILD_DIR)
 	touch $(K8S_BINARIES_DEST)
 $(K8S_BINARIES_DEST): copy_kubernetes_binaries
 
+# download etcd and extract it to _output/etcd-...
 download_etcd:
 	cd $(BUILD_DIR) && curl -L -O $(ETCD_SOURCE) && tar xzvf $(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz
 	cp -pv $(addprefix $(ETCD_BINARIES_SOURCE_DIR)/,$(ETCD_BINARIES)) $(BUILD_DIR)
@@ -97,28 +110,28 @@ $(KUBE_DNS_TEMPLATES):
 $(KUBE_UI_TEMPLATES):
 	curl -f $(GIT_REF_BASE_URL)/cluster/addons/kube-ui/$(shell basename $@) > $@
 
-$(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
+deps: build_dir $(ETCD_BINARIES_DEST) $(K8S_BINARIES_DEST) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
 
-deps: $(BUILD_DIR) $(ETCD_BINARIES_DEST) $(K8S_BINARIES_DEST) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
-
+# package build targets
 build: version clone check_dirty deps
 	docker build -q -t $(DOCKER_IMAGE) .
 	docker tag -f $(DOCKER_IMAGE) $(DOCKER_REPO):latest
 
+# push the Docker image to the Docker hub
 push:
 	echo pushing $(DOCKER_IMAGE); docker push $(DOCKER_IMAGE)
 
+# install github-release, a tool to upload github release assets
 $(GITHUB_RELEASE):
 	@mkdir -p $(BUILD_DIR)/go && \
 	export GOPATH=$$(pwd)/$(BUILD_DIR)/go && \
 	go get github.com/aktau/github-release
 
+# check that the environment variable GITHUB_TOKEN is set, needed to uploaded release assets
 check_github_token:
 	test -n "$$GITHUB_TOKEN"
 
-$(KUBECTL_BINARIES): build_kubernetes
-
+# upload the kubectl tar.gz for linux/amd64 and darwin/amd64 to github release given by GIT_REF
 release: $(GITHUB_RELEASE) check_github_token clone $(KUBECTL_BINARIES)
 	$(GITHUB_RELEASE) release -u mesosphere --repo kubernetes --tag $(GIT_REF) --name "Kubernetes on Mesos $(GIT_REF)" --draft
 	@set -x; for OS in linux darwin; do \
