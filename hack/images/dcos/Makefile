@@ -104,15 +104,16 @@ download_etcd:
 	touch $(ETCD_BINARIES_DEST)
 $(ETCD_BINARIES_DEST): download_etcd
 
-$(KUBE_DNS_TEMPLATES):
-	curl -f $(GIT_REF_BASE_URL)/cluster/addons/dns/$(shell basename $@) > $@
+# copy the kube-dns specs from the kubernetes repo to _build
+$(KUBE_DNS_TEMPLATES): clone
+	cp $(BUILD_DIR)/kubernetes/cluster/addons/dns/$(shell basename $@) $@
 
-$(KUBE_UI_TEMPLATES):
-	curl -f $(GIT_REF_BASE_URL)/cluster/addons/kube-ui/$(shell basename $@) > $@
-
-deps: build_dir $(ETCD_BINARIES_DEST) $(K8S_BINARIES_DEST) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
+# copy the kube-ui specs from the kubernetes repo to build_
+$(KUBE_UI_TEMPLATES): clone
+	cp $(BUILD_DIR)/kubernetes/cluster/addons/kube-ui/$(shell basename $@) $@
 
 # package build targets
+deps: build_dir $(ETCD_BINARIES_DEST) $(K8S_BINARIES_DEST) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
 build: version clone check_dirty deps
 	docker build -q -t $(DOCKER_IMAGE) .
 	docker tag -f $(DOCKER_IMAGE) $(DOCKER_REPO):latest
