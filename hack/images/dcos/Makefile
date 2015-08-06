@@ -34,6 +34,10 @@ ETCD_BINARIES_SOURCE_DIR = $(BUILD_DIR)/$(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64
 ETCD_BINARIES_DEST = $(addprefix $(BUILD_DIR)/,$(ETCD_BINARIES))
 ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ETCD_TAR)
 
+# s6 overlay used as init process in the Docker container
+S6_TAR = s6-overlay-amd64.tar.gz
+S6_URL = https://github.com/just-containers/s6-overlay/releases/download/v1.13.0.0/$(S6_TAR)
+
 # kubernetes addons: kube-dns and kube-ui
 KUBE_DNS_TEMPLATES = $(BUILD_DIR)/skydns-rc.yaml.in $(BUILD_DIR)/skydns-svc.yaml.in
 KUBE_UI_TEMPLATES = $(BUILD_DIR)/kube-ui-rc.yaml $(BUILD_DIR)/kube-ui-svc.yaml
@@ -100,10 +104,13 @@ $(K8S_BINARIES_DEST): copy_kubernetes_binaries
 
 # download etcd and extract it to _output/etcd-...
 $(BUILD_DIR)/$(ETCD_TAR):
-	cd $(BUILD_DIR) && curl -L -O $(ETCD_SOURCE) && tar xzvf $(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz
+	cd $(BUILD_DIR) && curl -L -O $(ETCD_SOURCE) && tar xzvf $(ETCD_TAR)
 	cp -pv $(addprefix $(ETCD_BINARIES_SOURCE_DIR)/,$(ETCD_BINARIES)) $(BUILD_DIR)
 	touch $(ETCD_BINARIES_DEST)
 $(ETCD_BINARIES_DEST): $(BUILD_DIR)/$(ETCD_TAR)
+
+$(BUILD_DIR)/$(S6_TAR):
+	cd "$(BUILD_DIR)" && curl -L -O $(S6_URL)
 
 # copy the kube-dns specs from the kubernetes repo to _build
 $(KUBE_DNS_TEMPLATES): clone
@@ -114,7 +121,7 @@ $(KUBE_UI_TEMPLATES): clone
 	cp $(BUILD_DIR)/kubernetes/cluster/addons/kube-ui/$(shell basename $@) $@
 
 # package build targets
-deps: build_dir $(ETCD_BINARIES_DEST) $(K8S_BINARIES_DEST) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
+deps: build_dir $(ETCD_BINARIES_DEST) $(BUILD_DIR)/$(S6_TAR) $(K8S_BINARIES_DEST) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
 build: version clone check_dirty deps
 	docker build -t $(DOCKER_IMAGE) .
 	docker tag -f $(DOCKER_IMAGE) $(DOCKER_REPO):latest
