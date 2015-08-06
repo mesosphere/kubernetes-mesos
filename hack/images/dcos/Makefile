@@ -28,10 +28,11 @@ KUBECTL_BINARIES = $(call K8S_BINARIES_SOURCE_DIR,linux)/kubectl $(call K8S_BINA
 # etcd distributed in the Docker container
 ETCD_IMAGE = etcd
 ETCD_TAG = 2.0.12
+ETCD_TAR = $(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz
 ETCD_BINARIES = etcd etcdctl
 ETCD_BINARIES_SOURCE_DIR = $(BUILD_DIR)/$(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64
 ETCD_BINARIES_DEST = $(addprefix $(BUILD_DIR)/,$(ETCD_BINARIES))
-ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz
+ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ETCD_TAR)
 
 # kubernetes addons: kube-dns and kube-ui
 KUBE_DNS_TEMPLATES = $(BUILD_DIR)/skydns-rc.yaml.in $(BUILD_DIR)/skydns-svc.yaml.in
@@ -98,11 +99,11 @@ copy_kubernetes_binaries: $(K8S_BINARIES_SOURCE)
 $(K8S_BINARIES_DEST): copy_kubernetes_binaries
 
 # download etcd and extract it to _output/etcd-...
-download_etcd:
+$(BUILD_DIR)/$(ETCD_TAR):
 	cd $(BUILD_DIR) && curl -L -O $(ETCD_SOURCE) && tar xzvf $(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64.tar.gz
 	cp -pv $(addprefix $(ETCD_BINARIES_SOURCE_DIR)/,$(ETCD_BINARIES)) $(BUILD_DIR)
 	touch $(ETCD_BINARIES_DEST)
-$(ETCD_BINARIES_DEST): download_etcd
+$(ETCD_BINARIES_DEST): $(BUILD_DIR)/$(ETCD_TAR)
 
 # copy the kube-dns specs from the kubernetes repo to _build
 $(KUBE_DNS_TEMPLATES): clone
