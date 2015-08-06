@@ -115,7 +115,7 @@ $(KUBE_UI_TEMPLATES): clone
 # package build targets
 deps: build_dir $(ETCD_BINARIES_DEST) $(K8S_BINARIES_DEST) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
 build: version clone check_dirty deps
-	docker build -q -t $(DOCKER_IMAGE) .
+	docker build -t $(DOCKER_IMAGE) .
 	docker tag -f $(DOCKER_IMAGE) $(DOCKER_REPO):latest
 
 # push the Docker image to the Docker hub
