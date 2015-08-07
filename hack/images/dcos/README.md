@@ -24,7 +24,7 @@ $ GIT_REF=v1.0.5-v0.6.1 make push
 Moreover, there are the following variables can be customized via the command line:
 
 ```make
-GIT_REPO ?= mesosphere/kubernetes
+GIT_URL ?= https://github.com/mesosphere/kubernetes
 DOCKER_ORG ?= mesosphere
 ```
 

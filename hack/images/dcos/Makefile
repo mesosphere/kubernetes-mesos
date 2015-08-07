@@ -1,10 +1,9 @@
 # input variables
 GIT_REF ?= v1.0.2-v0.6.1
-GIT_REPO ?= mesosphere/kubernetes
+GIT_URL ?= https://github.com/mesosphere/kubernetes
 DOCKER_ORG ?= mesosphere
 
 # fixed values
-GIT_REF_BASE_URL = https://raw.githubusercontent.com/mesosphere/kubernetes/$(GIT_REF)
 GIT_REF_MINOR = $(lastword $(subst -, ,$(GIT_REF)))
 GIT_REF_MAJOR = $(firstword $(subst -, ,$(GIT_REF)))
 
@@ -68,7 +67,7 @@ version: build_dir
 clone: build_dir
 	@cd $(BUILD_DIR) && \
 	if [ ! -d "kubernetes" ]; then \
-		git clone --branch $(GIT_REF) https://github.com/$(GIT_REPO).git kubernetes && \
+		git clone --branch $(GIT_REF) $(GIT_URL)/$(GIT_REPO).git kubernetes && \
 		touch rebuild; \
 	else \
 		cd kubernetes && \
