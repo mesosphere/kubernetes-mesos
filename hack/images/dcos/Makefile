@@ -1,6 +1,6 @@
 # input variables
 GIT_REF ?= v1.0.2-v0.6.1
-GIT_URL ?= https://github.com/mesosphere/kubernetes
+GIT_URL ?= https://github.com/mesosphere/kubernetes.git
 DOCKER_ORG ?= mesosphere
 
 # fixed values
@@ -67,7 +67,7 @@ version: build_dir
 clone: build_dir
 	@cd $(BUILD_DIR) && \
 	if [ ! -d "kubernetes" ]; then \
-		git clone --branch $(GIT_REF) $(GIT_URL)/$(GIT_REPO).git kubernetes && \
+		git clone --branch $(GIT_REF) $(GIT_URL) kubernetes && \
 		touch rebuild; \
 	else \
 		cd kubernetes && \
