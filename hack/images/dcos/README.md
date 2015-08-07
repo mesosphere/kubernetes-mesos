@@ -26,6 +26,13 @@ Moreover, there are the following variables can be customized via the command li
 ```make
 GIT_URL ?= https://github.com/mesosphere/kubernetes
 DOCKER_ORG ?= mesosphere
+KUBE_ROOT ?=
+```
+
+With `KUBE_ROOT` it is possible to build from a local kubernetes checkout:
+
+```bash
+$ make KUBE_ROOT=~/src/kubernetes
 ```
 
 ## Development and Testing

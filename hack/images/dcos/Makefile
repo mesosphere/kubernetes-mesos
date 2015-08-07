@@ -2,6 +2,7 @@
 GIT_REF ?= v1.0.2-v0.6.1
 GIT_URL ?= https://github.com/mesosphere/kubernetes.git
 DOCKER_ORG ?= mesosphere
+KUBE_ROOT ?=
 
 # fixed values
 GIT_REF_MINOR = $(lastword $(subst -, ,$(GIT_REF)))
@@ -10,16 +11,25 @@ GIT_REF_MAJOR = $(firstword $(subst -, ,$(GIT_REF)))
 BUILD_DIR = _build
 
 ifneq ($(wildcard $(BUILD_DIR)),)
-UNCLEAN_INFIX := -unclean
+	UNCLEAN_INFIX := -unclean
 endif
-VERSION := $(GIT_REF_MAJOR)-$(shell git describe --match $(GIT_REF_MINOR) --always --tags --dirty)$(UNCLEAN_INFIX)-alpha
+ifeq ($(KUBE_ROOT),)
+	VERSION := $(GIT_REF_MAJOR)-$(shell git describe --match $(GIT_REF_MINOR) --always --tags --dirty)$(UNCLEAN_INFIX)-alpha
+else
+	VERSION := $(GIT_REF)-dev
+endif
 
 DOCKER_REPO = $(DOCKER_ORG)/kubernetes
 DOCKER_IMAGE = $(DOCKER_REPO):$(VERSION)
 
 # kubernetes binaries distributed in the Docker container
 K8S_BINARIES = km kubectl
-K8S_BINARIES_SOURCE_DIR = $(BUILD_DIR)/kubernetes/_output/dockerized/bin/$(1)/amd64
+ifeq ($(KUBE_ROOT),)
+	K8S_ROOT = $(BUILD_DIR)/kubernetes
+else
+	K8S_ROOT = $(KUBE_ROOT)
+endif
+K8S_BINARIES_SOURCE_DIR = $(K8S_ROOT)/_output/dockerized/bin/$(1)/amd64
 K8S_BINARIES_SOURCE = $(addprefix $(call K8S_BINARIES_SOURCE_DIR,linux)/,$(K8S_BINARIES))
 K8S_BINARIES_DEST = $(addprefix $(BUILD_DIR)/,$(K8S_BINARIES))
 KUBECTL_BINARIES = $(call K8S_BINARIES_SOURCE_DIR,linux)/kubectl $(call K8S_BINARIES_SOURCE_DIR,darwin)/kubectl
@@ -45,7 +55,7 @@ KUBE_UI_TEMPLATES = $(BUILD_DIR)/kube-ui-rc.yaml $(BUILD_DIR)/kube-ui-svc.yaml
 GITHUB_RELEASE = $(shell pwd)/$(BUILD_DIR)/go/bin/github-release
 
 # meta targets
-.PHONY: clean build build_dir check_dirty clone test push deps version check_github_token release
+.PHONY: clean build build_dir check_dirty checkout clone test push deps version check_github_token release
 .INTERMEDIATE: build_kubernetes copy_kubernetes_binaries download_etcd
 
 all: build
@@ -76,6 +86,9 @@ clone: build_dir
 		if [ "$$PREV" != "$$(git rev-parse HEAD)" ]; then touch ../rebuild; fi; \
 	fi
 
+ifeq ($(KUBE_ROOT),)
+checkout: clone
+
 # check that everything in the repo is commited
 check_dirty:
 	@cd $(BUILD_DIR)/kubernetes && \
@@ -84,14 +97,21 @@ check_dirty:
 		exit 1; \
 	fi
 
-# run the kubernetes unit and integration tests inside Docker
-test: clone
-	cd "$(BUILD_DIR)/kubernetes" && KUBERNETES_CONTRIB=mesos build/run.sh hack/test-go.sh
-	cd "$(BUILD_DIR)/kubernetes" && KUBERNETES_CONTRIB=mesos build/run.sh hack/test-integration.sh
-
 # cross-compile the kubernetes binaries inside Docker
 build_kubernetes: $(BUILD_DIR)/rebuild
-	cd "$(BUILD_DIR)/kubernetes" && KUBERNETES_CONTRIB=mesos build/run.sh hack/build-cross.sh
+	cd "${K8S_ROOT}" && KUBERNETES_CONTRIB=mesos build/run.sh hack/build-cross.sh
+else
+checkout:
+	@test -d $(KUBE_ROOT)
+check_dirty:
+build_kubernetes:
+	@echo "Build linux/amd64 binaries in ${K8S_ROOT}:"
+	@echo
+	@echo "    KUBERNETES_CONTRIB=mesos build/run.sh hack/build-go.sh"
+	@echo
+	@exit 1
+endif
+
 $(K8S_BINARIES_SOURCE): build_kubernetes
 $(KUBECTL_BINARIES): build_kubernetes
 
@@ -112,22 +132,27 @@ $(BUILD_DIR)/$(S6_TAR):
 	cd "$(BUILD_DIR)" && curl -L -O $(S6_URL)
 
 # copy the kube-dns specs from the kubernetes repo to _build
-$(KUBE_DNS_TEMPLATES): clone
-	cp $(BUILD_DIR)/kubernetes/cluster/addons/dns/$(shell basename $@) $@
+$(KUBE_DNS_TEMPLATES): checkout
+	cp ${K8S_ROOT}/cluster/addons/dns/$(shell basename $@) $@
 
 # copy the kube-ui specs from the kubernetes repo to build_
-$(KUBE_UI_TEMPLATES): clone
-	cp $(BUILD_DIR)/kubernetes/cluster/addons/kube-ui/$(shell basename $@) $@
+$(KUBE_UI_TEMPLATES): checkout
+	cp ${K8S_ROOT}/cluster/addons/kube-ui/$(shell basename $@) $@
 
 # package build targets
 deps: build_dir $(ETCD_BINARIES_DEST) $(BUILD_DIR)/$(S6_TAR) $(K8S_BINARIES_DEST) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
-build: version clone check_dirty deps
+build: version checkout check_dirty deps
 	docker build -t $(DOCKER_IMAGE) .
 	docker tag -f $(DOCKER_IMAGE) $(DOCKER_REPO):latest
 
 # push the Docker image to the Docker hub
 push:
 	echo pushing $(DOCKER_IMAGE); docker push $(DOCKER_IMAGE)
+
+# run the kubernetes unit and integration tests inside Docker
+test: checkout
+	cd "${K8S_ROOT}" && KUBERNETES_CONTRIB=mesos build/run.sh hack/test-go.sh
+	cd "${K8S_ROOT}" && KUBERNETES_CONTRIB=mesos build/run.sh hack/test-integration.sh
 
 # install github-release, a tool to upload github release assets
 $(GITHUB_RELEASE):
@@ -140,7 +165,7 @@ check_github_token:
 	test -n "$$GITHUB_TOKEN"
 
 # upload the kubectl tar.gz for linux/amd64 and darwin/amd64 to github release given by GIT_REF
-release: $(GITHUB_RELEASE) check_github_token clone $(KUBECTL_BINARIES)
+release: $(GITHUB_RELEASE) check_github_token checkout $(KUBECTL_BINARIES)
 	$(GITHUB_RELEASE) release -u mesosphere --repo kubernetes --tag $(GIT_REF) --name "Kubernetes on Mesos $(GIT_REF)" --draft
 	@set -x; for OS in linux darwin; do \
 		BUILD_DIR=$$PWD/$(BUILD_DIR) && \
