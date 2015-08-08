@@ -206,7 +206,7 @@ release: $(GITHUB_RELEASE) check_github_token $(KUBECTL_BINARIES)
 		echo "Creating $(VERSION) draft release"; \
 	fi && \
 	$(GITHUB_RELEASE) $${RELEASE_COMMAND:-release} -u mesosphere --repo kubernetes --tag $(VERSION) --name "Kubernetes on Mesos $(VERSION)" --draft
-	@set -x; for OS in linux darwin; do \
+	@for OS in linux darwin; do \
 		BUILD_DIR=$$PWD/$(BUILD_DIR) && \
 		cd $(call K8S_BINARIES_SOURCE_DIR,$$OS) && \
 		TAR=kubectl-$(VERSION)-$$OS-amd64.tgz && \
