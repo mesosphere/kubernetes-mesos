@@ -14,6 +14,8 @@ $ make push
 
 If you source directory is not clean, this will be reflected in the Docker tag with "dirty" and "unclean".
 
+The `make build` will store the docker image name for a following `make push`. Hence, don't worry about passing all variables again if you customize your build as described above. Moreover, `make push` will ask you whether you really want to push the given docker image.
+
 Optionally the version might be specified:
 
 ```shell
