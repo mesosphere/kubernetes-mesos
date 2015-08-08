@@ -5,6 +5,8 @@ DOCKER_ORG ?= mesosphere
 KUBE_ROOT ?=
 
 # fixed values
+SHELL := /bin/bash
+
 GIT_REF_MINOR = $(lastword $(subst -, ,$(GIT_REF)))
 GIT_REF_MAJOR = $(firstword $(subst -, ,$(GIT_REF)))
 
