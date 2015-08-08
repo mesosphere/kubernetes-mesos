@@ -96,6 +96,7 @@ clone: build_dir
 		if [ "$$PREV" != "$$(git rev-parse HEAD)" ]; then touch ../rebuild; fi; \
 	fi
 
+# behave differently for a set or unset KUBE_ROOT
 ifeq ($(KUBE_ROOT),)
 checkout: clone
 
@@ -138,6 +139,7 @@ $(BUILD_DIR)/$(ETCD_TAR):
 	touch $(ETCD_BINARIES_DEST)
 $(ETCD_BINARIES_DEST): $(BUILD_DIR)/$(ETCD_TAR)
 
+# download S6
 $(BUILD_DIR)/$(S6_TAR):
 	cd "$(BUILD_DIR)" && curl -L -O $(S6_URL)
 
