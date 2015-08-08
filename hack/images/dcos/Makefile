@@ -4,6 +4,7 @@ GIT_URL ?= https://github.com/mesosphere/kubernetes.git
 DOCKER_ORG ?= mesosphere
 KUBE_ROOT ?=
 SUDO ?=
+POSTFIX ?= -alpha
 
 # fixed values
 SHELL := /bin/bash
@@ -17,13 +18,13 @@ ifneq ($(wildcard $(BUILD_DIR)),)
 	UNCLEAN_INFIX := -unclean
 endif
 ifeq ($(KUBE_ROOT),)
-	VERSION := $(GIT_REF_MAJOR)-$(shell git describe --match $(GIT_REF_MINOR) --always --tags --dirty)$(UNCLEAN_INFIX)-alpha
+	VERSION := $(GIT_REF_MAJOR)-$(shell git describe --match $(GIT_REF_MINOR) --always --tags --dirty)$(UNCLEAN_INFIX)
 else
 	VERSION := $(GIT_REF)-dev
 endif
 
 DOCKER_REPO = $(DOCKER_ORG)/kubernetes
-DOCKER_IMAGE = $(DOCKER_REPO):$(VERSION)
+DOCKER_IMAGE = $(DOCKER_REPO):$(VERSION)$(POSTFIX)
 DOCKER_IMAGE_FILE = $(BUILD_DIR)/built-docker-image
 
 # kubernetes binaries distributed in the Docker container
@@ -181,22 +182,38 @@ test: checkout
 
 # install github-release, a tool to upload github release assets
 $(GITHUB_RELEASE):
-	@mkdir -p $(BUILD_DIR)/go && \
+	@mkdir -p $(BUILD_DIR)/go
 	export GOPATH=$$(pwd)/$(BUILD_DIR)/go && \
 	go get github.com/aktau/github-release
 
 # check that the environment variable GITHUB_TOKEN is set, needed to uploaded release assets
 check_github_token:
-	test -n "$$GITHUB_TOKEN"
+	@if [ -z "$$GITHUB_TOKEN" ]; then \
+		echo "To create releases please set GITHUB_TOKEN" && \
+		exit 1; \
+	fi
 
-# upload the kubectl tar.gz for linux/amd64 and darwin/amd64 to github release given by GIT_REF
-release: $(GITHUB_RELEASE) check_github_token checkout $(KUBECTL_BINARIES)
-	$(GITHUB_RELEASE) release -u mesosphere --repo kubernetes --tag $(GIT_REF) --name "Kubernetes on Mesos $(GIT_REF)" --draft
+# upload the kubectl tar.gz for linux/amd64 and darwin/amd64 to github release given by VERSION
+release: $(GITHUB_RELEASE) check_github_token $(KUBECTL_BINARIES)
+	@echo "Releasing kubectl tar.gz's as github assets for tag $(VERSION) on $(GIT_URL)"
+	@if tty -s; then \
+			echo && \
+			echo -n "Continue? [Y/n] " && read YES && if [ -n "$$YES" -a "$$YES" != Y -a "$$YES" != y ]; then exit 1; fi; \
+	fi
+	if $(GITHUB_RELEASE) info -u mesosphere --repo kubernetes --tag $(VERSION); then \
+		echo "Found $(VERSION) release. Will edit." && RELEASE_COMMAND=edit; \
+	else \
+		echo "Creating $(VERSION) draft release"; \
+	fi && \
+	$(GITHUB_RELEASE) $${RELEASE_COMMAND:-release} -u mesosphere --repo kubernetes --tag $(VERSION) --name "Kubernetes on Mesos $(VERSION)" --draft
 	@set -x; for OS in linux darwin; do \
 		BUILD_DIR=$$PWD/$(BUILD_DIR) && \
 		cd $(call K8S_BINARIES_SOURCE_DIR,$$OS) && \
-		TAR=kubectl-$(GIT_REF)-$$OS-amd64.tgz && \
-		tar -cvzf $$BUILD_DIR/$$TAR kubectl && \
+		TAR=kubectl-$(VERSION)-$$OS-amd64.tgz && \
+		tar -czf $$BUILD_DIR/$$TAR kubectl && \
 		cd - &>/dev/null && \
-		$(GITHUB_RELEASE) upload -u mesosphere --repo kubernetes --tag $(GIT_REF) --file $(BUILD_DIR)/$$TAR --name $$TAR || exit 1; \
+		echo "Uploading $$TAR as github asset for tag $(VERSION)" && \
+		$(GITHUB_RELEASE) upload -u mesosphere --repo kubernetes --tag $(VERSION) --file $(BUILD_DIR)/$$TAR --name $$TAR || exit 1; \
 	done
+	@echo
+	@echo "Goto https://github.com/mesosphere/kubernetes/releases/tag/$(VERSION) to edit the release details"
