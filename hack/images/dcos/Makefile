@@ -72,8 +72,14 @@ build_dir:
 
 # print out the version and create .version
 version: build_dir
-	@echo "GIT_REF=$(GIT_REF)"
+	@if [ -n "$(KUBE_ROOT)" ]; then \
+		echo "KUBE_ROOT=$(KUBE_ROOT)"; \
+	else \
+		echo "GIT_URL=$(GIT_URL)" && \
+		echo "GIT_REF=$(GIT_REF)"; \
+	fi
 	@echo "VERSION=$(VERSION)"
+	@echo "DOCKER_IMAGE=$(DOCKER_IMAGE)"
 	@echo
 	@echo "$(VERSION)" > $(BUILD_DIR)/.version
 
