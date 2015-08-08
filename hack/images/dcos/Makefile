@@ -200,7 +200,7 @@ release: $(GITHUB_RELEASE) check_github_token $(KUBECTL_BINARIES)
 			echo && \
 			echo -n "Continue? [Y/n] " && read YES && if [ -n "$$YES" -a "$$YES" != Y -a "$$YES" != y ]; then exit 1; fi; \
 	fi
-	if $(GITHUB_RELEASE) info -u mesosphere --repo kubernetes --tag $(VERSION); then \
+	@if $(GITHUB_RELEASE) info -u mesosphere --repo kubernetes | grep -q $(VERSION); then \
 		echo "Found $(VERSION) release. Will edit." && RELEASE_COMMAND=edit; \
 	else \
 		echo "Creating $(VERSION) draft release"; \
