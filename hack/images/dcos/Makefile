@@ -3,6 +3,7 @@ GIT_REF ?= v1.0.2-v0.6.1
 GIT_URL ?= https://github.com/mesosphere/kubernetes.git
 DOCKER_ORG ?= mesosphere
 KUBE_ROOT ?=
+SUDO ?=
 
 # fixed values
 SHELL := /bin/bash
@@ -64,7 +65,7 @@ GITHUB_RELEASE = $(shell pwd)/$(BUILD_DIR)/go/bin/github-release
 all: build
 
 clean:
-	rm -rf $(BUILD_DIR)
+	$(SUDO) rm -rf $(BUILD_DIR)
 
 build_dir:
 	@mkdir -p $(BUILD_DIR)

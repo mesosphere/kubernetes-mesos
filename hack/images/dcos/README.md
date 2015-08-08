@@ -27,6 +27,13 @@ Moreover, there are the following variables can be customized via the command li
 GIT_URL ?= https://github.com/mesosphere/kubernetes
 DOCKER_ORG ?= mesosphere
 KUBE_ROOT ?=
+SUDO ?=
+```
+
+If you are on Linux, build the dockerized kubernetes binaries most probably results in file being owned by root. Set `SUDO=sudo` to get them deleted as normal user:
+
+```bash
+$ make clean SUDO=sudo
 ```
 
 With `KUBE_ROOT` it is possible to build from a local kubernetes checkout:
