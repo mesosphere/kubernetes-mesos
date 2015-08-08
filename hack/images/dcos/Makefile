@@ -23,6 +23,7 @@ endif
 
 DOCKER_REPO = $(DOCKER_ORG)/kubernetes
 DOCKER_IMAGE = $(DOCKER_REPO):$(VERSION)
+DOCKER_IMAGE_FILE = $(BUILD_DIR)/built-docker-image
 
 # kubernetes binaries distributed in the Docker container
 K8S_BINARIES = km kubectl
@@ -57,7 +58,7 @@ KUBE_UI_TEMPLATES = $(BUILD_DIR)/kube-ui-rc.yaml $(BUILD_DIR)/kube-ui-svc.yaml
 GITHUB_RELEASE = $(shell pwd)/$(BUILD_DIR)/go/bin/github-release
 
 # meta targets
-.PHONY: clean build build_dir check_dirty checkout clone test push deps version check_github_token release
+.PHONY: clean build build_dir check_dirty checkout clone test push deps version delete_docker_image_file check_github_token release
 .INTERMEDIATE: build_kubernetes copy_kubernetes_binaries download_etcd
 
 all: build
@@ -134,22 +135,35 @@ $(BUILD_DIR)/$(S6_TAR):
 	cd "$(BUILD_DIR)" && curl -L -O $(S6_URL)
 
 # copy the kube-dns specs from the kubernetes repo to _build
-$(KUBE_DNS_TEMPLATES): checkout
+$(KUBE_DNS_TEMPLATES):
 	cp ${K8S_ROOT}/cluster/addons/dns/$(shell basename $@) $@
 
 # copy the kube-ui specs from the kubernetes repo to build_
-$(KUBE_UI_TEMPLATES): checkout
+$(KUBE_UI_TEMPLATES):
 	cp ${K8S_ROOT}/cluster/addons/kube-ui/$(shell basename $@) $@
 
 # package build targets
+delete_docker_image_file:
+	@rm -f "$(DOCKER_IMAGE_FILE)"
 deps: build_dir $(ETCD_BINARIES_DEST) $(BUILD_DIR)/$(S6_TAR) $(K8S_BINARIES_DEST) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
-build: version checkout check_dirty deps
+build: version delete_docker_image_file checkout check_dirty deps
 	docker build -t $(DOCKER_IMAGE) .
 	docker tag -f $(DOCKER_IMAGE) $(DOCKER_REPO):latest
+	@echo $(DOCKER_IMAGE) > $(DOCKER_IMAGE_FILE)
 
 # push the Docker image to the Docker hub
 push:
-	echo pushing $(DOCKER_IMAGE); docker push $(DOCKER_IMAGE)
+	@if [ ! -f $(DOCKER_IMAGE_FILE) ]; then \
+		echo "No docker image ready to push" && \
+		exit 1; \
+	else \
+		echo "Going to push the docker image $$(< $(DOCKER_IMAGE_FILE))" && \
+		if tty -s; then \
+			echo && \
+			echo -n "Continue? [Y/n] " && read YES && if [ -n "$$YES" -a "$$YES" != Y -a "$$YES" != y ]; then exit 1; fi; \
+		fi && \
+		docker push $$(< $(DOCKER_IMAGE_FILE)); \
+	fi
 
 # run the kubernetes unit and integration tests inside Docker
 test: checkout
