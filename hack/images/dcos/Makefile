@@ -201,11 +201,11 @@ release: $(GITHUB_RELEASE) check_github_token $(KUBECTL_BINARIES)
 			echo -n "Continue? [Y/n] " && read YES && if [ -n "$$YES" -a "$$YES" != Y -a "$$YES" != y ]; then exit 1; fi; \
 	fi
 	@if $(GITHUB_RELEASE) info -u mesosphere --repo kubernetes | grep -q $(VERSION); then \
-		echo "Found $(VERSION) release. Will edit." && RELEASE_COMMAND=edit; \
+		echo "Found $(VERSION) release"; \
 	else \
+		$(GITHUB_RELEASE) release -u mesosphere --repo kubernetes --tag $(VERSION) --name "Kubernetes on Mesos $(VERSION)" --draft && \
 		echo "Creating $(VERSION) draft release"; \
-	fi && \
-	$(GITHUB_RELEASE) $${RELEASE_COMMAND:-release} -u mesosphere --repo kubernetes --tag $(VERSION) --name "Kubernetes on Mesos $(VERSION)" --draft
+	fi
 	@for OS in linux darwin; do \
 		BUILD_DIR=$$PWD/$(BUILD_DIR) && \
 		cd $(call K8S_BINARIES_SOURCE_DIR,$$OS) && \
