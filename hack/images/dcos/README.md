@@ -53,6 +53,8 @@ The Makefile can build kubectl tar.gz files for Linux and OSX, and upload those 
 make github-release-assets GITHUB_TOKEN=<github-developer-token>
 ```
 
+**Note**: the `GITHUB_TOKEN` requires the `public repo` scope only.
+
 ## Development and Testing
 
 The Docker container can be run manually outside of a DCOS cluster, e.g.:
