@@ -25,6 +25,7 @@ cleanup() {
 trap 'cleanup' EXIT
 
 mkdir ${WORKSPACE}/bin
+chcon -Rt svirt_sandbox_file_t ${WORKSPACE}/bin
 
 echo "Building kubernetes-mesos binaries"
 docker run --rm -v ${WORKSPACE}/bin:/target mesosphere/kubernetes-mesos-build
