@@ -23,7 +23,6 @@
 #
 # Use `make client-cross` to handle the GOPATH.
 # TODO: move gopath env setup into this file, using lib scripts in k8s master
-# Run in mesosphere/kubernetes-mesos-build docker image for best results.
 
 set -o errexit
 set -o nounset

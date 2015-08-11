@@ -14,4 +14,3 @@ For steps on how to deploy Kubernetes on Mesos, see the [getting started guide](
 This repo is being phased out. It currently only includes:
 - DCOS integration [pending relocation]
   - kubectl binary releases corresponding to each DCOS package version
-- docker/mesos cluster deployment scripts & images [pending upstreaming]
