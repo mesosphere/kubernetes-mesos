@@ -1,3 +1,3 @@
-_build
-etcd-v2.0.9-linux-amd64
-etcd-v2.0.9-linux-amd64.tar.gz
+_build/etcd-*
+_build/kubernetes
+

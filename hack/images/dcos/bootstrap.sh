@@ -84,8 +84,8 @@ echo "* service proxy: $service_proxy"
 etcd_server_port=${ETCD_SERVER_PORT:-4001}
 etcd_server_peer_port=${ETCD_SERVER_PEER_PORT:-4002}
 
-: ${ENABLE_ETCD_SERVER="true"}
-if [ "${ENABLE_ETCD_SERVER}" == "false" ]; then
+ENABLE_ETCD_SERVER=${ENABLE_ETCD_SERVER:-false}
+if [ "${ENABLE_ETCD_SERVER}" != true ]; then
   etcd_server_list=${ETCD_SERVER_LIST:-http://${service_proxy}:${etcd_server_port}}
 else
   etcd_advertise_server_host=${ETCD_ADVERTISE_SERVER_HOST:-127.0.0.1}
@@ -201,7 +201,7 @@ EOF
 
 prepare_kube_dns() {
   kube_cluster_dns=${DNS_SERVER_IP:-10.10.10.10}
-  kube_cluster_domain=${DNS_DOMAIN:-kubernetes.local}
+  kube_cluster_domain=${DNS_DOMAIN:-cluster.local}
   local kube_nameservers=$(cat /etc/resolv.conf|grep -e ^nameserver|head -3|cut -f2 -d' '|sed -e 's/$/:53/g'|xargs echo -n|tr ' ' ,)
   kube_nameservers=${kube_nameservers:-${DNS_NAMESERVERS:-8.8.8.8:53,8.8.4.4:53}}
 
@@ -293,12 +293,17 @@ ${apply_uids}
   --mesos-user=${K8SM_MESOS_USER:-root}
   --port=${scheduler_port}
   --v=${SCHEDULER_GLOG_v:-${logv}}
+  --executor-logv=${EXECUTOR_GLOG_v:-${logv}}
+  --proxy-logv=${PROXY_GLOG_v:-${logv}}
+  --default-container-cpu-limit=${DEFAULT_CONTAINER_CPU_LMIIT:-0.25}
+  --default-container-mem-limit=${DEFAULT_CONTAINER_MEM_LMIIT:-64}
+  --executor-cgroup-prefix=${CGROUP_PREFIX:-/mesos}
   $(if [ -n "${K8SM_FAILOVER_TIMEOUT:-}" ]; then echo "--failover-timeout=${K8SM_FAILOVER_TIMEOUT}"; fi)
   $(if [ -n "${kube_cluster_dns}" ]; then echo "--cluster-dns=${kube_cluster_dns}"; fi)
   $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
 EOF
 
-if [ "${ENABLE_ETCD_SERVER}" == "true" ]; then
+if [ "$ENABLE_ETCD_SERVER" == true ]; then
   prepare_etcd_service
 fi
 

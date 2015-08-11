@@ -4,30 +4,56 @@ This package contains scripts to build the DCOS Kubernetes docker container imag
 
 ![Kubernetes-Mesos on DCOS](images/dcos_k8sm.png)
 
-## DNS Support
-
-Kubernetes supports an add-on called kube-dns.
-kube-dns is intended to resolve Kubernetes service names, such as `frontend.default.kubernetes.local`, that map to internal Kubernetes service portal IP addresses.
-These service portal IP addresses are managed by the Kubernetes cluster and traffic is routed to them via special iptables DNAT rules that are maintained by the k8s proxy.
-Service portal IP addresses are not intended to be referenced by anything other than other k8s pods/services (read: no other mesos client or task should reference them).
-
-Deploying the kube-dns addon is optional (defaults to on) and it can be disabled by setting the 'enable-dns' package option (see the walkthrough example below).
-There is no funny interaction between kube-dns and mesos-dns;
-mesos-dns servers may be used as fallbacks for name resolution since their IP addresses are present in the slave's `/etc/resolv.conf`.
-
 ## Usage
-```
-## build and push the docker image
-:; make release FROM=/k8sm-build-output-dir
 
-## promote the latest -dev build to a version-tagged release
-## (don't forget to update the universe config.json/version and package.json/docker-image)
-:; make promote
-
-## HOWEVER, to generate a fresh release image and push it up (skip the -dev tag cycle):
-## (this is probably an exceptional case, images should usually be promoted from -dev)
-:; make release FROM=~/bin RELEASE=1
+```shell
+$ make clean
+$ make build
+$ make push
 ```
+
+If you source directory is not clean, this will be reflected in the Docker tag with "dirty" and "unclean".
+
+The `make build` will store the docker image name for a following `make push`. Hence, don't worry about passing all variables again if you customize your build as described above. Moreover, `make push` will ask you whether you really want to push the given docker image.
+
+Optionally the version might be specified:
+
+```shell
+$ GIT_REF=v1.0.5-v0.6.1 make build
+$ GIT_REF=v1.0.5-v0.6.1 make push
+```
+
+Moreover, there are the following variables can be customized via the command line:
+
+```make
+GIT_URL ?= https://github.com/mesosphere/kubernetes
+DOCKER_ORG ?= mesosphere
+KUBE_ROOT ?=
+SUDO ?=
+POSTFIX ?= -alpha
+```
+
+If you are on Linux, build the dockerized kubernetes binaries most probably results in file being owned by root. Set `SUDO=sudo` to get them deleted as normal user:
+
+```bash
+$ make clean SUDO=sudo
+```
+
+With `KUBE_ROOT` it is possible to build from a local kubernetes checkout:
+
+```bash
+$ make KUBE_ROOT=~/src/kubernetes
+```
+
+## Uploading Github Release Assets
+
+The Makefile can build kubectl tar.gz files for Linux and OSX, and upload those as Github assets to a release:
+
+```bash
+make github-release-assets GITHUB_TOKEN=<github-developer-token>
+```
+
+**Note**: the `GITHUB_TOKEN` requires the `public repo` scope only.
 
 ## Development and Testing
 
@@ -46,21 +72,6 @@ docker run --rm --name=k8s -e GLOG_v=3 -e HOST=<docker-host-IP> \
 * Dockerfile - recipe for building the docker
 * bootstrap.sh - default target of Dockerfile, launches the framework: apiserver, scheduler, controller
 * leapsecs.dat - requirement for s6 to work properly
-* webhook.sh - helper that can communicate with simple HTTP webhook endpoints
-
-## TODO
-- [x] process supervision for the executor is broken, dandling procs end up as children of slave
-- [x] makes a big assumption about the location of etcd, need a better story here
-  - support multiple deployment scenarios for etcd
-    - case 1: etcd cluster is deployed elsewhere and k8sm will tap into it
-    - case 2: etcd-server is deployed in the k8sm container, dies with the k8sm framework
-      - this can leave lingering exec's mapped to a framework that is not recognized if k8sm is redeployed
-      - [x] etcd needs to start before everything else otherwise bad things happen (apiserver!)
-- [x] s6 and k8s require files to exist in certain places on the host. this is terrible practice
-  - mentioned this article to elizabeth, she has similar concerns with the HDFS framework
-    - http://www.ibm.com/developerworks/library/l-mount-namespaces/
-- [x] additional ports (e.g. 6443/apiserver) should be configurable
-- [ ] support secure (TLS) apiserver
 
 ## Walkthrough w/ the guestbook examples
 
@@ -69,34 +80,41 @@ Some prerequisites:
 - set up a DCOS cluster
 - install the `kubernetes` app using the DCOS CLI tooling
   - `dcos package install kubernetes`
-  - alternatively, if you want to use the kube-dns add-on:
-    - `echo '{ "kubernetes": { "enable-dns": "1" } }' >/tmp/options`
-    - `dcos package install --options=/tmp/options kubernetes`
 
-- build yourself a kubectl, either using the Kubernetes or Kubernetes-Mesos build process
+- build yourself a kubectl using the Kubernetes build process (`make`)
+- wait until kubernetes is up
 
 ```shell
-$ export KUBERNETES_MASTER=http://{the-dcos-host-your-kubernetes-master-is-running-on}/services/kubernetes/api
-$ bin/kubectl create -f ../../../examples/guestbook/redis-master.json 
+$ export KUBERNETES_MASTER=http://{the-dcos-host-your-kubernetes-master-is-running-on}/service/kubernetes/api
+$ kubectl config set-cluster dcos --server=$KUBERNETES_MASTER
+$ kubectl config set-context dcos
+$ kubectl config use-context dcos
+
+$ kubectl get pods --all-namespaces
+NAMESPACE     NAME                READY     STATUS    RESTARTS   AGE
+kube-system   kube-dns-v8-vruvs   4/4       Running   0          22h
+kube-system   kube-ui-v1-1r5km    1/1       Running   0          22h
+
+$ kubectl create -f kubernetes/examples/guestbook/redis-master.json 
 pods/redis-master-2
-$ bin/kubectl create -f ../../../examples/guestbook/redis-master-service.json 
+$ kubectl create -f kubernetes/examples/guestbook/redis-master-service.json 
 services/redismaster
-$ bin/kubectl create -f ../../../examples/guestbook/redis-slave-controller.json 
+$ kubectl create -f kubernetes/examples/guestbook/redis-slave-controller.json 
 replicationControllers/redis-slave-controller
-$ bin/kubectl create -f ../../../examples/guestbook/redis-slave-service.json 
+$ kubectl create -f kubernetes/examples/guestbook/redis-slave-service.json 
 services/redisslave
-$ bin/kubectl create -f ../../../examples/guestbook/frontend-controller.json 
+$ kubectl create -f kubernetes/examples/guestbook/frontend-controller.json 
 replicationControllers/frontend-controller
-$ bin/kubectl create -f ../../../examples/guestbook/frontend-service.json 
+$ kubectl create -f kubernetes/examples/guestbook/frontend-service.json 
 services/frontend
 
-$ bin/kubectl get pods
+$ kubectl get pods
 POD                        IP          CONTAINER(S)  IMAGE(S)        HOST                             LABELS         STATUS   CREATED
 frontend-controller-jf2zt  172.17.0.8  php-redis     jdef/php-redis  ec2-52-24-192-202.../10.0.0.221  name=frontend  Running  51s
 frontend-controller-kypr9  172.17.0.6  php-redis     jdef/php-redis  ec2-52-24-218-42.../10.0.0.223   name=frontend  Running  51s
 ...
 
-$ bin/kubectl exec -p frontend-controller-jf2zt -c php-redis -ti curl http://frontend
+$ kubectl exec -p frontend-controller-jf2zt -c php-redis -ti curl http://frontend
 <html ng-app="redis">
   <head>
     <title>Guestbook</title>
