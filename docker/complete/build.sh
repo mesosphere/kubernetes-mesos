@@ -15,7 +15,7 @@ project_dir=$(cd "${script_dir}/../.." && pwd -P)
 cd ${project_dir}
 
 # create temp dir in project dir to avoid permission issues
-WORKSPACE=$(env TMPDIR=$PWD mktemp -d -t "k8sm-workspace")
+WORKSPACE=$(env TMPDIR=$PWD mktemp -d -t "k8sm-workspace-XXX")
 echo "Workspace created: $WORKSPACE"
 
 cleanup() {
