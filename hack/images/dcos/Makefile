@@ -60,7 +60,7 @@ KUBE_UI_TEMPLATES = $(BUILD_DIR)/kube-ui-rc.yaml $(BUILD_DIR)/kube-ui-svc.yaml
 GITHUB_RELEASE = $(shell pwd)/$(BUILD_DIR)/go/bin/github-release
 
 # meta targets
-.PHONY: clean build build_dir check_dirty checkout clone test push deps version delete_docker_image_file check_github_token release
+.PHONY: clean build build_dir check_dirty checkout clone test push deps version delete_docker_image_file check_github_token github-release-assets
 .INTERMEDIATE: build_kubernetes copy_kubernetes_binaries download_etcd
 
 all: build
@@ -194,7 +194,7 @@ check_github_token:
 	fi
 
 # upload the kubectl tar.gz for linux/amd64 and darwin/amd64 to github release given by VERSION
-release: $(GITHUB_RELEASE) check_github_token $(KUBECTL_BINARIES)
+github-release-assets: $(GITHUB_RELEASE) check_github_token $(KUBECTL_BINARIES)
 	@echo "Releasing kubectl tar.gz's as github assets for tag $(VERSION) on $(GIT_URL)"
 	@if tty -s; then \
 			echo && \

@@ -45,6 +45,14 @@ With `KUBE_ROOT` it is possible to build from a local kubernetes checkout:
 $ make KUBE_ROOT=~/src/kubernetes
 ```
 
+## Uploading Github Release Assets
+
+The Makefile can build kubectl tar.gz files for Linux and OSX, and upload those as Github assets to a release:
+
+```bash
+make github-release-assets GITHUB_TOKEN=<github-developer-token>
+```
+
 ## Development and Testing
 
 The Docker container can be run manually outside of a DCOS cluster, e.g.:
