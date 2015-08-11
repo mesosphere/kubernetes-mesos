@@ -216,4 +216,8 @@ github-release-assets: $(GITHUB_RELEASE) check_github_token $(KUBECTL_BINARIES)
 		$(GITHUB_RELEASE) upload -u mesosphere --repo kubernetes --tag $(VERSION) --file $(BUILD_DIR)/$$TAR --name $$TAR || exit 1; \
 	done
 	@echo
-	@echo "Goto https://github.com/mesosphere/kubernetes/releases/tag/$(VERSION) to edit the release details"
+	@URL="https://github.com/mesosphere/kubernetes/releases/tag/$(VERSION)" && \
+	if ! curl -f -q "$$URL" &>/dev/null; then \
+		URL="https://github.com/mesosphere/kubernetes/releases"; \
+	fi && \
+	echo "Goto $$URL to edit the release details"
