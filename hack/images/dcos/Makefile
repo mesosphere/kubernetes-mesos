@@ -125,7 +125,6 @@ build_kubernetes:
 endif
 
 $(K8S_BINARIES_SOURCE): build_kubernetes
-$(KUBECTL_BINARIES): build_kubernetes
 
 # copy km and kubectl from the kubernetes _output directory to _build
 copy_kubernetes_binaries: $(K8S_BINARIES_SOURCE)
@@ -195,28 +194,29 @@ check_github_token:
 
 # upload the kubectl tar.gz for linux/amd64 and darwin/amd64 to github release given by VERSION
 github-release-assets: $(GITHUB_RELEASE) check_github_token $(KUBECTL_BINARIES)
-	@echo "Releasing kubectl tar.gz's as github assets for tag $(VERSION) on $(GIT_URL)"
-	@if tty -s; then \
+	@VERSION=$$(cat $(DOCKER_IMAGE_FILE)) && \
+	echo "Releasing kubectl tar.gz's as github assets for tag $${VERSION} on $(GIT_URL)" && \
+	if tty -s; then \
 			echo && \
 			echo -n "Continue? [Y/n] " && read YES && if [ -n "$$YES" -a "$$YES" != Y -a "$$YES" != y ]; then exit 1; fi; \
-	fi
-	@if $(GITHUB_RELEASE) info -u mesosphere --repo kubernetes | grep -q $(VERSION); then \
-		echo "Found $(VERSION) release"; \
+	fi && \
+	if $(GITHUB_RELEASE) info -u mesosphere --repo kubernetes | grep -q $${VERSION}; then \
+		echo "Found $${VERSION} release"; \
 	else \
-		$(GITHUB_RELEASE) release -u mesosphere --repo kubernetes --tag $(VERSION) --name "Kubernetes on Mesos $(VERSION)" --draft && \
-		echo "Creating $(VERSION) draft release"; \
-	fi
-	@for OS in linux darwin; do \
+		$(GITHUB_RELEASE) release -u mesosphere --repo kubernetes --tag $${VERSION} --name "Kubernetes on Mesos $${VERSION}" --draft && \
+		echo "Creating $${VERSION} draft release"; \
+	fi && \
+	for OS in linux darwin; do \
 		BUILD_DIR=$$PWD/$(BUILD_DIR) && \
 		cd $(call K8S_BINARIES_SOURCE_DIR,$$OS) && \
-		TAR=kubectl-$(VERSION)-$$OS-amd64.tgz && \
+		TAR=kubectl-$${VERSION}-$$OS-amd64.tgz && \
 		tar -czf $$BUILD_DIR/$$TAR kubectl && \
 		cd - &>/dev/null && \
-		echo "Uploading $$TAR as github asset for tag $(VERSION)" && \
-		$(GITHUB_RELEASE) upload -u mesosphere --repo kubernetes --tag $(VERSION) --file $(BUILD_DIR)/$$TAR --name $$TAR || exit 1; \
-	done
-	@echo
-	@URL="https://github.com/mesosphere/kubernetes/releases/tag/$(VERSION)" && \
+		echo "Uploading $$TAR as github asset for tag $${VERSION}" && \
+		$(GITHUB_RELEASE) upload -u mesosphere --repo kubernetes --tag $${VERSION} --file $(BUILD_DIR)/$$TAR --name $$TAR || exit 1; \
+	done && \
+	echo && \
+	URL="https://github.com/mesosphere/kubernetes/releases/tag/$${VERSION}" && \
 	if ! curl -f -q "$$URL" &>/dev/null; then \
 		URL="https://github.com/mesosphere/kubernetes/releases"; \
 	fi && \
