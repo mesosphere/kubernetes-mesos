@@ -1,5 +1,5 @@
 # input variables
-GIT_REF ?= v1.0.2-v0.6.1
+GIT_REF ?= v1.0.3-v0.6.2
 GIT_URL ?= https://github.com/mesosphere/kubernetes.git
 DOCKER_ORG ?= mesosphere
 KUBE_ROOT ?=
