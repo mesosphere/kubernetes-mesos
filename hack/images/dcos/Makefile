@@ -206,7 +206,7 @@ github-release-assets: $(GITHUB_RELEASE) check_github_token $(KUBECTL_BINARIES) 
 			echo && \
 			echo -n "Continue? [Y/n] " && read YES && if [ -n "$$YES" -a "$$YES" != Y -a "$$YES" != y ]; then exit 1; fi; \
 	fi && \
-	if $(GITHUB_RELEASE) info -u mesosphere --repo kubernetes | grep -q $${VERSION}; then \
+	if $(GITHUB_RELEASE) info -u mesosphere --repo kubernetes | sed -n '/releases:/,$$p' | grep -q "$${VERSION},"; then \
 		echo "Found $${VERSION} release"; \
 	else \
 		$(GITHUB_RELEASE) release -u mesosphere --repo kubernetes --tag $${VERSION} --name "Kubernetes on Mesos $${VERSION}" --draft && \
