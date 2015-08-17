@@ -41,7 +41,7 @@ endif
 K8S_BINARIES_SOURCE_DIR = $(K8S_ROOT)/_output/dockerized/bin/$(1)/amd64
 K8S_BINARIES_SOURCE = $(addprefix $(call K8S_BINARIES_SOURCE_DIR,linux)/,$(K8S_BINARIES))
 K8S_BINARIES_DEST = $(addprefix $(BUILD_DIR)/,$(K8S_BINARIES))
-KUBECTL_BINARIES = $(call K8S_BINARIES_SOURCE_DIR,linux)/kubectl $(call K8S_BINARIES_SOURCE_DIR,darwin)/kubectl
+K8S_KUBECTL_SOURCE = $(addsuffix /kubectl,$(call K8S_BINARIES_SOURCE_DIR,linux) $(call K8S_BINARIES_SOURCE_DIR,darwin))
 
 # etcd distributed in the Docker container
 ETCD_IMAGE = etcd
@@ -133,7 +133,7 @@ check_dirty:
 build_kubernetes:
 	@echo "Build linux/amd64 binaries in ${K8S_ROOT}:"
 	@echo
-	@echo "    KUBERNETES_CONTRIB=mesos build/run.sh hack/build-go.sh"
+	@echo "    KUBERNETES_CONTRIB=mesos build/run.sh hack/build-cross.sh"
 	@echo
 	@exit 1
 
@@ -142,6 +142,7 @@ $(BUILD_DIR)/.version:
 endif
 
 $(K8S_BINARIES_SOURCE): build_kubernetes
+$(K8S_KUBECTL_SOURCE): build_kubernetes
 
 # copy km and kubectl from the kubernetes _output directory to _build
 copy_kubernetes_binaries: $(K8S_BINARIES_SOURCE)
@@ -210,7 +211,7 @@ check_github_token:
 	fi
 
 # upload the kubectl tar.gz for linux/amd64 and darwin/amd64 to github release given by VERSION
-github-release-assets: $(GITHUB_RELEASE) check_github_token $(KUBECTL_BINARIES) $(BUILD_DIR)/.version
+github-release-assets: $(GITHUB_RELEASE) check_github_token $(K8S_KUBECTL_SOURCE) $(BUILD_DIR)/.version
 	@VERSION=$$(< $(BUILD_DIR)/.version) && \
 	echo "Releasing kubectl tar.gz's as github assets for tag $${VERSION} on $(GIT_URL)" && \
 	if tty -s; then \
