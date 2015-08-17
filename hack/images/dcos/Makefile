@@ -1,19 +1,21 @@
-# input variables
-GIT_REF ?= v1.0.3-v0.6.2
-GIT_URL ?= https://github.com/mesosphere/kubernetes.git
-DOCKER_ORG ?= mesosphere
-KUBE_ROOT ?=
-SUDO ?=
-POSTFIX ?= -alpha
-
-# fixed values
 SHELL := /bin/bash
+BUILD_DIR := _build
+LOAD_OR_DEFAULT = $(shell cat $(BUILD_DIR)/$(1) 2>/dev/null || echo "$(2)")
 
+# input variables
+GIT_REF    ?= $(call LOAD_OR_DEFAULT,GIT_REF,v1.0.3-v0.6.2)
+GIT_URL    ?= $(call LOAD_OR_DEFAULT,GIT_URL,https://github.com/mesosphere/kubernetes.git)
+DOCKER_ORG ?= $(call LOAD_OR_DEFAULT,DOCKER_ORG,mesosphere)
+KUBE_ROOT  ?= $(call LOAD_OR_DEFAULT,KUBE_ROOT,)
+SUDO       ?= $(call LOAD_OR_DEFAULT,SUDO,)
+POSTFIX    ?= $(call LOAD_OR_DEFAULT,POSTFIX,-alpha)
+
+# compute VERSION string depending on whether
+# - the given GIT_REF_MINOR tag is on the current HEAD and is not dirty
+# - the BUILD_DIR does not exist yet.
+# NOTE: Do not persist the VERSION. It must be re-computed on every make run.
 GIT_REF_MINOR = $(lastword $(subst -, ,$(GIT_REF)))
 GIT_REF_MAJOR = $(firstword $(subst -, ,$(GIT_REF)))
-
-BUILD_DIR = _build
-
 ifneq ($(wildcard $(BUILD_DIR)),)
 	UNCLEAN_INFIX := -unclean
 endif
@@ -23,6 +25,8 @@ else
 	VERSION := $(GIT_REF)-dev
 endif
 
+# compute the Docker image tag
+# NOTE: As VERSION, do not persist DOCKER_IMAGE
 DOCKER_REPO = $(DOCKER_ORG)/kubernetes
 DOCKER_IMAGE = $(DOCKER_REPO):$(VERSION)$(POSTFIX)
 DOCKER_IMAGE_FILE = $(BUILD_DIR)/built-docker-image
@@ -37,7 +41,6 @@ endif
 K8S_BINARIES_SOURCE_DIR = $(K8S_ROOT)/_output/dockerized/bin/$(1)/amd64
 K8S_BINARIES_SOURCE = $(addprefix $(call K8S_BINARIES_SOURCE_DIR,linux)/,$(K8S_BINARIES))
 K8S_BINARIES_DEST = $(addprefix $(BUILD_DIR)/,$(K8S_BINARIES))
-K8S_BINARIES_VERSION_FILE = $(BUILD_DIR)/built-k8s
 KUBECTL_BINARIES = $(call K8S_BINARIES_SOURCE_DIR,linux)/kubectl $(call K8S_BINARIES_SOURCE_DIR,darwin)/kubectl
 
 # etcd distributed in the Docker container
@@ -61,7 +64,7 @@ KUBE_UI_TEMPLATES = $(BUILD_DIR)/kube-ui-rc.yaml $(BUILD_DIR)/kube-ui-svc.yaml
 GITHUB_RELEASE = $(shell pwd)/$(BUILD_DIR)/go/bin/github-release
 
 # meta targets
-.PHONY: clean build build_dir check_dirty checkout clone test push deps version delete_docker_image_file check_github_token github-release-assets
+.PHONY: clean build build_dir check_dirty checkout clone test push deps persist_variables version delete_docker_image_file check_github_token github-release-assets
 .INTERMEDIATE: build_kubernetes copy_kubernetes_binaries download_etcd
 
 all: build
@@ -72,8 +75,17 @@ clean:
 build_dir:
 	@mkdir -p $(BUILD_DIR)
 
-# print out the version and create .version
-version: build_dir
+# persist all input variables such that they are available for non-build targets
+persist_variables: build_dir
+	@echo "$(GIT_REF)" > $(BUILD_DIR)/GIT_REF
+	@echo "$(GIT_URL)" > $(BUILD_DIR)/GIT_URL
+	@echo "$(DOCKER_ORG)" > $(BUILD_DIR)/DOCKER_ORG
+	@echo "$(KUBE_ROOT)" > $(BUILD_DIR)/KUBE_ROOT
+	@echo "$(SUDO)" > $(BUILD_DIR)/SUDO
+	@echo "$(POSTFIX)" > $(BUILD_DIR)/POSTFIX
+
+# print out the version
+version:
 	@if [ -n "$(KUBE_ROOT)" ]; then \
 		echo "KUBE_ROOT=$(KUBE_ROOT)"; \
 	else \
@@ -83,7 +95,6 @@ version: build_dir
 	@echo "VERSION=$(VERSION)"
 	@echo "DOCKER_IMAGE=$(DOCKER_IMAGE)"
 	@echo
-	@echo "$(VERSION)" > $(BUILD_DIR)/.version
 
 # clone the given kubernetes git ref
 clone: build_dir
@@ -112,9 +123,9 @@ check_dirty:
 
 # cross-compile the kubernetes binaries inside Docker
 build_kubernetes: $(BUILD_DIR)/rebuild
-	@rm -f $(K8S_BINARIES_VERSION_FILE)
+	@rm -f $(BUILD_DIR)/.version
 	cd "${K8S_ROOT}" && KUBERNETES_CONTRIB=mesos build/run.sh hack/build-cross.sh
-	@echo $(VERSION) > $(K8S_BINARIES_VERSION_FILE)
+	@echo "$(VERSION)" > $(BUILD_DIR)/.version
 else
 checkout:
 	@test -d $(KUBE_ROOT)
@@ -126,8 +137,8 @@ build_kubernetes:
 	@echo
 	@exit 1
 
-$(K8S_BINARIES_VERSION_FILE):
-	echo $(VERSION) > K8S_BINARIES_VERSION_FILE
+$(BUILD_DIR)/.version:
+	@echo "$(VERSION)" > $(BUILD_DIR)/.version
 endif
 
 $(K8S_BINARIES_SOURCE): build_kubernetes
@@ -161,7 +172,7 @@ $(KUBE_UI_TEMPLATES):
 delete_docker_image_file:
 	@rm -f "$(DOCKER_IMAGE_FILE)"
 deps: build_dir $(ETCD_BINARIES_DEST) $(BUILD_DIR)/$(S6_TAR) $(K8S_BINARIES_DEST) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
-build: version delete_docker_image_file checkout check_dirty deps
+build: persist_variables version delete_docker_image_file checkout check_dirty deps
 	docker build -t $(DOCKER_IMAGE) .
 	docker tag -f $(DOCKER_IMAGE) $(DOCKER_REPO):latest
 	@echo $(DOCKER_IMAGE) > $(DOCKER_IMAGE_FILE)
@@ -199,8 +210,8 @@ check_github_token:
 	fi
 
 # upload the kubectl tar.gz for linux/amd64 and darwin/amd64 to github release given by VERSION
-github-release-assets: $(GITHUB_RELEASE) check_github_token $(KUBECTL_BINARIES) $(K8S_BINARIES_VERSION_FILE)
-	@VERSION=$$(< $(K8S_BINARIES_VERSION_FILE)) && \
+github-release-assets: $(GITHUB_RELEASE) check_github_token $(KUBECTL_BINARIES) $(BUILD_DIR)/.version
+	@VERSION=$$(< $(BUILD_DIR)/.version) && \
 	echo "Releasing kubectl tar.gz's as github assets for tag $${VERSION} on $(GIT_URL)" && \
 	if tty -s; then \
 			echo && \
