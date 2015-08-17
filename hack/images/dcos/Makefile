@@ -64,7 +64,7 @@ KUBE_UI_TEMPLATES = $(BUILD_DIR)/kube-ui-rc.yaml $(BUILD_DIR)/kube-ui-svc.yaml
 GITHUB_RELEASE = $(shell pwd)/$(BUILD_DIR)/go/bin/github-release
 
 # meta targets
-.PHONY: clean build build_dir check_dirty checkout clone test push deps persist_variables version delete_docker_image_file check_github_token github-release-assets
+.PHONY: clean banner build check_dirty checkout clone test push deps persist_variables delete_docker_image_file check_github_token github-release-assets
 .INTERMEDIATE: build_kubernetes copy_kubernetes_binaries download_etcd
 
 all: build
@@ -72,20 +72,7 @@ all: build
 clean:
 	$(SUDO) rm -rf $(BUILD_DIR)
 
-build_dir:
-	@mkdir -p $(BUILD_DIR)
-
-# persist all input variables such that they are available for non-build targets
-persist_variables: build_dir
-	@echo "$(GIT_REF)" > $(BUILD_DIR)/GIT_REF
-	@echo "$(GIT_URL)" > $(BUILD_DIR)/GIT_URL
-	@echo "$(DOCKER_ORG)" > $(BUILD_DIR)/DOCKER_ORG
-	@echo "$(KUBE_ROOT)" > $(BUILD_DIR)/KUBE_ROOT
-	@echo "$(SUDO)" > $(BUILD_DIR)/SUDO
-	@echo "$(POSTFIX)" > $(BUILD_DIR)/POSTFIX
-
-# print out the version
-version:
+banner:
 	@if [ -n "$(KUBE_ROOT)" ]; then \
 		echo "KUBE_ROOT=$(KUBE_ROOT)"; \
 	else \
@@ -96,8 +83,20 @@ version:
 	@echo "DOCKER_IMAGE=$(DOCKER_IMAGE)"
 	@echo
 
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+# persist all input variables such that they are available for non-build targets
+persist_variables: $(BUILD_DIR)
+	@echo "$(GIT_REF)" > $(BUILD_DIR)/GIT_REF
+	@echo "$(GIT_URL)" > $(BUILD_DIR)/GIT_URL
+	@echo "$(DOCKER_ORG)" > $(BUILD_DIR)/DOCKER_ORG
+	@echo "$(KUBE_ROOT)" > $(BUILD_DIR)/KUBE_ROOT
+	@echo "$(SUDO)" > $(BUILD_DIR)/SUDO
+	@echo "$(POSTFIX)" > $(BUILD_DIR)/POSTFIX
+
 # clone the given kubernetes git ref
-clone: build_dir
+clone: $(BUILD_DIR)
 	@cd $(BUILD_DIR) && \
 	if [ ! -d "kubernetes" ]; then \
 		git clone --branch $(GIT_REF) $(GIT_URL) kubernetes && \
@@ -122,7 +121,7 @@ check_dirty:
 	fi
 
 # cross-compile the kubernetes binaries inside Docker
-build_kubernetes: $(BUILD_DIR)/rebuild
+build_kubernetes: $(BUILD_DIR) $(BUILD_DIR)/rebuild
 	@rm -f $(BUILD_DIR)/.version
 	cd "${K8S_ROOT}" && KUBERNETES_CONTRIB=mesos build/run.sh hack/build-cross.sh
 	@echo "$(VERSION)" > $(BUILD_DIR)/.version
@@ -137,7 +136,7 @@ build_kubernetes:
 	@echo
 	@exit 1
 
-$(BUILD_DIR)/.version:
+$(BUILD_DIR)/.version: $(BUILD_DIR)
 	@echo "$(VERSION)" > $(BUILD_DIR)/.version
 endif
 
@@ -172,8 +171,8 @@ $(KUBE_UI_TEMPLATES):
 # package build targets
 delete_docker_image_file:
 	@rm -f "$(DOCKER_IMAGE_FILE)"
-deps: build_dir $(ETCD_BINARIES_DEST) $(BUILD_DIR)/$(S6_TAR) $(K8S_BINARIES_DEST) $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
-build: persist_variables version delete_docker_image_file checkout check_dirty deps
+deps: $(BUILD_DIR) $(ETCD_BINARIES_DEST) $(BUILD_DIR)/$(S6_TAR) $(K8S_BINARIES_DEST) $(BUILD_DIR)/.version $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
+build: banner persist_variables delete_docker_image_file checkout check_dirty deps
 	docker build -t $(DOCKER_IMAGE) .
 	docker tag -f $(DOCKER_IMAGE) $(DOCKER_REPO):latest
 	@echo $(DOCKER_IMAGE) > $(DOCKER_IMAGE_FILE)
