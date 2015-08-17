@@ -121,10 +121,10 @@ check_dirty:
 	fi
 
 # cross-compile the kubernetes binaries inside Docker
-build_kubernetes: $(BUILD_DIR) $(BUILD_DIR)/rebuild
+build_kubernetes: $(BUILD_DIR)/rebuild
 	@rm -f $(BUILD_DIR)/.version
 	cd "${K8S_ROOT}" && KUBERNETES_CONTRIB=mesos build/run.sh hack/build-cross.sh
-	@echo "$(VERSION)" > $(BUILD_DIR)/.version
+	@mkdir -p $(BUILD_DIR) && echo "$(VERSION)" > $(BUILD_DIR)/.version
 else
 checkout:
 	@test -d $(KUBE_ROOT)
