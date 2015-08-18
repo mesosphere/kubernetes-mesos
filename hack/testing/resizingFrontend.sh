@@ -12,6 +12,6 @@ trap ontrap INT HUP TERM
 echo "starting resizing loop for frontendController"
 while true; do
     x=$((RANDOM % 20))
-    "$KUBECFG" resize --replicas=$(( x + 1 )) rc frontend-controller > /dev/null
+    "$KUBECFG" scale --replicas=$(( x + 1 )) rc frontend > /dev/null
     sleep $(( (RANDOM % 15) + 15 ))
 done
