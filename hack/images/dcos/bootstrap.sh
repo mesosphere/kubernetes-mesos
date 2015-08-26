@@ -298,6 +298,7 @@ ${apply_uids}
   --default-container-cpu-limit=${DEFAULT_CONTAINER_CPU_LMIIT:-0.25}
   --default-container-mem-limit=${DEFAULT_CONTAINER_MEM_LMIIT:-64}
   --executor-cgroup-prefix=${CGROUP_PREFIX:-/mesos}
+  --minion-path-override=${PATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
   $(if [ -n "${K8SM_FAILOVER_TIMEOUT:-}" ]; then echo "--failover-timeout=${K8SM_FAILOVER_TIMEOUT}"; fi)
   $(if [ -n "${kube_cluster_dns}" ]; then echo "--cluster-dns=${kube_cluster_dns}"; fi)
   $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
