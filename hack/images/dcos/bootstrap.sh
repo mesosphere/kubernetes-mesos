@@ -291,14 +291,16 @@ ${apply_uids}
   --mesos-master=${mesos_master}
   --mesos-role="${K8SM_MESOS_ROLE:-*}"
   --mesos-user=${K8SM_MESOS_USER:-root}
+  --mesos-cgroup-prefix=${CGROUP_PREFIX:-/mesos}
   --port=${scheduler_port}
   --v=${SCHEDULER_GLOG_v:-${logv}}
   --executor-logv=${EXECUTOR_GLOG_v:-${logv}}
   --proxy-logv=${PROXY_GLOG_v:-${logv}}
   --default-container-cpu-limit=${DEFAULT_CONTAINER_CPU_LMIIT:-0.25}
   --default-container-mem-limit=${DEFAULT_CONTAINER_MEM_LMIIT:-64}
-  --executor-cgroup-prefix=${CGROUP_PREFIX:-/mesos}
   --minion-path-override=${PATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  --contain-pod-resources=${SCHEDULER_CONTAIN_POD_RESOURCES:-true}
+  --account-for-pod-resources=${SCHEDULER_ACCOUNT_FOR_POD_RESOURCES:-true}
   $(if [ -n "${K8SM_FAILOVER_TIMEOUT:-}" ]; then echo "--failover-timeout=${K8SM_FAILOVER_TIMEOUT}"; fi)
   $(if [ -n "${kube_cluster_dns}" ]; then echo "--cluster-dns=${kube_cluster_dns}"; fi)
   $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
