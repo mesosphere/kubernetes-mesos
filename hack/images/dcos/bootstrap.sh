@@ -301,6 +301,8 @@ ${apply_uids}
   --minion-path-override=${PATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
   --contain-pod-resources=${SCHEDULER_CONTAIN_POD_RESOURCES:-true}
   --account-for-pod-resources=${SCHEDULER_ACCOUNT_FOR_POD_RESOURCES:-true}
+  --mesos-executor-cpus=${SCHEDULER_MESOS_EXECUTOR_CPUS:-0.25}
+  --mesos-executor-mem=${SCHEDULER_MESOS_EXECUTOR_MEM:-128}
   $(if [ -n "${K8SM_FAILOVER_TIMEOUT:-}" ]; then echo "--failover-timeout=${K8SM_FAILOVER_TIMEOUT}"; fi)
   $(if [ -n "${kube_cluster_dns}" ]; then echo "--cluster-dns=${kube_cluster_dns}"; fi)
   $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
