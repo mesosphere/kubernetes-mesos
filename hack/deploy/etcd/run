@@ -1,6 +1,0 @@
-#!/bin/bash
-test -n "$servicehost" || {
-	echo "ERROR: missing servicehost env var" >&2
-	exit 1
-}
-$(dirname "$0")/new-etcd.sh | curl -XPOST -H"Content-type: application/json" http://$servicehost:8080/v2/apps -d@/dev/stdin
