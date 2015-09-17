@@ -5,12 +5,21 @@ kubernetes-mesos
 
 ----------------
 
-### Status
+### Kubernetes on DCOS
 
-Mesos integration has been upstreamed into the Kubernetes repo under [contrib/mesos](https://github.com/GoogleCloudPlatform/kubernetes/tree/master/contrib/mesos).
+This repo contains the components required for building the Kubernetes DCOS Service package.
 
-For steps on how to deploy Kubernetes on Mesos, see the [getting started guide](https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/getting-started-guides/mesos.md) in the Kubernetes repo.
+- [Managing DCOS Services - Kubernetes](https://docs.mesosphere.com/services/kubernetes/)
+- [DCOS Overview](https://docs.mesosphere.com/)
 
-This repo is being phased out. It currently only includes:
-- DCOS integration [pending relocation]
-  - kubectl binary releases corresponding to each DCOS package version
+### Kubernetes on Mesos
+
+Mesos integration has been fully upstreamed into the Kubernetes repo under [contrib/mesos](https://github.com/GoogleCloudPlatform/kubernetes/tree/master/contrib/mesos).
+
+- [Getting Started Guide - Mesos](https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/getting-started-guides/mesos.md)
+
+### Kubernetes on Mesos in Docker
+
+For development and testing, Kubernetes on Mesos can be run in Docker on a single host.
+
+- [Getting Started Guide - Mesos/Docker](https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/getting-started-guides/mesos-docker.md)
