@@ -12,18 +12,23 @@ RUN curl -L "https://github.com/just-containers/s6-overlay/releases/download/$S6
 RUN echo 'nobody:x:99:99:Nobody:/:/sbin/false' >>/etc/passwd
 RUN echo 'nobody::99:' >>/etc/group
 
-ADD leapsecs.dat              /etc/
-ADD _build/etcd               /opt/
-ADD _build/etcdctl            /opt/
-ADD _build/skydns-rc.yaml.in  /opt/
-ADD _build/skydns-svc.yaml.in /opt/
-ADD _build/kube-ui-rc.yaml    /opt/
-ADD _build/kube-ui-svc.yaml   /opt/
-ADD _build/.version           /opt/
-ADD _build/km                 /opt/
-ADD _build/kubectl            /opt/
+ADD leapsecs.dat               /etc/
 
-ADD functions.sh              /opt/
-ADD bootstrap.sh              /opt/
+ADD _build/etcd                /opt/
+ADD _build/etcdctl             /opt/
+ADD _build/skydns-rc.yaml.in   /opt/
+ADD _build/skydns-svc.yaml.in  /opt/
+ADD _build/kube-ui-rc.yaml     /opt/
+ADD _build/kube-ui-svc.yaml    /opt/
+ADD _build/.version            /opt/
+ADD _build/linux/km            /opt/
+ADD _build/linux/kubectl       /opt/
+ADD _build/linux/kubectl.bz2   /opt/static/linux/
+ADD _build/darwin/kubectl.bz2  /opt/static/darwin/
+ADD _build/windows/kubectl.exe.bz2 /opt/static/windows/
+ADD _build/kubectl-meta.json   /opt/static/
+
+ADD functions.sh               /opt/
+ADD bootstrap.sh               /opt/
 
 CMD ["/opt/bootstrap.sh"]
