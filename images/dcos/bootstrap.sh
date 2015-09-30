@@ -51,9 +51,11 @@ default_dns_name=${DEFAULT_DNS_NAME:-k8sm.marathon.mesos}
 echo "* DNS name: $default_dns_name"
 
 apiserver_host=${APISERVER_HOST:-${default_dns_name}}
-apiserver_port=${APISERVER_PORT:-8888}
+apiserver_port=${APISERVER_PORT:-18888}
+apiserver_proxy_port=${APISERVER_PROXY_PORT:-8888}
 apiserver_secure_port=${APISERVER_SECURE_PORT:-6443}
 echo "* apiserver: $apiserver_host:$apiserver_port"
+echo "* proxied apiserver: $apiserver_host:$apiserver_proxy_port"
 echo "* secure apiserver: $apiserver_host:$apiserver_secure_port"
 
 scheduler_host=${SCHEDULER_HOST:-${default_dns_name}}
@@ -61,11 +63,6 @@ scheduler_port=${SCHEDULER_PORT:-10251}
 scheduler_driver_port=${SCHEDULER_DRIVER_PORT:-25501}
 echo "* scheduler: $scheduler_host:$scheduler_port"
 echo "* scheduler driver port: $scheduler_driver_port"
-
-framework_name=${FRAMEWORK_NAME:-kubernetes}
-framework_weburi=${FRAMEWORK_WEBURI:-http://${apiserver_host}:${apiserver_port}/static/}
-echo "* framework name: $framework_name"
-echo "* framework_weburi: $framework_weburi"
 
 controller_manager_host=${CONTROLLER_MANAGER_HOST:-${default_dns_name}}
 controller_manager_port=${CONTROLLER_MANAGER_PORT:-10252}
@@ -122,6 +119,13 @@ EOF
 
 # address of the apiserver
 kube_master="http://${apiserver_host}:${apiserver_port}"
+kube_master_proxy="http://${apiserver_host}:${apiserver_proxy_port}"
+
+# framework addresses
+framework_name=${FRAMEWORK_NAME:-kubernetes}
+framework_weburi=${FRAMEWORK_WEBURI:-${kube_master_proxy}}
+echo "* framework name: $framework_name"
+echo "* framework_weburi: $framework_weburi"
 
 #
 # create services directories and scripts
@@ -195,9 +199,19 @@ ${apply_uids}
   --address=${host_ip}
   --cloud-config=${cloud_config}
   --cloud-provider=mesos
-  --master=http://${host_ip}:${apiserver_port}
+  --master=${kube_master}
   --port=${controller_manager_port}
   --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}}
+EOF
+
+#
+# nginx, proxying the apiserver and serving kubectl binaries
+#
+sed "s,<PORT>,${apiserver_proxy_port},;s,<APISERVER>,http://${host_ip}:${apiserver_port}," /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
+prepare_service ${monitor_dir} ${service_dir} nginx ${NGINX_RESPAWN_DELAY:-3} <<EOF
+#!/usr/bin/execlineb
+fdmove -c 2 1
+/usr/sbin/nginx -c /etc/nginx/nginx.conf
 EOF
 
 prepare_kube_dns() {
@@ -267,7 +281,7 @@ fi
 
 # create dependency service for all services that need apiserver to be started
 if [ -n "${apiserver_depends}" ]; then
-  prepare_service_depends apiserver ${kube_master}/healthz ok ${apiserver_depends}
+  prepare_service_depends apiserver http://${host_ip}:${apiserver_port}/healthz ok ${apiserver_depends}
 fi
 
 #
@@ -283,7 +297,7 @@ ${apply_uids}
 /opt/km scheduler
   --address=${host_ip}
   --advertised-address=${scheduler_host}:${scheduler_port}
-  --api-servers=http://${apiserver_host}:${apiserver_port}
+  --api-servers=${kube_master}
   --driver-port=${scheduler_driver_port}
   --service-address=${SCHEDULER_SERVICE_ADDRESS:-10.10.10.9}
   --etcd-servers=${etcd_server_list}
