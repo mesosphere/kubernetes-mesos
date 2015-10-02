@@ -171,7 +171,8 @@ prepare_service ${monitor_dir} ${service_dir} apiserver ${APISERVER_RESPAWN_DELA
 fdmove -c 2 1
 ${apply_uids}
 /opt/km apiserver
-  --address=${host_ip}
+  --insecure-bind-address=${host_ip}
+  --bind-address=${host_ip}
   --cloud-config=${cloud_config}
   --cloud-provider=mesos
   --etcd-servers=${etcd_server_list}
