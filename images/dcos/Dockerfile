@@ -20,6 +20,4 @@ ADD _build/kubectl            /opt/
 RUN echo 'nobody:x:99:99:Nobody:/:/sbin/false' >>/etc/passwd
 RUN echo 'nobody::99:' >>/etc/group
 
-CMD []
-ENTRYPOINT [ "/opt/bootstrap.sh" ]
-
+CMD ["/opt/bootstrap.sh"]
