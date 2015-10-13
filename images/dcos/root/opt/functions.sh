@@ -49,7 +49,7 @@ EOF
   chmod +x ${svcdir}/${name}/log/run
 
   local loglink=log/$name/current
-  ln -s $loglink ${sandbox}/${name}.log
+  ln -f -s $loglink ${sandbox}/${name}.log
 }
 
 prepare_monitor_script() {
