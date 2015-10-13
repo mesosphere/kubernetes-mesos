@@ -71,11 +71,6 @@ controller_manager_host=${CONTROLLER_MANAGER_HOST:-${default_dns_name}}
 controller_manager_port=${CONTROLLER_MANAGER_PORT:-10252}
 echo "* controller manager: $controller_manager_host:$controller_manager_port"
 
-# assume that the leading mesos master is always running a marathon
-# service proxy, perhaps using haproxy.
-service_proxy=${SERVICE_PROXY:-leader.mesos}
-echo "* service proxy: $service_proxy"
-
 # would be nice if this was auto-discoverable. if this value changes
 # between launches of the framework, there can be dangling executors,
 # so it is important that this point to some frontend load balancer
@@ -84,23 +79,19 @@ echo "* service proxy: $service_proxy"
 etcd_server_port=${ETCD_SERVER_PORT:-4001}
 etcd_server_peer_port=${ETCD_SERVER_PEER_PORT:-4002}
 
-ENABLE_ETCD_SERVER=${ENABLE_ETCD_SERVER:-false}
-if [ "${ENABLE_ETCD_SERVER}" != true ]; then
-  etcd_server_list=${ETCD_SERVER_LIST:-http://${service_proxy}:${etcd_server_port}}
-else
-  etcd_advertise_server_host=${ETCD_ADVERTISE_SERVER_HOST:-127.0.0.1}
-  etcd_server_host=${ETCD_SERVER_HOST:-127.0.0.1}
+ETCD_MESOS=${ETCD_MESOS:-disabled}
+etcd_advertise_server_host=${ETCD_ADVERTISE_SERVER_HOST:-127.0.0.1}
+etcd_server_host=${ETCD_SERVER_HOST:-127.0.0.1}
 
-  etcd_initial_advertise_peer_urls=${ETCD_INITIAL_ADVERTISE_PEER_URLS:-http://${etcd_advertise_server_host}:${etcd_server_peer_port}}
-  etcd_listen_peer_urls=${ETCD_LISTEN_PEER_URLS:-http://${etcd_server_host}:${etcd_server_peer_port}}
+etcd_initial_advertise_peer_urls=${ETCD_INITIAL_ADVERTISE_PEER_URLS:-http://${etcd_advertise_server_host}:${etcd_server_peer_port}}
+etcd_listen_peer_urls=${ETCD_LISTEN_PEER_URLS:-http://${etcd_server_host}:${etcd_server_peer_port}}
 
-  etcd_advertise_client_urls=${ETCD_ADVERTISE_CLIENT_URLS:-http://${etcd_advertise_server_host}:${etcd_server_port}}
-  etcd_listen_client_urls=${ETCD_LISTEN_CLIENT_URLS:-http://${etcd_server_host}:${etcd_server_port}}
+etcd_advertise_client_urls=${ETCD_ADVERTISE_CLIENT_URLS:-http://${etcd_advertise_server_host}:${etcd_server_port}}
+etcd_listen_client_urls=${ETCD_LISTEN_CLIENT_URLS:-http://${etcd_server_host}:${etcd_server_port}}
 
-  etcd_server_name=${ETCD_SERVER_NAME:-k8sm-etcd}
-  etcd_server_data=${ETCD_SERVER_DATA:-${sandbox}/etcd-data}
-  etcd_server_list=${etcd_listen_client_urls}
-fi
+etcd_server_name=${ETCD_SERVER_NAME:-k8sm-etcd}
+etcd_server_data=${ETCD_SERVER_DATA:-${sandbox}/etcd-data}
+etcd_server_list=${etcd_listen_client_urls}
 
 # run service procs as "nobody"
 apply_uids="s6-applyuidgid -u 99 -g 99"
@@ -152,6 +143,32 @@ exec /opt/etcd \\
   -listen-client-urls ${etcd_listen_client_urls} \\
   -listen-peer-urls ${etcd_listen_peer_urls} \\
   -name ${etcd_server_name}
+EOF
+
+  local deps="controller-manager scheduler"
+  if [ -n "${apiserver_depends}" ]; then
+    deps="${deps} apiserver-depends"
+  else
+    deps="${deps} apiserver"
+  fi
+  prepare_service_depends etcd-server ${etcd_server_list}/v2/stats/store getsSuccess ${deps}
+}
+
+prepare_etcd_proxy() {
+  prepare_service ${monitor_dir} ${service_dir} etcd-server ${ETCD_SERVER_RESPAWN_DELAY:-1} << EOF
+#!/bin/sh
+#TODO(jdef) don't run this as root
+#TODO(jdef) would be super-cool to have socket-activation here so that clients can connect before etcd is really ready
+exec 2>&1
+mkdir -p ${etcd_server_data}
+PATH="/opt:${PATH}"
+export PATH
+exec /opt/etcd \\
+  -proxy=on \\
+  -advertise-client-urls ${etcd_advertise_client_urls} \\
+  -data-dir ${etcd_server_data} \\
+  -listen-client-urls ${etcd_listen_client_urls} \\
+  -discovery-srv=${ETCD_MESOS}.mesos \\
 EOF
 
   local deps="controller-manager scheduler"
@@ -309,8 +326,10 @@ ${apply_uids}
   $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
 EOF
 
-if [ "$ENABLE_ETCD_SERVER" == true ]; then
+if [ "$ETCD_MESOS" == disabled ]; then
   prepare_etcd_service
+else
+  prepare_etcd_proxy
 fi
 
 #--- service monitor
