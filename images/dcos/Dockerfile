@@ -1,7 +1,13 @@
-FROM busybox:ubuntu-14.04
+FROM alpine:3.2
 MAINTAINER Mesosphere <support@mesosphere.com>
 
-ADD _build/s6-overlay-amd64.tar.gz /
+RUN apk --update add curl ca-certificates && \
+    curl -Ls https://circle-artifacts.com/gh/andyshinn/alpine-pkg-glibc/6/artifacts/0/home/ubuntu/alpine-pkg-glibc/packages/x86_64/glibc-2.21-r2.apk > /tmp/glibc-2.21-r2.apk && \
+    apk add --allow-untrusted /tmp/glibc-2.21-r2.apk && \
+    rm -rf /tmp/glibc-2.21-r2.apk /var/cache/apk/*
+
+ENV S6_VERSION v1.13.0.0
+RUN curl -L "https://github.com/just-containers/s6-overlay/releases/download/$S6_VERSION/s6-overlay-amd64.tar.gz" | tar xzvf - -C /
 
 RUN echo 'nobody:x:99:99:Nobody:/:/sbin/false' >>/etc/passwd
 RUN echo 'nobody::99:' >>/etc/group
