@@ -79,7 +79,7 @@ echo "* controller manager: $controller_manager_host:$controller_manager_port"
 etcd_server_port=${ETCD_SERVER_PORT:-4001}
 etcd_server_peer_port=${ETCD_SERVER_PEER_PORT:-4002}
 
-ETCD_MESOS=${ETCD_MESOS:-disabled}
+ETCD_MESOS_FRAMEWORK_NAME=${ETCD_MESOS_FRAMEWORK_NAME:-disabled}
 etcd_advertise_server_host=${ETCD_ADVERTISE_SERVER_HOST:-127.0.0.1}
 etcd_server_host=${ETCD_SERVER_HOST:-127.0.0.1}
 
@@ -161,14 +161,12 @@ prepare_etcd_proxy() {
 #TODO(jdef) would be super-cool to have socket-activation here so that clients can connect before etcd is really ready
 exec 2>&1
 mkdir -p ${etcd_server_data}
-PATH="/opt:${PATH}"
-export PATH
 exec /opt/etcd \\
   -proxy=on \\
   -advertise-client-urls ${etcd_advertise_client_urls} \\
   -data-dir ${etcd_server_data} \\
   -listen-client-urls ${etcd_listen_client_urls} \\
-  -discovery-srv=${ETCD_MESOS}.mesos \\
+  -discovery-srv=${ETCD_MESOS_FRAMEWORK_NAME}.mesos \\
 EOF
 
   local deps="controller-manager scheduler"
@@ -326,7 +324,7 @@ ${apply_uids}
   $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
 EOF
 
-if [ "$ETCD_MESOS" == disabled ]; then
+if [ "$ETCD_MESOS_FRAMEWORK_NAME" == disabled ]; then
   prepare_etcd_service
 else
   prepare_etcd_proxy
