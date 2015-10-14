@@ -3,7 +3,7 @@
 test -n "$sandbox" || die failed to identify mesos sandbox
 
 lookup_ip() {
-  local leader=$(nslookup "$1" | sed -e '/^Server:/,/^Address .*$/{ d }' -e '/^$/d'|grep -e '^Address '|cut -f3 -d' '|head -1)
+  local leader=$(nslookup "$1" | grep -v 127.0.0.1 | sed -e '/^Server:/,/^Address .*$/{ d }' -e '/^$/d'|grep -e '^Address '|cut -f3 -d' '|head -1)
   test -n "$leader" || die Failed to identify $1
   echo $leader
 }
