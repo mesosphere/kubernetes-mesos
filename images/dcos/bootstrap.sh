@@ -127,14 +127,12 @@ prepare_service_script ${service_dir} .s6-svscan finish <<EOF
 EOF
 
 prepare_etcd_service() {
+  mkdir -p ${etcd_server_data}
   prepare_service ${monitor_dir} ${service_dir} etcd-server ${ETCD_SERVER_RESPAWN_DELAY:-1} << EOF
 #!/bin/sh
 #TODO(jdef) don't run this as root
 #TODO(jdef) would be super-cool to have socket-activation here so that clients can connect before etcd is really ready
 exec 2>&1
-mkdir -p ${etcd_server_data}
-PATH="/opt:${PATH}"
-export PATH
 exec /opt/etcd \\
   -advertise-client-urls ${etcd_advertise_client_urls} \\
   -data-dir ${etcd_server_data} \\
@@ -155,12 +153,12 @@ EOF
 }
 
 prepare_etcd_proxy() {
+  mkdir -p ${etcd_server_data}
   prepare_service ${monitor_dir} ${service_dir} etcd-server ${ETCD_SERVER_RESPAWN_DELAY:-1} << EOF
 #!/bin/sh
 #TODO(jdef) don't run this as root
 #TODO(jdef) would be super-cool to have socket-activation here so that clients can connect before etcd is really ready
 exec 2>&1
-mkdir -p ${etcd_server_data}
 exec /opt/etcd \\
   -proxy=on \\
   -advertise-client-urls ${etcd_advertise_client_urls} \\
