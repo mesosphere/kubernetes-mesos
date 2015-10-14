@@ -145,7 +145,7 @@ exec /opt/etcd \\
   -name ${etcd_server_name}
 EOF
 
-  local deps="controller-manager scheduler"
+  local deps="scheduler"
   if [ -n "${apiserver_depends}" ]; then
     deps="${deps} apiserver-depends"
   else
@@ -169,7 +169,7 @@ exec /opt/etcd \\
   -discovery-srv=${ETCD_MESOS_FRAMEWORK_NAME}.mesos \\
 EOF
 
-  local deps="controller-manager scheduler"
+  local deps="scheduler"
   if [ -n "${apiserver_depends}" ]; then
     deps="${deps} apiserver-depends"
   else
