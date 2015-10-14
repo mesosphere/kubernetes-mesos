@@ -129,17 +129,17 @@ EOF
 prepare_etcd_service() {
   mkdir -p ${etcd_server_data}
   prepare_service ${monitor_dir} ${service_dir} etcd-server ${ETCD_SERVER_RESPAWN_DELAY:-1} << EOF
-#!/bin/sh
+#!/usr/bin/execlineb
 #TODO(jdef) don't run this as root
 #TODO(jdef) would be super-cool to have socket-activation here so that clients can connect before etcd is really ready
-exec 2>&1
-exec /opt/etcd \\
-  -advertise-client-urls ${etcd_advertise_client_urls} \\
-  -data-dir ${etcd_server_data} \\
-  -initial-advertise-peer-urls ${etcd_initial_advertise_peer_urls} \\
-  -initial-cluster ${etcd_server_name}=${etcd_initial_advertise_peer_urls} \\
-  -listen-client-urls ${etcd_listen_client_urls} \\
-  -listen-peer-urls ${etcd_listen_peer_urls} \\
+fdmove -c 2 1
+/opt/etcd
+  -advertise-client-urls ${etcd_advertise_client_urls}
+  -data-dir ${etcd_server_data}
+  -initial-advertise-peer-urls ${etcd_initial_advertise_peer_urls}
+  -initial-cluster ${etcd_server_name}=${etcd_initial_advertise_peer_urls}
+  -listen-client-urls ${etcd_listen_client_urls}
+  -listen-peer-urls ${etcd_listen_peer_urls}
   -name ${etcd_server_name}
 EOF
 
@@ -155,16 +155,16 @@ EOF
 prepare_etcd_proxy() {
   mkdir -p ${etcd_server_data}
   prepare_service ${monitor_dir} ${service_dir} etcd-server ${ETCD_SERVER_RESPAWN_DELAY:-1} << EOF
-#!/bin/sh
+#!/usr/bin/execlineb
 #TODO(jdef) don't run this as root
 #TODO(jdef) would be super-cool to have socket-activation here so that clients can connect before etcd is really ready
-exec 2>&1
-exec /opt/etcd \\
-  -proxy=on \\
-  -advertise-client-urls ${etcd_advertise_client_urls} \\
-  -data-dir ${etcd_server_data} \\
-  -listen-client-urls ${etcd_listen_client_urls} \\
-  -discovery-srv=${ETCD_MESOS_FRAMEWORK_NAME}.mesos \\
+fdmove -c 2 1
+/opt/etcd
+  -proxy=on
+  -advertise-client-urls ${etcd_advertise_client_urls}
+  -data-dir ${etcd_server_data}
+  -listen-client-urls ${etcd_listen_client_urls}
+  -discovery-srv=${ETCD_MESOS_FRAMEWORK_NAME}.mesos
 EOF
 
   local deps="scheduler"
