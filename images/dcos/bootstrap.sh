@@ -176,7 +176,7 @@ ${apply_uids}
   --cloud-config=${cloud_config}
   --cloud-provider=mesos
   --etcd-servers=${etcd_server_list}
-  --port=${apiserver_port}
+  --insecure-port=${apiserver_port}
   --secure-port=${apiserver_secure_port}
   --service-cluster-ip-range=${SERVICE_CLUSTER_IP_RANGE:-10.10.10.0/24}
   --v=${APISERVER_GLOG_v:-${logv}}
