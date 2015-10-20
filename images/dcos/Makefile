@@ -32,16 +32,19 @@ DOCKER_IMAGE = $(DOCKER_REPO):$(VERSION)$(POSTFIX)
 DOCKER_IMAGE_FILE = $(BUILD_DIR)/built-docker-image
 
 # kubernetes binaries distributed in the Docker container
-K8S_BINARIES = km kubectl
 ifeq ($(KUBE_ROOT),)
 	K8S_ROOT = $(BUILD_DIR)/kubernetes
 else
 	K8S_ROOT = $(KUBE_ROOT)
 endif
+OS_EXT = $(if $(filter $(1),windows),.exe,)
 K8S_BINARIES_SOURCE_DIR = $(K8S_ROOT)/_output/dockerized/bin/$(1)/amd64
-K8S_BINARIES_SOURCE = $(addprefix $(call K8S_BINARIES_SOURCE_DIR,linux)/,$(K8S_BINARIES))
-K8S_BINARIES_DEST = $(addprefix $(BUILD_DIR)/,$(K8S_BINARIES))
-K8S_KUBECTL_SOURCE = $(addsuffix /kubectl,$(call K8S_BINARIES_SOURCE_DIR,linux) $(call K8S_BINARIES_SOURCE_DIR,darwin))
+K8S_KUBECTL_OSES = linux windows darwin
+K8S_KUBECTL_SOURCE = $(foreach OS,$(K8S_KUBECTL_OSES),$(call K8S_BINARIES_SOURCE_DIR,$(OS))/kubectl$(call OS_EXT,$(OS)))
+K8S_KUBECTL_DEST = $(foreach OS,$(K8S_KUBECTL_OSES),$(BUILD_DIR)/$(OS)/kubectl$(call OS_EXT,$(OS)).bz2)
+K8S_KUBECTL_META = $(BUILD_DIR)/kubectl-meta.json
+K8S_BINARIES_SOURCE = $(K8S_KUBECTL_SOURCE) $(addsuffix /km,$(call K8S_BINARIES_SOURCE_DIR,linux))
+K8S_BINARIES_DEST = $(BUILD_DIR)/linux/km $(K8S_KUBECTL_DEST)
 
 # etcd distributed in the Docker container
 ETCD_IMAGE = etcd
@@ -51,10 +54,6 @@ ETCD_BINARIES = etcd etcdctl
 ETCD_BINARIES_SOURCE_DIR = $(BUILD_DIR)/$(ETCD_IMAGE)-v$(ETCD_TAG)-linux-amd64
 ETCD_BINARIES_DEST = $(addprefix $(BUILD_DIR)/,$(ETCD_BINARIES))
 ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ETCD_TAR)
-
-# s6 overlay used as init process in the Docker container
-S6_TAR = s6-overlay-amd64.tar.gz
-S6_URL = https://github.com/just-containers/s6-overlay/releases/download/v1.13.0.0/$(S6_TAR)
 
 # kubernetes addons: kube-dns and kube-ui
 KUBE_DNS_TEMPLATES = $(BUILD_DIR)/skydns-rc.yaml.in $(BUILD_DIR)/skydns-svc.yaml.in
@@ -130,7 +129,7 @@ checkout:
 	@test -d $(KUBE_ROOT)
 check_dirty:
 build_kubernetes:
-	@echo "Build linux/amd64 binaries in ${K8S_ROOT}:"
+	@echo "Build linux, windows and darwin amd64 binaries in ${K8S_ROOT}:"
 	@echo
 	@echo "    KUBERNETES_CONTRIB=mesos build/run.sh hack/build-cross.sh"
 	@echo
@@ -144,8 +143,21 @@ $(K8S_BINARIES_SOURCE): build_kubernetes
 $(K8S_KUBECTL_SOURCE): build_kubernetes
 
 # copy km and kubectl from the kubernetes _output directory to _build
+SHA256 = $$(python -c "import hashlib, sys; print hashlib.sha256(sys.stdin.read()).hexdigest();" <"$(1)")
 copy_kubernetes_binaries: $(K8S_BINARIES_SOURCE)
-	cp -pv $(K8S_BINARIES_SOURCE) $(BUILD_DIR)
+	echo -n "{" > $(K8S_KUBECTL_META)
+	set -x; SEP=""; for OS in $(K8S_KUBECTL_OSES); do \
+		mkdir -p $(BUILD_DIR)/$$OS && \
+		if [ "$$OS" == windows ]; then KUBECTL=kubectl.exe; else KUBECTL=kubectl; fi && \
+		cp -pv $(call K8S_BINARIES_SOURCE_DIR,$$OS)/$$KUBECTL $(BUILD_DIR)/$$OS && \
+		echo "$$SEP" >> $(K8S_KUBECTL_META) && \
+		echo -n "  \"$$OS-amd64\": {\"file\":\"$$OS/$$KUBECTL\", \"sha256\":\"$(call SHA256,$(BUILD_DIR)/$$OS/$$KUBECTL)\"}" >> $(K8S_KUBECTL_META) && \
+		SEP="," && \
+		bzip2 -f -k $(BUILD_DIR)/$$OS/$$KUBECTL; \
+	done
+	echo "$$SEP" >> $(K8S_KUBECTL_META)
+	echo "}" >> $(K8S_KUBECTL_META)
+	cp -pv $(call K8S_BINARIES_SOURCE_DIR,linux)/km $(BUILD_DIR)/linux
 	touch $(K8S_BINARIES_DEST)
 $(K8S_BINARIES_DEST): copy_kubernetes_binaries
 
@@ -155,10 +167,6 @@ $(BUILD_DIR)/$(ETCD_TAR):
 	cp -pv $(addprefix $(ETCD_BINARIES_SOURCE_DIR)/,$(ETCD_BINARIES)) $(BUILD_DIR)
 	touch $(ETCD_BINARIES_DEST)
 $(ETCD_BINARIES_DEST): $(BUILD_DIR)/$(ETCD_TAR)
-
-# download S6
-$(BUILD_DIR)/$(S6_TAR):
-	cd "$(BUILD_DIR)" && curl -L -O $(S6_URL)
 
 # copy the kube-dns specs from the kubernetes repo to _build
 $(KUBE_DNS_TEMPLATES):
@@ -171,7 +179,7 @@ $(KUBE_UI_TEMPLATES):
 # package build targets
 delete_docker_image_file:
 	@rm -f "$(DOCKER_IMAGE_FILE)"
-deps: $(BUILD_DIR) $(ETCD_BINARIES_DEST) $(BUILD_DIR)/$(S6_TAR) $(K8S_BINARIES_DEST) $(BUILD_DIR)/.version $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
+deps: $(BUILD_DIR) $(ETCD_BINARIES_DEST) $(BUILD_DIR)/$(S6_TAR) $(K8S_BINARIES_DEST) $(K8S_KUBECTL_SOURCE) $(BUILD_DIR)/.version $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
 build: banner persist_variables delete_docker_image_file checkout check_dirty deps
 	docker build -t $(DOCKER_IMAGE) .
 	docker tag -f $(DOCKER_IMAGE) $(DOCKER_REPO):latest
@@ -210,7 +218,7 @@ check_github_token:
 	fi
 
 # upload the kubectl tar.gz for linux/amd64 and darwin/amd64 to github release given by VERSION
-github-release-assets: $(GITHUB_RELEASE) check_github_token $(K8S_KUBECTL_SOURCE) $(BUILD_DIR)/.version
+github-release-assets: $(GITHUB_RELEASE) check_github_token $(K8S_KUBECTL_DEST) $(BUILD_DIR)/.version
 	@VERSION=$$(< $(BUILD_DIR)/.version) && \
 	echo "Releasing kubectl tar.gz's as github assets for tag $${VERSION} on $(GIT_URL)" && \
 	if tty -s; then \
@@ -223,9 +231,9 @@ github-release-assets: $(GITHUB_RELEASE) check_github_token $(K8S_KUBECTL_SOURCE
 		$(GITHUB_RELEASE) release -u mesosphere --repo kubernetes --tag $${VERSION} --name "Kubernetes on Mesos $${VERSION}" --draft && \
 		echo "Creating $${VERSION} draft release"; \
 	fi && \
-	for OS in linux darwin; do \
+	for OS in $(K8S_KUBECTL_OSES); do \
 		BUILD_DIR=$$PWD/$(BUILD_DIR) && \
-		cd $(call K8S_BINARIES_SOURCE_DIR,$$OS) && \
+		cd $$OS && \
 		TAR=kubectl-$${VERSION}-$$OS-amd64.tgz && \
 		tar -czf $$BUILD_DIR/$$TAR kubectl && \
 		cd - &>/dev/null && \
