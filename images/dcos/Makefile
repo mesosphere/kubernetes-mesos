@@ -233,9 +233,9 @@ github-release-assets: $(GITHUB_RELEASE) check_github_token $(K8S_KUBECTL_DEST) 
 	fi && \
 	for OS in $(K8S_KUBECTL_OSES); do \
 		BUILD_DIR=$$PWD/$(BUILD_DIR) && \
-		cd $$OS && \
+		cd "$$BUILD_DIR/$$OS" && \
 		TAR=kubectl-$${VERSION}-$$OS-amd64.tgz && \
-		tar -czf $$BUILD_DIR/$$TAR kubectl && \
+		tar -czf $$BUILD_DIR/$$TAR "kubectl$$(if [ $$OS = windows ]; then echo -n .exe; fi)" && \
 		cd - &>/dev/null && \
 		echo "Uploading $$TAR as github asset for tag $${VERSION}" && \
 		$(GITHUB_RELEASE) upload -u mesosphere --repo kubernetes --tag $${VERSION} --file $(BUILD_DIR)/$$TAR --name $$TAR || exit 1; \
