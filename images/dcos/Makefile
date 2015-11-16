@@ -3,7 +3,7 @@ BUILD_DIR := _build
 LOAD_OR_DEFAULT = $(shell cat $(BUILD_DIR)/$(1) 2>/dev/null || echo "$(2)")
 
 # input variables
-GIT_REF    ?= $(call LOAD_OR_DEFAULT,GIT_REF,v1.0.6-v0.6.7)
+GIT_REF    ?= $(call LOAD_OR_DEFAULT,GIT_REF,v0.7.0-v1.1.1)
 GIT_URL    ?= $(call LOAD_OR_DEFAULT,GIT_URL,https://github.com/mesosphere/kubernetes.git)
 DOCKER_ORG ?= $(call LOAD_OR_DEFAULT,DOCKER_ORG,mesosphere)
 KUBE_ROOT  ?= $(call LOAD_OR_DEFAULT,KUBE_ROOT,)
@@ -20,7 +20,7 @@ ifneq ($(wildcard $(BUILD_DIR)),)
 	UNCLEAN_INFIX := -unclean
 endif
 ifeq ($(KUBE_ROOT),)
-	VERSION := $(GIT_REF_MAJOR)-$(shell git describe --match $(GIT_REF_MINOR) --always --tags --dirty)$(UNCLEAN_INFIX)
+	VERSION := $(shell git describe --match $(GIT_REF_MAJOR) --always --tags --dirty)$(UNCLEAN_INFIX)-$(GIT_REF_MINOR)
 else
 	VERSION := $(GIT_REF)-dev
 endif
