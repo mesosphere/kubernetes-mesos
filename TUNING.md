@@ -5,7 +5,7 @@ settings may change or even disappear from version to version without further no
 
 ## Scheduler Configuration
 
-The scheduler configuration can be fine-tuned using an ini-style configuration file. The filename is passed via `--scheduler_config` to the `km scheduler` command. The following settings are the default:
+The scheduler configuration can be fine-tuned using an ini-style configuration file. The filename is passed via `--scheduler-config` to the `km scheduler` command. The following settings are the default:
 
 ```
 [scheduler]
