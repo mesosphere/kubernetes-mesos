@@ -197,6 +197,7 @@ ${apply_uids}
   --secure-port=${apiserver_secure_port}
   --service-cluster-ip-range=${SERVICE_CLUSTER_IP_RANGE:-10.10.10.0/24}
   --v=${APISERVER_GLOG_v:-${logv}}
+  --runtime-config=${APISERVER_RUNTIME_CONFIG:-}
 EOF
 apiserver_depends=""
 
