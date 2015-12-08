@@ -15,7 +15,7 @@ indent() {
 }
 
 echo "* Environment:"
-env | indent
+env | sort | indent
 echo
 
 #TODO(jdef) we may want additional flags here
