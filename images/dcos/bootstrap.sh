@@ -327,7 +327,6 @@ ${apply_uids}
   --default-container-mem-limit=${DEFAULT_CONTAINER_MEM_LMIIT:-64}
   --minion-path-override=${PATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
   --contain-pod-resources=${SCHEDULER_CONTAIN_POD_RESOURCES:-true}
-  --account-for-pod-resources=${SCHEDULER_ACCOUNT_FOR_POD_RESOURCES:-true}
   --mesos-executor-cpus=${SCHEDULER_MESOS_EXECUTOR_CPUS:-0.25}
   --mesos-executor-mem=${SCHEDULER_MESOS_EXECUTOR_MEM:-128}
   --proxy-mode=${PROXY_MODE:-userspace}
