@@ -317,7 +317,6 @@ ${apply_uids}
   --framework-name=${framework_name}
   --framework-weburi=${framework_weburi}
   --mesos-master=${mesos_master}
-  --mesos-role="${K8SM_MESOS_ROLE:-*}"
   --mesos-user=${K8SM_MESOS_USER:-root}
   --mesos-cgroup-prefix=${CGROUP_PREFIX:-/mesos}
   --port=${scheduler_port}
@@ -332,6 +331,8 @@ ${apply_uids}
   --mesos-executor-cpus=${SCHEDULER_MESOS_EXECUTOR_CPUS:-0.25}
   --mesos-executor-mem=${SCHEDULER_MESOS_EXECUTOR_MEM:-128}
   --proxy-mode=${PROXY_MODE:-userspace}
+  --mesos-framework-roles="${SCHEDULER_MESOS_FRAMEWORK_ROLES:-*}"
+  --mesos-default-pod-roles="${SCHEDULER_MESOS_DEFAULT_POD_ROLES:-*}"
   $(if [ -n "${K8SM_FAILOVER_TIMEOUT:-}" ]; then echo "--failover-timeout=${K8SM_FAILOVER_TIMEOUT}"; fi)
   $(if [ -n "${kube_cluster_dns}" ]; then echo "--cluster-dns=${kube_cluster_dns}"; fi)
   $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
