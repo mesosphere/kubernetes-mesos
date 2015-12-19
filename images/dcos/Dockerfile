@@ -15,6 +15,10 @@ RUN echo 'nobody::99:' >>/etc/group
 # fix nginx tmp directory permissions to be writable by nginx user
 RUN mkdir -p /var/lib/nginx/tmp && chown nginx /var/lib/nginx /var/lib/nginx/tmp && chmod 0700 /var/lib/nginx /var/lib/nginx/tmp
 
+# fix /var/run/kubernetes permissions such that the apisever can create
+# self-signed certificates
+RUN mkdir -p /var/run/kubernetes && chown nobody /var/run/kubernetes && chmod 0700 /var/run/kubernetes
+
 ADD root /
 
 ADD _build/etcd                /opt/

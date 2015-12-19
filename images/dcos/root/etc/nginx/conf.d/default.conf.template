@@ -1,5 +1,8 @@
 server {
-    listen <PORT>;
+    listen <PORT> ssl spdy;
+    ssl_certificate snakeoil.crt;
+    ssl_certificate_key snakeoil.key;
+
     server_name "";
 
     root /usr/html;
@@ -11,6 +14,7 @@ server {
 
     location / {
         proxy_pass <APISERVER>;
+        proxy_ssl_verify off;
     }
 
     location /static {

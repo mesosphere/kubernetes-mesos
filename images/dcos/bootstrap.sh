@@ -51,9 +51,9 @@ default_dns_name=${DEFAULT_DNS_NAME:-k8sm.marathon.mesos}
 echo "* DNS name: $default_dns_name"
 
 apiserver_host=${APISERVER_HOST:-${default_dns_name}}
-apiserver_port=${APISERVER_PORT:-18888}
-apiserver_proxy_port=${APISERVER_PROXY_PORT:-8888}
-apiserver_secure_port=${APISERVER_SECURE_PORT:-6443}
+apiserver_port=${APISERVER_PORT:-8888}
+apiserver_proxy_port=${APISERVER_PROXY_PORT:-6443}
+apiserver_secure_port=${APISERVER_SECURE_PORT:-16443}
 echo "* apiserver: $apiserver_host:$apiserver_port"
 echo "* proxied apiserver: $apiserver_host:$apiserver_proxy_port"
 echo "* secure apiserver: $apiserver_host:$apiserver_secure_port"
@@ -220,7 +220,7 @@ EOF
 #
 # nginx, proxying the apiserver and serving kubectl binaries
 #
-sed "s,<PORT>,${apiserver_proxy_port},;s,<APISERVER>,http://${host_ip}:${apiserver_port}," /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
+sed "s,<PORT>,${apiserver_proxy_port},;s,<APISERVER>,https://localhost:${apiserver_secure_port}," /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
 prepare_service ${monitor_dir} ${service_dir} nginx ${NGINX_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
