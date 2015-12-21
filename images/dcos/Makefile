@@ -18,11 +18,12 @@ GIT_REF_MINOR = $(lastword $(subst -, ,$(GIT_REF)))
 GIT_REF_MAJOR = $(firstword $(subst -, ,$(GIT_REF)))
 ifneq ($(wildcard $(BUILD_DIR)),)
 	UNCLEAN_INFIX := -unclean
+	UNCLEAN_PREFIX := $(USER)-
 endif
 ifeq ($(KUBE_ROOT),)
-	VERSION := $(shell git describe --match $(GIT_REF_MAJOR) --always --tags --dirty)$(UNCLEAN_INFIX)-$(GIT_REF_MINOR)
+	VERSION := $(UNCLEAN_PREFIX)$(shell git describe --match $(GIT_REF_MAJOR) --always --tags --dirty)$(UNCLEAN_INFIX)-$(GIT_REF_MINOR)
 else
-	VERSION := $(GIT_REF)-dev
+	VERSION := $(USER)-$(GIT_REF)-dev
 endif
 
 # compute the Docker image tag
