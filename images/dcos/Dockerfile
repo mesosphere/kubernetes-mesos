@@ -9,9 +9,6 @@ RUN apk --update add nginx curl ca-certificates && \
 ENV S6_VERSION v1.13.0.0
 RUN curl -L "https://github.com/just-containers/s6-overlay/releases/download/$S6_VERSION/s6-overlay-amd64.tar.gz" | tar xzvf - -C /
 
-RUN echo 'nobody:x:99:99:Nobody:/:/sbin/false' >>/etc/passwd
-RUN echo 'nobody::99:' >>/etc/group
-
 # fix nginx tmp directory permissions to be writable by nginx user
 RUN mkdir -p /var/lib/nginx/tmp && chown nginx /var/lib/nginx /var/lib/nginx/tmp && chmod 0700 /var/lib/nginx /var/lib/nginx/tmp
 

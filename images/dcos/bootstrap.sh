@@ -91,7 +91,7 @@ etcd_server_data=${ETCD_SERVER_DATA:-${sandbox}/etcd-data}
 etcd_server_list=${etcd_listen_client_urls}
 
 # run service procs as "nobody"
-apply_uids="s6-applyuidgid -u 99 -g 99"
+apply_uids="s6-applyuidgid -u $(id -u nobody) -g $(id -g nobody)"
 
 # find IP address of the container
 echo -n "* host IP: "
