@@ -220,7 +220,7 @@ EOF
 #
 # nginx, proxying the apiserver and serving kubectl binaries
 #
-sed "s,<PORT>,${apiserver_proxy_port},;s,<APISERVER>,https://localhost:${apiserver_secure_port}," /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
+sed "s,<PORT>,${apiserver_proxy_port},;s,<APISERVER>,https://${host_ip}:${apiserver_secure_port}," /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
 prepare_service ${monitor_dir} ${service_dir} nginx ${NGINX_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
