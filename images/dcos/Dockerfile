@@ -18,6 +18,7 @@ RUN mkdir -p /var/run/kubernetes && chown nobody /var/run/kubernetes && chmod 07
 
 ADD root /
 
+COPY _build/sandbox-overlay.tar.gz /opt/
 ADD _build/etcd                /opt/
 ADD _build/etcdctl             /opt/
 ADD _build/skydns-rc.yaml.in   /opt/

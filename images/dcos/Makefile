@@ -162,6 +162,17 @@ copy_kubernetes_binaries: $(K8S_BINARIES_SOURCE)
 	touch $(K8S_BINARIES_DEST)
 $(K8S_BINARIES_DEST): copy_kubernetes_binaries
 
+# create executor overlay tar with nsenter and socat
+OVERLAY_DIR ?= $(PWD)/$(BUILD_DIR)/overlay-target
+$(BUILD_DIR)/sandbox-overlay.tar.gz:
+	mkdir -p "$(OVERLAY_DIR)"
+	docker run --rm -v "$(OVERLAY_DIR):/target" jpetazzo/nsenter
+	docker run --rm -v "$(OVERLAY_DIR):/target" mesosphere/kubernetes-socat
+	mkdir -p "$(BUILD_DIR)/overlay/bin"
+	cp -a "$(OVERLAY_DIR)/"{nsenter,socat} "$(BUILD_DIR)/overlay/bin"
+	chmod +x "$(BUILD_DIR)/overlay/bin/"*
+	cd "$(BUILD_DIR)/overlay" && tar -czvf "../sandbox-overlay.tar.gz" .
+
 # download etcd and extract it to _output/etcd-...
 $(BUILD_DIR)/$(ETCD_TAR):
 	cd $(BUILD_DIR) && curl -L -O $(ETCD_SOURCE) && tar xzvf $(ETCD_TAR)
@@ -180,7 +191,7 @@ $(KUBE_UI_TEMPLATES):
 # package build targets
 delete_docker_image_file:
 	@rm -f "$(DOCKER_IMAGE_FILE)"
-deps: $(BUILD_DIR) $(ETCD_BINARIES_DEST) $(BUILD_DIR)/$(S6_TAR) $(K8S_BINARIES_DEST) $(K8S_KUBECTL_SOURCE) $(BUILD_DIR)/.version $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES)
+deps: $(BUILD_DIR) $(ETCD_BINARIES_DEST) $(BUILD_DIR)/$(S6_TAR) $(K8S_BINARIES_DEST) $(K8S_KUBECTL_SOURCE) $(BUILD_DIR)/.version $(KUBE_DNS_TEMPLATES) $(KUBE_UI_TEMPLATES) $(BUILD_DIR)/sandbox-overlay.tar.gz
 build: banner persist_variables delete_docker_image_file checkout check_dirty deps
 	docker build -t $(DOCKER_IMAGE) .
 	docker tag -f $(DOCKER_IMAGE) $(DOCKER_REPO):latest
