@@ -15,6 +15,16 @@ server {
     location / {
         proxy_pass <APISERVER>;
         proxy_ssl_verify off;
+
+        # Don't try to be intelligent, only proxy
+        proxy_buffering off;
+        proxy_redirect off;
+        proxy_next_upstream off;
+
+        # Support web sockets
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
     }
 
     location /static {
