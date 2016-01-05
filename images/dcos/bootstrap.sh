@@ -183,6 +183,10 @@ EOF
 #
 # apiserver, uses frontend service proxy to connect with etcd
 #
+mkdir -p /etc/kubernetes
+admin_token="$(openssl rand -hex 32)"
+echo "${admin_token},admin,admin" > /etc/kubernetes/token-users
+
 prepare_service ${monitor_dir} ${service_dir} apiserver ${APISERVER_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
@@ -195,7 +199,13 @@ ${apply_uids}
   --etcd-servers=${etcd_server_list}
   --insecure-port=${apiserver_port}
   --secure-port=${apiserver_secure_port}
+  --admission-control=NamespaceLifecycle,LimitRanger,SecurityContextDeny,ServiceAccount,ResourceQuota
+  --authorization-mode=AlwaysAllow
+  --token-auth-file=/etc/kubernetes/token-users
   --service-cluster-ip-range=${SERVICE_CLUSTER_IP_RANGE:-10.10.10.0/24}
+  --service-account-key-file=/etc/ssl/service-accounts.key
+  --tls-cert-file=/etc/ssl/apiserver.crt
+  --tls-private-key-file=/etc/ssl/apiserver.key
   --v=${APISERVER_GLOG_v:-${logv}}
 EOF
 apiserver_depends=""
@@ -214,13 +224,15 @@ ${apply_uids}
   --cloud-provider=mesos
   --master=${kube_master}
   --port=${controller_manager_port}
+  --service-account-private-key-file=/etc/ssl/service-accounts.key
+  --root-ca-file=/etc/ssl/root-ca.crt
   --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}}
 EOF
 
 #
 # nginx, proxying the apiserver and serving kubectl binaries
 #
-sed "s,<PORT>,${apiserver_proxy_port},;s,<APISERVER>,https://${host_ip}:${apiserver_secure_port}," /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
+sed "s,<PORT>,${apiserver_proxy_port},;s,<APISERVER>,https://${host_ip}:${apiserver_secure_port},;s,<TOKEN>,${admin_token}," /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
 prepare_service ${monitor_dir} ${service_dir} nginx ${NGINX_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
