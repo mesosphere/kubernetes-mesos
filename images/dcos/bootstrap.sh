@@ -51,9 +51,9 @@ default_dns_name=${DEFAULT_DNS_NAME:-k8sm.marathon.mesos}
 echo "* DNS name: $default_dns_name"
 
 apiserver_host=${APISERVER_HOST:-${default_dns_name}}
-apiserver_port=${APISERVER_PORT:-18888}
-apiserver_proxy_port=${APISERVER_PROXY_PORT:-8888}
-apiserver_secure_port=${APISERVER_SECURE_PORT:-6443}
+apiserver_port=${APISERVER_PORT:-8888}
+apiserver_proxy_port=${APISERVER_PROXY_PORT:-6443}
+apiserver_secure_port=${APISERVER_SECURE_PORT:-16443}
 echo "* apiserver: $apiserver_host:$apiserver_port"
 echo "* proxied apiserver: $apiserver_host:$apiserver_proxy_port"
 echo "* secure apiserver: $apiserver_host:$apiserver_secure_port"
@@ -91,7 +91,7 @@ etcd_server_data=${ETCD_SERVER_DATA:-${sandbox}/etcd-data}
 etcd_server_list=${etcd_listen_client_urls}
 
 # run service procs as "nobody"
-apply_uids="s6-applyuidgid -u 99 -g 99"
+apply_uids="s6-applyuidgid -u $(id -u nobody) -g $(id -g nobody)"
 
 # find IP address of the container
 echo -n "* host IP: "
@@ -183,6 +183,10 @@ EOF
 #
 # apiserver, uses frontend service proxy to connect with etcd
 #
+mkdir -p /etc/kubernetes
+admin_token="$(openssl rand -hex 32)"
+echo "${admin_token},admin,admin" > /etc/kubernetes/token-users
+
 prepare_service ${monitor_dir} ${service_dir} apiserver ${APISERVER_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
@@ -195,7 +199,13 @@ ${apply_uids}
   --etcd-servers=${etcd_server_list}
   --insecure-port=${apiserver_port}
   --secure-port=${apiserver_secure_port}
+  --admission-control=NamespaceLifecycle,LimitRanger,SecurityContextDeny,ServiceAccount,ResourceQuota
+  --authorization-mode=AlwaysAllow
+  --token-auth-file=/etc/kubernetes/token-users
   --service-cluster-ip-range=${SERVICE_CLUSTER_IP_RANGE:-10.10.10.0/24}
+  --service-account-key-file=/etc/ssl/service-accounts.key
+  --tls-cert-file=/etc/ssl/apiserver.crt
+  --tls-private-key-file=/etc/ssl/apiserver.key
   --v=${APISERVER_GLOG_v:-${logv}}
 EOF
 apiserver_depends=""
@@ -214,13 +224,15 @@ ${apply_uids}
   --cloud-provider=mesos
   --master=${kube_master}
   --port=${controller_manager_port}
+  --service-account-private-key-file=/etc/ssl/service-accounts.key
+  --root-ca-file=/etc/ssl/root-ca.crt
   --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}}
 EOF
 
 #
 # nginx, proxying the apiserver and serving kubectl binaries
 #
-sed "s,<PORT>,${apiserver_proxy_port},;s,<APISERVER>,http://${host_ip}:${apiserver_port}," /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
+sed "s,<PORT>,${apiserver_proxy_port},;s,<APISERVER>,https://${host_ip}:${apiserver_secure_port},;s,<TOKEN>,${admin_token}," /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
 prepare_service ${monitor_dir} ${service_dir} nginx ${NGINX_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
@@ -332,6 +344,7 @@ ${apply_uids}
   --proxy-mode=${PROXY_MODE:-userspace}
   --mesos-framework-roles="${SCHEDULER_MESOS_FRAMEWORK_ROLES:-*}"
   --mesos-default-pod-roles="${SCHEDULER_MESOS_DEFAULT_POD_ROLES:-*}"
+  --mesos-sandbox-overlay=/opt/sandbox-overlay.tar.gz
   $(if [ -n "${K8SM_FAILOVER_TIMEOUT:-}" ]; then echo "--failover-timeout=${K8SM_FAILOVER_TIMEOUT}"; fi)
   $(if [ -n "${kube_cluster_dns}" ]; then echo "--cluster-dns=${kube_cluster_dns}"; fi)
   $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
