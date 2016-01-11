@@ -207,6 +207,7 @@ ${apply_uids}
   --tls-cert-file=/etc/ssl/apiserver.crt
   --tls-private-key-file=/etc/ssl/apiserver.key
   --v=${APISERVER_GLOG_v:-${logv}}
+  --runtime-config=${APISERVER_RUNTIME_CONFIG:-}
 EOF
 apiserver_depends=""
 
