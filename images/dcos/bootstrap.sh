@@ -207,6 +207,7 @@ ${apply_uids}
   --tls-cert-file=/etc/ssl/apiserver.crt
   --tls-private-key-file=/etc/ssl/apiserver.key
   --v=${APISERVER_GLOG_v:-${logv}}
+  $(if [ -n "${APISERVER_RUNTIME_CONFIG:-}" ]; then echo "--runtime-config=${APISERVER_RUNTIME_CONFIG}"; fi)
 EOF
 apiserver_depends=""
 
