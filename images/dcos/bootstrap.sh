@@ -1,8 +1,10 @@
 #!/bin/sh
 
+kubectl=/opt/kubectl
+
 if test "$1" = "kc"; then
   shift
-  exec /opt/kubectl "$@"
+  exec ${kubectl} "$@"
 fi
 
 die() {
@@ -187,6 +189,36 @@ mkdir -p /etc/kubernetes
 admin_token="$(openssl rand -hex 32)"
 echo "${admin_token},admin,admin" > /etc/kubernetes/token-users
 
+apiserver_tls_cert_file=/etc/ssl/apiserver.crt
+apiserver_tls_private_key_file=/etc/ssl/apiserver.key
+mkdir -p /etc/ssl/override
+chmod 750 /etc/ssl/override
+
+if [ -n "${PKI_APISERVER_CRT}" ] && [ -n "${PKI_APISERVER_KEY}" ] && ! echo "${PKI_APISERVER_CRT}${PKI_APISERVER_KEY}" | egrep -q -e '^disabled|disabled$' 2>/dev/null; then
+      apiserver_tls_cert_file=/etc/ssl/override/apiserver.crt
+      apiserver_tls_private_key_file=/etc/ssl/override/apiserver.key
+      echo "Using user-specified TLS configuration for apiserver"
+      echo "${PKI_APISERVER_CRT}"|base64 -d >${apiserver_tls_cert_file}
+      echo "${PKI_APISERVER_KEY}"|base64 -d >${apiserver_tls_private_key_file}
+else
+      echo "WARNING: Using insecure TLS configuration for apiserver"
+fi
+
+apiserver_service_account_key_file=/etc/ssl/service-accounts.key
+controller_service_account_private_key_file=${apiserver_service_account_key_file}
+controller_root_ca_file=/etc/ssl/root-ca.crt
+
+if [ -n "${PKI_SERVICE_ACCOUNTS_KEY}" ] && [ -n "${PKI_ROOT_CA_CRT}" ] && ! echo "${PKI_SERVICE_ACCOUNTS_KEY}${PKI_ROOT_CA_CRT}" | egrep -q -e '^disabled|disabled$' 2>/dev/null; then
+      apiserver_service_account_key_file=/etc/ssl/override/service-accounts.key
+      controller_service_account_private_key_file=${apiserver_service_account_key_file}
+      controller_root_ca_file=/etc/ssl/override/root-ca.crt
+      echo "Using user-specified security for service account configuration"
+      echo "${PKI_SERVICE_ACCOUNTS_KEY}"|base64 -d >${apiserver_service_account_key_file}
+      echo "${PKI_ROOT_CA_CRT}"|base64 -d >${controller_root_ca_file}
+else
+      echo "WARNING: Using insecure service account configuration"
+fi
+
 prepare_service ${monitor_dir} ${service_dir} apiserver ${APISERVER_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
@@ -203,12 +235,13 @@ ${apply_uids}
   --authorization-mode=AlwaysAllow
   --token-auth-file=/etc/kubernetes/token-users
   --service-cluster-ip-range=${SERVICE_CLUSTER_IP_RANGE:-10.10.10.0/24}
-  --service-account-key-file=/etc/ssl/service-accounts.key
-  --tls-cert-file=/etc/ssl/apiserver.crt
-  --tls-private-key-file=/etc/ssl/apiserver.key
+  --service-account-key-file=${apiserver_service_account_key_file}
+  --tls-cert-file=${apiserver_tls_cert_file}
+  --tls-private-key-file=${apiserver_tls_private_key_file}
   --v=${APISERVER_GLOG_v:-${logv}}
   $(if [ -n "${APISERVER_RUNTIME_CONFIG:-}" ]; then echo "--runtime-config=${APISERVER_RUNTIME_CONFIG}"; fi)
 EOF
+
 apiserver_depends=""
 
 #
@@ -225,10 +258,32 @@ ${apply_uids}
   --cloud-provider=mesos
   --master=${kube_master}
   --port=${controller_manager_port}
-  --service-account-private-key-file=/etc/ssl/service-accounts.key
-  --root-ca-file=/etc/ssl/root-ca.crt
+  --service-account-private-key-file=${controller_service_account_private_key_file}
+  --root-ca-file=${controller_root_ca_file}
   --v=${CONTROLLER_MANAGER_GLOG_v:-${logv}}
 EOF
+
+# ... after all custom certs/keys have been written to /etc/ssl/overrides
+chmod 640 /etc/ssl/override/* || true
+chown root:nobody /etc/ssl/override/* || true
+
+#
+# prepare secure kubectl configuration
+#
+#
+echo "Preparing secure kubectl configuration"
+export KUBECONFIG=/etc/kubernetes/config
+# KUBECONFIG determines the file we write to, but it may not exist yet
+if [[ ! -e "${KUBECONFIG}" ]]; then
+  mkdir -p $(dirname "${KUBECONFIG}")
+  touch "${KUBECONFIG}"
+fi
+
+kube_context=dcos
+"${kubectl}" config set-cluster "${kube_context}" --server="${kube_master}" --certificate-authority="${controller_root_ca_file}"
+"${kubectl}" config set-context "${kube_context}" --cluster="${kube_context}" --user="admin"
+"${kubectl}" config set-credentials admin --token="${admin_token}"
+"${kubectl}" config use-context "${kube_context}" --cluster="${kube_context}"
 
 #
 # nginx, proxying the apiserver and serving kubectl binaries
@@ -240,6 +295,35 @@ fdmove -c 2 1
 /usr/sbin/nginx -c /etc/nginx/nginx.conf
 EOF
 
+#
+# namespace: kube-system
+#
+cat >${sandbox}/kube-system-ns.yaml <<EOF
+kind: "Namespace"
+apiVersion: "v1"
+metadata:
+  name: "kube-system"
+  labels:
+    name: "kube-system"
+EOF
+
+prepare_service ${monitor_dir} ${service_dir} kube_system ${KUBE_SYSTEM_RESPAWN_DELAY:-3} <<EOF
+#!/bin/sh
+exec 2>&1
+
+export KUBERNETES_MASTER="${kube_master}"
+
+${kubectl} get namespace kube-system >/dev/null && \
+  touch kill && exit 0
+
+${kubectl} create -f ${sandbox}/kube-system-ns.yaml
+EOF
+
+sed -i -e '$i test -f kill && exec s6-svc -d $(pwd) || exec \\' ${service_dir}/kube_system/finish
+
+#
+# add-on: kube_dns
+#
 prepare_kube_dns() {
   kube_cluster_dns=${DNS_SERVER_IP:-10.10.10.10}
   kube_cluster_domain=${DNS_DOMAIN:-cluster.local}
@@ -259,12 +343,12 @@ exec 2>&1
 
 export KUBERNETES_MASTER="${kube_master}"
 
-/opt/kubectl get rc --namespace=kube-system -l k8s-app=kube-dns | grep kube-dns >/dev/null && \
-  /opt/kubectl get service --namespace=kube-system kube-dns >/dev/null && \
+${kubectl} get rc --namespace=kube-system -l k8s-app=kube-dns | grep kube-dns >/dev/null && \
+  ${kubectl} get service --namespace=kube-system kube-dns >/dev/null && \
   touch kill && exit 0
 
-/opt/kubectl create -f ${sandbox}/skydns-rc.yaml
-/opt/kubectl create -f ${sandbox}/skydns-svc.yaml
+${kubectl} create -f ${sandbox}/skydns-rc.yaml
+${kubectl} create -f ${sandbox}/skydns-svc.yaml
 EOF
 
   sed -i -e '$i test -f kill && exec s6-svc -d $(pwd) || exec \\' ${service_dir}/kube_dns/finish
@@ -280,7 +364,7 @@ if [ "${ENABLE_DNS:-true}" == true ]; then
 fi
 
 #
-# kube-ui, deployed as pod and service, later available under
+# add-on: kube-ui, deployed as pod and service, later available under
 # <apiserver-url>/api/v1/proxy/namespaces/default/services/kube-ui
 #
 prepare_kube_ui() {
@@ -290,12 +374,12 @@ exec 2>&1
 
 export KUBERNETES_MASTER="${kube_master}"
 
-/opt/kubectl get rc --namespace=kube-system -l k8s-app=kube-ui | grep -q kube-ui >/dev/null && \
-  /opt/kubectl get service --namespace=kube-system kube-ui >/dev/null && \
+${kubectl} get rc --namespace=kube-system -l k8s-app=kube-ui | grep -q kube-ui >/dev/null && \
+  ${kubectl} get service --namespace=kube-system kube-ui >/dev/null && \
   touch kill && exit 0
 
-/opt/kubectl create -f /opt/kube-ui-rc.yaml
-/opt/kubectl create -f /opt/kube-ui-svc.yaml
+${kubectl} create -f /opt/kube-ui-rc.yaml
+${kubectl} create -f /opt/kube-ui-svc.yaml
 EOF
   sed -i -e '$i test -f kill && exec s6-svc -d $(pwd) || exec \\' ${service_dir}/kube_ui/finish
   apiserver_depends="${apiserver_depends} kube_ui"
