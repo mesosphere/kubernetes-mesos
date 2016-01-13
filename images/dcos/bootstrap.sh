@@ -240,6 +240,7 @@ ${apply_uids}
   --tls-private-key-file=${apiserver_tls_private_key_file}
   --v=${APISERVER_GLOG_v:-${logv}}
   $(if [ -n "${APISERVER_RUNTIME_CONFIG:-}" ]; then echo "--runtime-config=${APISERVER_RUNTIME_CONFIG}"; fi)
+  $(if [ -n "${SERVICE_NODE_PORT_RANGE:-}" ]; then echo "--service-node-port-range=${SERVICE_NODE_PORT_RANGE}"; fi)
 EOF
 
 apiserver_depends=""
