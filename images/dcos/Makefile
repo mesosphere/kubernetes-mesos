@@ -3,7 +3,7 @@ BUILD_DIR := _build
 LOAD_OR_DEFAULT = $(shell cat $(BUILD_DIR)/$(1) 2>/dev/null || echo "$(2)")
 
 # input variables
-GIT_REF    ?= $(call LOAD_OR_DEFAULT,GIT_REF,v0.7.1-v1.1.3)
+GIT_REF    ?= $(call LOAD_OR_DEFAULT,GIT_REF,v0.7.2-v1.1.5)
 GIT_URL    ?= $(call LOAD_OR_DEFAULT,GIT_URL,https://github.com/mesosphere/kubernetes.git)
 DOCKER_ORG ?= $(call LOAD_OR_DEFAULT,DOCKER_ORG,mesosphere)
 KUBE_ROOT  ?= $(call LOAD_OR_DEFAULT,KUBE_ROOT,)
