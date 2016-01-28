@@ -39,6 +39,9 @@ echo "$sandbox"
 # source utility functions
 . /opt/functions.sh
 
+# build APISERVER_RUNTIME_CONFIG variable
+build_runtime_config
+
 echo "* Version: $(cat /opt/.version)"
 cp /opt/.version ${sandbox}
 
