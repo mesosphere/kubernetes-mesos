@@ -141,6 +141,37 @@ test -f down && exec s6-svc -d \$(pwd) || exec sleep 4
 EOF
 }
 
+# Builds the APISERVER_RUNTIME_CONFIG var from other feature enable options
+# original source: github.com/kubernetes/kubernetes/cluster/gce/util.sh
+build_runtime_config() {
+  local ENABLE_EXPERIMENTAL_API=$(echo ${ENABLE_DEPLOYMENTS:-}${ENABLE_DAEMONSETS:-} | grep -q "true")
+  if [[ -n "${ENABLE_EXPERIMENTAL_API:-}" ]]; then
+      if [[ -z "${APISERVER_RUNTIME_CONFIG:-}" ]]; then
+          APISERVER_RUNTIME_CONFIG="extensions/v1beta1=true"
+      else
+          # TODO: add checking if APISERVER_RUNTIME_CONFIG contains "extensions/v1beta1=false" and appending "extensions/v1beta1=true" if not.
+          if echo "${APISERVER_RUNTIME_CONFIG}" | grep -q -v "extensions/v1beta1=true"; then
+              die "Experimental API should be turned on, but is not turned on in APISERVER_RUNTIME_CONFIG!"
+          fi
+      fi
+  fi
+  if [[ "${ENABLE_DEPLOYMENTS:-}" == "true" ]]; then
+      if [[ -z "${APISERVER_RUNTIME_CONFIG:-}" ]]; then
+          APISERVER_RUNTIME_CONFIG="extensions/v1beta1/deployments=true"
+      else
+          APISERVER_RUNTIME_CONFIG="${APISERVER_RUNTIME_CONFIG},extensions/v1beta1/deployments=true"
+      fi
+  fi
+  if [[ "${ENABLE_DAEMONSETS:-}" == "true" ]]; then
+      if [[ -z "${APISERVER_RUNTIME_CONFIG:-}" ]]; then
+          APISERVER_RUNTIME_CONFIG="extensions/v1beta1/daemonsets=true"
+      else
+          APISERVER_RUNTIME_CONFIG="${APISERVER_RUNTIME_CONFIG},extensions/v1beta1/daemonsets=true"
+      fi
+  fi
+}
+
+
 log_dir=${LOG_DIR:-$sandbox/log}
 monitor_dir=${MONITOR_DIR:-$sandbox/monitor.d}
 service_dir=${SERVICE_DIR:-$sandbox/service.d}
