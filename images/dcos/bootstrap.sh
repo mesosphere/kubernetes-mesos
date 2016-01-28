@@ -431,6 +431,7 @@ ${apply_uids}
   --mesos-framework-roles="${SCHEDULER_MESOS_FRAMEWORK_ROLES:-*}"
   --mesos-default-pod-roles="${SCHEDULER_MESOS_DEFAULT_POD_ROLES:-*}"
   --mesos-sandbox-overlay=/opt/sandbox-overlay.tar.gz
+  --mesos-generate-task-discovery=${SCHEDULER_GENERATE_MESOS_TASK_DISCOVERY:-false}
   $(if [ -n "${K8SM_FAILOVER_TIMEOUT:-}" ]; then echo "--failover-timeout=${K8SM_FAILOVER_TIMEOUT}"; fi)
   $(if [ -n "${kube_cluster_dns}" ]; then echo "--cluster-dns=${kube_cluster_dns}"; fi)
   $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
