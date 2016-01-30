@@ -58,7 +58,10 @@ ETCD_SOURCE = https://github.com/coreos/etcd/releases/download/v$(ETCD_TAG)/$(ET
 
 # kubernetes addons: kube-dns and kube-ui
 KUBE_DNS_TEMPLATES = $(BUILD_DIR)/skydns-rc.yaml.in $(BUILD_DIR)/skydns-svc.yaml.in
+KUBE_DNS_TEMPLATES_SRC = $(patsubst $(BUILD_DIR)/%,${K8S_ROOT}/cluster/addons/dns/%,$(KUBE_DNS_TEMPLATES))
+
 KUBE_UI_TEMPLATES = $(BUILD_DIR)/kube-ui-rc.yaml $(BUILD_DIR)/kube-ui-svc.yaml
+KUBE_UI_TEMPLATES_SRC = $(patsubst $(BUILD_DIR)/%,${K8S_ROOT}/cluster/addons/kube-ui/%,$(KUBE_UI_TEMPLATES))
 
 # github-release utility to upload release assets to Github
 GITHUB_RELEASE = $(shell pwd)/$(BUILD_DIR)/go/bin/github-release
@@ -181,12 +184,14 @@ $(BUILD_DIR)/$(ETCD_TAR):
 $(ETCD_BINARIES_DEST): $(BUILD_DIR)/$(ETCD_TAR)
 
 # copy the kube-dns specs from the kubernetes repo to _build
-$(KUBE_DNS_TEMPLATES):
+$(KUBE_DNS_TEMPLATES): $(KUBE_DNS_TEMPLATES_SRC)
 	cp ${K8S_ROOT}/cluster/addons/dns/$(shell basename $@) $@
+$(KUBE_DNS_TEMPLATES_SRC):
 
 # copy the kube-ui specs from the kubernetes repo to build_
-$(KUBE_UI_TEMPLATES):
+$(KUBE_UI_TEMPLATES): $(KUBE_UI_TEMPLATES_SRC)
 	cp ${K8S_ROOT}/cluster/addons/kube-ui/$(shell basename $@) $@
+$(KUBE_UI_TEMPLATES_SRC):
 
 # package build targets
 delete_docker_image_file:
