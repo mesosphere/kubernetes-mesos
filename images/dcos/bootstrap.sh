@@ -119,8 +119,10 @@ kube_master_proxy="http://${apiserver_host}:${apiserver_proxy_port}"
 
 # framework addresses
 framework_name=${FRAMEWORK_NAME:-kubernetes}
+framework_store_uri=${FRAMEWORK_STORE_URI:-zk://master.mesos:2181/k8sm}
 framework_weburi=${FRAMEWORK_WEBURI:-${kube_master_proxy}}
-echo "* framework name: $framework_name"
+echo "* framework_name: $framework_name"
+echo "* framework_store_uri: $framework_store_uri"
 echo "* framework_weburi: $framework_weburi"
 
 #
@@ -416,6 +418,7 @@ ${apply_uids}
   --service-address=${SCHEDULER_SERVICE_ADDRESS:-10.10.10.9}
   --etcd-servers=${etcd_server_list}
   --framework-name=${framework_name}
+  --framework-store-uri=${framework_store_uri}
   --framework-weburi=${framework_weburi}
   --mesos-master=${mesos_master}
   --mesos-user=${K8SM_MESOS_USER:-root}
