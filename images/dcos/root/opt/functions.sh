@@ -27,28 +27,38 @@ prepare_var_run() {
   mkdir -p $(dirname $hostpath) && mkdir -p $run && ln -s $run $hostpath && chown nobody:nobody $run
 }
 
+log_args() {
+  local log_history=${1:-${LOG_HISTORY:-10}}
+  local log_size=${2:-${LOG_SIZE:-10000000}}
+  echo "-p -b n${log_history} s${log_size}"
+}
+
 prepare_service_script() {
   local svcdir=$1
   local name=$2
   local script=$3
-  mkdir -p ${svcdir}/${name} || die Failed to create service directory at $svcdir/$name
+  local log_history=${4:-}
+  local log_size=${5:-}
+
+  mkdir -p ${svcdir}/${name} || die Failed to create service directory at ${svcdir}/${name}
   cat >${svcdir}/${name}/${script}
   chmod +x ${svcdir}/${name}/${script}
 
   test "$script" = "run" || return 0
 
+  # "run" scripts are special, they get everything below..
   s6-mkfifodir -f ${svcdir}/${name}/event
 
   # only set up logging for run service scripts
-  mkdir -p $log_dir/$name
+  mkdir -p ${log_dir}/${name}
   mkdir -p ${svcdir}/${name}/log
   cat <<EOF >${svcdir}/${name}/log/run
 #!/bin/sh
-exec s6-log ${log_args} $log_dir/$name
+exec s6-log $(log_args ${log_history} ${log_size}) ${log_dir}/${name}
 EOF
   chmod +x ${svcdir}/${name}/log/run
 
-  local loglink=log/$name/current
+  local loglink=log/${name}/current
   ln -f -s $loglink ${sandbox}/${name}.log
 }
 
@@ -56,8 +66,12 @@ prepare_monitor_script() {
   local mondir=$1
   local svcdir=$2
   local name=$3
+  local log_history=${4:-}
+  local log_size=${5:-}
 
-  prepare_service_script ${mondir} ${name}-monitor run <<EOF
+  mkdir -p ${svcdir}/${name} || die Failed to create service directory at ${svcdir}/${name}
+
+  prepare_service_script ${mondir} ${name}-monitor run ${log_history} ${log_size} <<EOF
 #!/bin/sh
 exec 2>&1
 exec \\
@@ -76,7 +90,7 @@ prepare_service() {
 
   echo "* prepare service ${name}"
   cat | prepare_service_script ${svcd} ${name} run
-  prepare_monitor_script ${mond} ${svcd} ${name}
+  prepare_monitor_script ${mond} ${svcd} ${name} 5 1000000
   prepare_service_script ${svcd} ${name} finish <<EOF
 #!/bin/sh
 exec 2>&1
@@ -107,7 +121,7 @@ prepare_service_depends() {
 
   # 1. startup waited-on service, waiting for an U signal
   # 2. upon receving the signal, start up dependent services
-  prepare_service_script ${service_dir} ${watcher} run <<EOF
+  prepare_service_script ${service_dir} ${watcher} run 2 1000000 <<EOF
 #!/bin/sh
 exec 2>&1
 set -vx
@@ -175,8 +189,4 @@ build_runtime_config() {
 log_dir=${LOG_DIR:-$sandbox/log}
 monitor_dir=${MONITOR_DIR:-$sandbox/monitor.d}
 service_dir=${SERVICE_DIR:-$sandbox/service.d}
-
-log_history=${LOG_HISTORY:-10}
-log_size=${LOG_SIZE:-10000000}
-log_args="-p -b n${log_history} s${log_size}"
 logv=${GLOG_v:-0}
