@@ -88,7 +88,7 @@ exit 0
 EOF
 }
 
-# usage: $0 {wait-for-service} {version-check-url} {version-check-token} {dependent-services}
+# usage: $0 {watched-service} {version-check-url} {version-check-token} {dependent-services}
 prepare_service_depends() {
   local watchedService=$1
   local watcher=${watchedService}-depends
@@ -100,7 +100,7 @@ prepare_service_depends() {
 
   # down by default because we need to catch the signal when it's up and running
   touch ${service_dir}/$watchedService/down
-  # we only want to start these services after we know that etcd is up and running
+  # we only want to start these services after we know that the watched-service is up and running
   for i in $*; do
     touch ${service_dir}/$i/down
   done
@@ -177,6 +177,6 @@ monitor_dir=${MONITOR_DIR:-$sandbox/monitor.d}
 service_dir=${SERVICE_DIR:-$sandbox/service.d}
 
 log_history=${LOG_HISTORY:-10}
-log_size=${LOG_SIZE:-2000000}
+log_size=${LOG_SIZE:-10000000}
 log_args="-p -b n${log_history} s${log_size}"
 logv=${GLOG_v:-0}
