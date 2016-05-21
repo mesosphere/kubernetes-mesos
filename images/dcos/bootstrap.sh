@@ -73,6 +73,9 @@ controller_manager_host=${CONTROLLER_MANAGER_HOST:-${default_dns_name}}
 controller_manager_port=${CONTROLLER_MANAGER_PORT:-10252}
 echo "* controller manager: $controller_manager_host:$controller_manager_port"
 
+[ -n "${MESOS_AUTHENTICATION_PRINCIPAL:-}" ] && echo "* mesos authentication principal: ${MESOS_AUTHENTICATION_PRINCIPAL}"
+[ -n "${MESOS_AUTHENTICATION_SECRET_FILE:-}" ] && echo "* mesos authentication secret file: ${MESOS_AUTHENTICATION_SECRET_FILE}"
+
 # would be nice if this was auto-discoverable. if this value changes
 # between launches of the framework, there can be dangling executors,
 # so it is important that this point to some frontend load balancer
@@ -438,6 +441,8 @@ ${apply_uids}
   $(if [ -n "${K8SM_FAILOVER_TIMEOUT:-}" ]; then echo "--failover-timeout=${K8SM_FAILOVER_TIMEOUT}"; fi)
   $(if [ -n "${kube_cluster_dns}" ]; then echo "--cluster-dns=${kube_cluster_dns}"; fi)
   $(if [ -n "${kube_cluster_domain}" ]; then echo "--cluster-domain=${kube_cluster_domain}"; fi)
+  $(if [ -n "${MESOS_AUTHENTICATION_PRINCIPAL:-}" ] ; then echo "--mesos-authentication-principal=${MESOS_AUTHENTICATION_PRINCIPAL}"; fi)
+  $(if [ -n "${MESOS_AUTHENTICATION_SECRET_FILE:-}" ] ; then echo "--mesos-authentication-secret-file=${MESOS_AUTHENTICATION_SECRET_FILE}"; fi)
 EOF
 
 if [ "$ETCD_MESOS_FRAMEWORK_NAME" == disabled ]; then
