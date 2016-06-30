@@ -29,7 +29,7 @@ endif
 # compute the Docker image tag
 # NOTE: As VERSION, do not persist DOCKER_IMAGE
 DOCKER_REPO = $(DOCKER_ORG)/kubernetes
-DOCKER_IMAGE = $(DOCKER_REPO):$(VERSION)$(POSTFIX)
+DOCKER_IMAGE = $(DOCKER_REPO)$(VERSION)$(POSTFIX)
 DOCKER_IMAGE_FILE = $(BUILD_DIR)/built-docker-image
 
 # kubernetes binaries distributed in the Docker container
