@@ -16,6 +16,9 @@ POSTFIX    ?= $(call LOAD_OR_DEFAULT,POSTFIX,-alpha)
 # NOTE: Do not persist the VERSION. It must be re-computed on every make run.
 GIT_REF_MINOR = $(lastword $(subst -, ,$(GIT_REF)))
 GIT_REF_MAJOR = $(firstword $(subst -, ,$(GIT_REF)))
+ifeq ($(USER),)
+        USER := nobody
+endif
 ifneq ($(wildcard $(BUILD_DIR)),)
 	UNCLEAN_INFIX := -unclean
 endif
