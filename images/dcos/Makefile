@@ -18,10 +18,9 @@ GIT_REF_MINOR = $(lastword $(subst -, ,$(GIT_REF)))
 GIT_REF_MAJOR = $(firstword $(subst -, ,$(GIT_REF)))
 ifneq ($(wildcard $(BUILD_DIR)),)
 	UNCLEAN_INFIX := -unclean
-	UNCLEAN_PREFIX := $(USER)-
 endif
 ifeq ($(KUBE_ROOT),)
-	VERSION := $(UNCLEAN_PREFIX)$(shell git describe --match $(GIT_REF_MAJOR) --always --tags --dirty)$(UNCLEAN_INFIX)-$(GIT_REF_MINOR)
+	VERSION := $(USER)$(shell git describe --match $(GIT_REF_MAJOR) --always --tags --dirty)$(UNCLEAN_INFIX)-$(GIT_REF_MINOR)
 else
 	VERSION := $(USER)-$(GIT_REF)-dev
 endif
@@ -29,7 +28,7 @@ endif
 # compute the Docker image tag
 # NOTE: As VERSION, do not persist DOCKER_IMAGE
 DOCKER_REPO = $(DOCKER_ORG)/kubernetes
-DOCKER_IMAGE = $(DOCKER_REPO)$(VERSION)$(POSTFIX)
+DOCKER_IMAGE = $(DOCKER_REPO):$(VERSION)$(POSTFIX)
 DOCKER_IMAGE_FILE = $(BUILD_DIR)/built-docker-image
 
 # kubernetes binaries distributed in the Docker container
