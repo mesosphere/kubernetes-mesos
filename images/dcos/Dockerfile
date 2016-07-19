@@ -2,7 +2,7 @@ FROM alpine:3.2
 MAINTAINER Mesosphere <support@mesosphere.com>
 
 RUN apk --update add nginx curl ca-certificates && \
-    curl -Ls https://circle-artifacts.com/gh/andyshinn/alpine-pkg-glibc/6/artifacts/0/home/ubuntu/alpine-pkg-glibc/packages/x86_64/glibc-2.21-r2.apk > /tmp/glibc-2.21-r2.apk && \
+    curl -Ls https://github.com/sgerrand/alpine-pkg-glibc/releases/download/2.21-r2/glibc-2.21-r2.apk > /tmp/glibc-2.21-r2.apk && \
     apk add --allow-untrusted /tmp/glibc-2.21-r2.apk && \
     rm -rf /tmp/glibc-2.21-r2.apk /var/cache/apk/*
 
