@@ -23,7 +23,7 @@ ifneq ($(wildcard $(BUILD_DIR)),)
 	UNCLEAN_INFIX := -unclean
 endif
 ifeq ($(KUBE_ROOT),)
-	VERSION := $(USER)$(shell git describe --match $(GIT_REF_MAJOR) --always --tags --dirty)$(UNCLEAN_INFIX)-$(GIT_REF_MINOR)
+	VERSION := $(USER)-$(shell git describe --match $(GIT_REF_MAJOR) --always --tags --dirty)$(UNCLEAN_INFIX)-$(GIT_REF_MINOR)
 else
 	VERSION := $(USER)-$(GIT_REF)-dev
 endif
