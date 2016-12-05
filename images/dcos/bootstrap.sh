@@ -1,4 +1,14 @@
 #!/bin/sh
+#
+# this bootstrap script is intended to be the startup script for a docker
+# container that runs the k8s-mesos framework scheduler that, at this point
+# in time, consists of several k8s master processes and possibly an embedded
+# etcd server.
+#
+# it is assumed that this docker container is being executed in BRIDGED mode,
+# or at least in a way that isolates the network namespace of this container
+# from ths host netns.
+#
 
 kubectl=/opt/kubectl
 
@@ -230,8 +240,9 @@ prepare_service ${monitor_dir} ${service_dir} apiserver ${APISERVER_RESPAWN_DELA
 fdmove -c 2 1
 ${apply_uids}
 /opt/km apiserver
-  --insecure-bind-address=${host_ip}
-  --bind-address=${host_ip}
+  --advertise-address=${host_ip}
+  --bind-address=0.0.0.0
+  --insecure-bind-address=0.0.0.0
   --cloud-config=${cloud_config}
   --cloud-provider=mesos
   --etcd-servers=${etcd_server_list}
@@ -260,7 +271,7 @@ prepare_service ${monitor_dir} ${service_dir} controller-manager ${CONTROLLER_MA
 fdmove -c 2 1
 ${apply_uids}
 /opt/km controller-manager
-  --address=${host_ip}
+  --address=0.0.0.0
   --cloud-config=${cloud_config}
   --cloud-provider=mesos
   --master=${kube_master}
@@ -295,7 +306,7 @@ kube_context=dcos
 #
 # nginx, proxying the apiserver and serving kubectl binaries
 #
-sed "s,<PORT>,${apiserver_proxy_port},;s,<APISERVER>,https://${host_ip}:${apiserver_secure_port},;s,<TOKEN>,${admin_token}," /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
+sed "s,<PORT>,${apiserver_proxy_port},;s,<APISERVER>,https://localhost:${apiserver_secure_port},;s,<TOKEN>,${admin_token}," /etc/nginx/conf.d/default.conf.template > /etc/nginx/conf.d/default.conf
 prepare_service ${monitor_dir} ${service_dir} nginx ${NGINX_RESPAWN_DELAY:-3} <<EOF
 #!/usr/bin/execlineb
 fdmove -c 2 1
@@ -334,8 +345,6 @@ sed -i -e '$i test -f kill && exec s6-svc -d $(pwd) || exec \\' ${service_dir}/k
 prepare_kube_dns() {
   kube_cluster_dns=${DNS_SERVER_IP:-10.10.10.10}
   kube_cluster_domain=${DNS_DOMAIN:-cluster.local}
-  local kube_nameservers=$(cat /etc/resolv.conf|grep -e ^nameserver|head -3|cut -f2 -d' '|sed -e 's/$/:53/g'|xargs echo -n|tr ' ' ,)
-  kube_nameservers=${kube_nameservers:-${DNS_NAMESERVERS:-8.8.8.8:53,8.8.4.4:53}}
 
   sed -e "s/{{ pillar\['dns_replicas'\] }}/1/g" \
       -e "s,\(command = \"/kube2sky\"\),\\1\\"$'\n'"        - --kube_master_url=${kube_master}," \
@@ -398,7 +407,7 @@ fi
 
 # create dependency service for all services that need apiserver to be started
 if [ -n "${apiserver_depends}" ]; then
-  prepare_service_depends apiserver http://${host_ip}:${apiserver_port}/healthz ok ${apiserver_depends}
+  prepare_service_depends apiserver http://127.0.0.1:${apiserver_port}/healthz ok ${apiserver_depends}
 fi
 
 #
@@ -412,7 +421,8 @@ prepare_service ${monitor_dir} ${service_dir} scheduler ${SCHEDULER_RESPAWN_DELA
 fdmove -c 2 1
 ${apply_uids}
 /opt/km scheduler
-  --address=${host_ip}
+  --address=0.0.0.0
+  --hostname-override=127.0.0.1
   --advertised-address=${scheduler_host}:${scheduler_port}
   --api-servers=${kube_master}
   --driver-port=${scheduler_driver_port}
