@@ -16,7 +16,7 @@ This repo contains the components required for building the Kubernetes DCOS Serv
 
 Mesos integration has been fully upstreamed into the Kubernetes repo under [contrib/mesos](https://github.com/GoogleCloudPlatform/kubernetes/tree/master/contrib/mesos).
 
-- [Getting Started Guide - Mesos](https://github.com/GoogleCloudPlatform/kubernetes/blob/master/docs/getting-started-guides/mesos.md)
+- [Getting Started Guide - Mesos](http://kubernetes.github.io/docs/getting-started-guides/mesos/)
 
 ### Kubernetes on Mesos in Docker
 
